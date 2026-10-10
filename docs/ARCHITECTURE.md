@@ -50,7 +50,10 @@
 - [x] Test suite (host + adb), 127 checks green on M4 Pro and Pixel 8
 - [x] v0.1.0: header frozen
 - [x] kiln-bench: RSS / CPU / freq / thermal over time, host + device, charts (docs/bench)
-- [ ] Thermal-aware threading: test 4 vs 5 threads for *sustained* tok/s on Pixel 8
+- [ ] Thread sweep on Pixel 8 (in progress) -> docs/bench/threads
+- [ ] Generalised core-set policy: tier grouping with tolerance, no-little layouts (see docs/CPU.md §6)
+- [ ] Auto-tune: micro-benchmark candidate core sets on first run, cache per (soc, arch)
+- [ ] Validate the "highest core index = biggest core" assumption on Snapdragon and MediaTek
 - [ ] GPU utilisation in kiln-bench on Metal
 - [ ] KV state checkpoints (`llama_state_seq_*`) so hybrid models reuse cache across turns
 - [ ] Tool calling: common already parses it; expose `kiln_tool` + a TOOL_CALL channel

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -309,11 +310,18 @@ public:
 
         // Pin worker threads to the fast cores. Without this, Android schedules ggml workers onto
         // little cores and every barrier waits for the slowest one: measured 1 thread > 5 threads on Pixel 8.
-        if (fast_mask_) {
-            ggml_threadpool_params tpp = ggml_threadpool_params_default(threads_);
+        // Benchmarking escape hatches: KILN_NO_AFFINITY=1 disables pinning,
+        // KILN_CPU_MASK=<hex> forces an exact core set (thread count follows the mask).
+        const char* no_aff = getenv("KILN_NO_AFFINITY");
+        const char* mask_s = getenv("KILN_CPU_MASK");
+        uint64_t mask = fast_mask_;
+        int n_threads = threads_;
+        if (mask_s && *mask_s) { mask = strtoull(mask_s, nullptr, 16); n_threads = __builtin_popcountll(mask); }
+        if (mask && !(no_aff && *no_aff == '1')) {
+            ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
             int set = 0;
-            for (int i = 63; i >= 0 && set < threads_; --i)      // highest-index cores are usually the biggest
-                if (fast_mask_ & (1ull << i)) { tpp.cpumask[i] = true; ++set; }
+            for (int i = 63; i >= 0 && set < n_threads; --i)      // highest-index cores are usually the biggest
+                if (mask & (1ull << i)) { tpp.cpumask[i] = true; ++set; }
             tpp.strict_cpu = true;
             c->tp_ = ggml_threadpool_new(&tpp);
             if (c->tp_) llama_attach_threadpool(c->ctx_, c->tp_, c->tp_);
