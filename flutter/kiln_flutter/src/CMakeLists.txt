@@ -1,4 +1,8 @@
-# Flutter/AGP entry point. Builds the kiln core from the repo root so there is one source of truth.
+# Flutter/AGP entry point. Builds the kiln core.
+#
+# Two layouts are supported:
+#   - inside the kiln monorepo: the core lives at ../../.. (repo root)
+#   - published package:        the core was vendored into src/core/ by scripts/vendor_flutter.sh
 cmake_minimum_required(VERSION 3.22)
 project(kiln_flutter LANGUAGES C CXX)
 
@@ -10,9 +14,16 @@ if(ANDROID)
     set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
 endif()
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../.. kiln_core)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/core/CMakeLists.txt")
+    message(STATUS "kiln_flutter: building vendored core (src/core)")
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/core" kiln_core)
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../../CMakeLists.txt")
+    message(STATUS "kiln_flutter: building core from the monorepo root")
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../.." kiln_core)
+else()
+    message(FATAL_ERROR "kiln_flutter: no core found. Run scripts/vendor_flutter.sh in the kiln repo, or build inside the monorepo.")
+endif()
 
 if(ANDROID)
-    # Android 15 16 KB page size
-    target_link_options(kiln PRIVATE "-Wl,-z,max-page-size=16384")
+    target_link_options(kiln PRIVATE "-Wl,-z,max-page-size=16384")   # Android 15 16 KB pages
 endif()

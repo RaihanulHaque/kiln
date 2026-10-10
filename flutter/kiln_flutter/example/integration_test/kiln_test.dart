@@ -1,0 +1,212 @@
+// On-device integration test for kiln_flutter.
+//
+// Needs a model in the app's external files dir. Push one first:
+//   adb push models/LiquidAI_LFM2.5-350M_Q4_K_M.gguf \
+//       /sdcard/Android/data/dev.kiln.kiln_flutter_example/files/
+// then
+//   cd flutter/kiln_flutter/example && flutter test integration_test -d <device>
+//
+// Missing models skip their tests rather than fail, so the suite is usable on any device.
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:integration_test/integration_test.dart';
+import 'package:kiln_flutter/kiln_flutter.dart';
+import 'package:path_provider/path_provider.dart';
+
+const lfm = 'LiquidAI_LFM2.5-350M_Q4_K_M.gguf';
+const qwen = 'Qwen3.5-0.8B-Q4_K_M.gguf';
+// The small model is fetched automatically when missing so the suite is self-sufficient on
+// any device (229 MB, once). Qwen is optional: push it if you want the thinking test.
+const lfmUrl = 'https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/main/LFM2.5-350M-Q4_K_M.gguf';
+
+void main() {
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  late Kiln kiln;
+  late Directory dir;
+
+  setUpAll(() async {
+    kiln = await Kiln.create();
+    dir = Platform.isAndroid
+        ? ((await getExternalStorageDirectory()) ?? await getApplicationDocumentsDirectory())
+        : await getApplicationDocumentsDirectory();
+    final f = File('${dir.path}/$lfm');
+    if (!f.existsSync()) {
+      // ignore: avoid_print
+      print('downloading $lfm ...');
+      final resp = await http.Client().send(http.Request('GET', Uri.parse(lfmUrl)));
+      final sink = f.openWrite();
+      await resp.stream.pipe(sink);
+      // ignore: avoid_print
+      print('downloaded ${f.lengthSync() ~/ 1000000} MB');
+    }
+  });
+  tearDownAll(() => kiln.dispose());
+
+  File? model(String name) {
+    final f = File('${dir.path}/$name');
+    return f.existsSync() ? f : null;
+  }
+
+  test('version and probe', () async {
+    expect(Kiln.version, isNotEmpty);
+    final d = await kiln.probeDevice();
+    expect(d.cpuCores, greaterThan(0));
+    expect(d.cpuFastCores, inInclusiveRange(1, d.cpuCores));
+    expect(d.ramTotalBytes, greaterThan(1 << 30));
+    expect(d.abi, 'arm64-v8a');
+    // ignore: avoid_print
+    print('device: $d');
+  });
+
+  test('bad paths fail cleanly', () async {
+    await expectLater(kiln.loadModel('${dir.path}/does-not-exist.gguf'), throwsA(isA<KilnException>()));
+    final junk = File('${dir.path}/junk.bin')..writeAsBytesSync(List.generate(4096, (i) => i * 31 & 0xff));
+    try {
+      await expectLater(kiln.loadModel(junk.path), throwsA(isA<KilnException>()));
+    } finally {
+      junk.deleteSync();
+    }
+  });
+
+  group('LFM2.5 350M', () {
+    late KilnModel m;
+    late KilnContext ctx;
+
+    setUpAll(() async {
+      final f = model(lfm);
+      if (f == null) return;
+      m = await kiln.loadModel(f.path);
+      ctx = await m.createContext(params: const KilnContextParams(nCtx: 2048));
+    });
+    tearDownAll(() async {
+      if (model(lfm) == null) return;
+      await ctx.dispose();
+      await m.dispose();
+    });
+
+    test('info is truthful', () {
+      if (model(lfm) == null) markTestSkipped('no $lfm on device');
+      if (model(lfm) == null) return;
+      expect(m.info.arch, 'lfm2');
+      expect(m.info.backendName, startsWith('llama.cpp/'));
+      expect(m.info.modelBytes, greaterThan(100 << 20));
+      expect(m.info.supportsThinking, isFalse);
+      // ignore: avoid_print
+      print('model: ${m.info}');
+    });
+
+    test('template renders roles', () async {
+      if (model(lfm) == null) return;
+      final p = await m.applyChatTemplate([const KilnChatMessage.system('Be terse.'), const KilnChatMessage.user('Hi')]);
+      expect(p, contains('Hi'));
+      expect(p, contains('terse'));
+    });
+
+    test('single turn streams an answer with stats', () async {
+      if (model(lfm) == null) return;
+      final gen = ctx.chat([const KilnChatMessage.user('What is the capital of France? One word.')],
+          sampling: const KilnSamplingParams.greedy(maxTokens: 16));
+      final pieces = <KilnPiece>[];
+      await for (final p in gen.pieces) {
+        pieces.add(p);
+      }
+      final st = await gen.stats;
+      final answer = pieces.where((p) => !p.isReasoning).map((p) => p.text).join();
+      expect(answer, contains('Paris'));
+      expect(pieces.any((p) => p.isReasoning), isFalse);
+      expect(st.promptTokens, greaterThan(0));
+      expect(st.cachedTokens, 0);
+      expect(st.generatedTokens, inInclusiveRange(1, 16));
+      expect(st.genTps, greaterThan(0));
+      // ignore: avoid_print
+      print('turn 1: "$answer" $st');
+    });
+
+    test('second turn reuses the KV prefix', () async {
+      if (model(lfm) == null) return;
+      await ctx.reset();
+      final history = [const KilnChatMessage.user('What is the capital of France? One word.')];
+      final g1 = ctx.chat(history, sampling: const KilnSamplingParams.greedy(maxTokens: 16));
+      final a1 = await g1.answer;
+      await g1.stats;
+      history.add(KilnChatMessage.assistant(a1));
+      history.add(const KilnChatMessage.user('What is the capital of Germany? One word.'));
+      final g2 = ctx.chat(history, sampling: const KilnSamplingParams.greedy(maxTokens: 16));
+      final a2 = await g2.answer;
+      final st2 = await g2.stats;
+      expect(a2, contains('Berlin'));
+      expect(st2.cachedTokens, greaterThan(0));
+      expect(st2.cachedTokens, lessThan(st2.promptTokens));
+      // ignore: avoid_print
+      print('turn 2: "$a2" $st2');
+    });
+
+    test('cancel stops a long generation', () async {
+      if (model(lfm) == null) return;
+      await ctx.reset();
+      final gen = ctx.chat([const KilnChatMessage.user('Write a very long story about a dragon.')]);
+      var n = 0;
+      final sub = gen.pieces.listen((_) {
+        if (++n == 5) gen.cancel();
+      });
+      final st = await gen.stats;
+      await sub.cancel();
+      expect(st.stoppedByUser, isTrue);
+      expect(st.generatedTokens, lessThan(60));
+    });
+
+    test('context refuses a second concurrent chat', () async {
+      if (model(lfm) == null) return;
+      await ctx.reset();
+      final g = ctx.chat([const KilnChatMessage.user('Count to twenty.')], sampling: const KilnSamplingParams.greedy(maxTokens: 24));
+      expect(() => ctx.chat([const KilnChatMessage.user('x')]), throwsStateError);
+      await g.stats;
+    });
+
+    test('context overflow surfaces as KilnException', () async {
+      if (model(lfm) == null) return;
+      final small = await m.createContext(params: const KilnContextParams(nCtx: 64));
+      try {
+        final big = List.filled(600, 'word').join(' ');
+        final g = small.chat([KilnChatMessage.user(big)], sampling: const KilnSamplingParams.greedy(maxTokens: 4));
+        await expectLater(g.stats, throwsA(isA<KilnException>()));
+      } finally {
+        await small.dispose();
+      }
+    });
+  });
+
+  group('Qwen3.5 0.8B thinking', () {
+    test('reasoning and answer arrive on separate channels', () async {
+      final f = model(qwen);
+      if (f == null) {
+        markTestSkipped('no $qwen on device');
+        return;
+      }
+      final m = await kiln.loadModel(f.path);
+      expect(m.info.supportsThinking, isTrue);
+      final ctx = await m.createContext(params: const KilnContextParams(nCtx: 4096));
+      try {
+        final gen = ctx.chat([const KilnChatMessage.user('What is 17 * 23? Think briefly, then answer.')],
+            enableThinking: true, sampling: const KilnSamplingParams(maxTokens: 1500, seed: 7));
+        final reasoning = StringBuffer(), answer = StringBuffer();
+        await for (final p in gen.pieces) {
+          (p.isReasoning ? reasoning : answer).write(p.text);
+        }
+        final st = await gen.stats;
+        expect(st.reasoningTokens, greaterThan(0));
+        expect(answer.toString(), isNot(contains('<think>')));
+        expect(reasoning.toString(), isNot(contains('</think>')));
+        if (st.stoppedByEos) expect(answer.toString(), contains('391'));
+        // ignore: avoid_print
+        print('think: ${st.reasoningTokens} reasoning tok, answer="${answer.toString().trim()}"');
+      } finally {
+        await ctx.dispose();
+        await m.dispose();
+      }
+    });
+  });
+}

@@ -1,0 +1,9 @@
+# publish only what the package needs
+example/build/
+example/.dart_tool/
+example/android/.gradle/
+example/android/local.properties
+example/**/*.iml
+android/.gradle/
+android/local.properties
+*.gguf
