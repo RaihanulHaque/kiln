@@ -1,0 +1,10 @@
+# Thin wrapper: finds the NDK if ANDROID_NDK_HOME is not set, then defers to the NDK toolchain.
+if(NOT DEFINED ENV{ANDROID_NDK_HOME} OR "$ENV{ANDROID_NDK_HOME}" STREQUAL "")
+    file(GLOB _ndks LIST_DIRECTORIES true "$ENV{HOME}/Library/Android/sdk/ndk/*" "$ENV{HOME}/Android/Sdk/ndk/*")
+    list(SORT _ndks)
+    list(REVERSE _ndks)
+    list(GET _ndks 0 _ndk)
+    set(ENV{ANDROID_NDK_HOME} "${_ndk}")
+endif()
+message(STATUS "kiln: using NDK at $ENV{ANDROID_NDK_HOME}")
+include("$ENV{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake")
