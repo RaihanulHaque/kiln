@@ -7,6 +7,9 @@ import 'native.dart';
 import 'types.dart';
 import 'worker.dart';
 
+const bool _trace = bool.fromEnvironment('KILN_TRACE');
+void _t(String m) { if (_trace) print('[kiln] $m'); } // ignore: avoid_print
+
 /// Entry point. One [Kiln] per app is plenty; it owns a background isolate
 /// where every blocking native call runs.
 class Kiln {
@@ -93,6 +96,7 @@ class KilnContext {
   }) {
     if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
     _busy = true;
+    _t('chat start');
     final port = ReceivePort();
     final ctrl = StreamController<KilnPiece>();
     port.listen((msg) {
@@ -107,21 +111,31 @@ class KilnContext {
           'sampling': sampling.toMap(),
         }, stream: port.sendPort)
         .then((r) => KilnGenStats.fromMap(r['stats'] as Map))
+        .catchError((Object e) {
+          // Mirror the failure onto the pieces stream (before it is closed below) so a
+          // listener that only consumes pieces also learns about it.
+          if (!ctrl.isClosed) ctrl.addError(e);
+          throw e;
+        })
         .whenComplete(() async {
+          _t('chat complete');
           _busy = false;
           // let queued piece messages drain before closing
           await Future<void>.delayed(Duration.zero);
           port.close();
-          await ctrl.close();
+          // Do not await close(): its future only completes once a listener has drained
+          // the stream, and a caller is allowed to ignore `pieces` and await `stats` alone.
+          unawaited(ctrl.close());
         });
-    stats.catchError((Object e) { ctrl.addError(e); throw e; });
     return KilnGeneration._(ctrl.stream, stats, () {
+      _t('cancel');
       KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
+      _t('cancel sent');
     });
   }
 
   /// Clears the KV cache. Next chat starts from scratch.
-  Future<void> reset() => model._kiln._worker.call<void>('reset', {'handle': _handle});
+  Future<void> reset() { _t('reset'); return model._kiln._worker.call<void>('reset', {'handle': _handle}); }
 
   Future<void> dispose() => model._kiln._worker.call<void>('freeContext', {'handle': _handle});
 }

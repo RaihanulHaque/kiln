@@ -137,6 +137,15 @@ stateDiagram-v2
     Done_Stop --> [*]
 ```
 
+## Two Dart pitfalls that bit us
+
+- `StreamController.close()` returns a future that completes only after a listener has
+  drained the stream. Awaiting it in `KilnContext.chat`'s cleanup deadlocked any caller who
+  ignored `pieces` and awaited `stats` alone; on Android that surfaced as an ANR. Never await
+  that close.
+- Mirroring a failure onto the pieces stream must happen *before* the controller is closed,
+  so the error handler sits before `whenComplete` in the chain and checks `isClosed`.
+
 ## Threading model in one paragraph
 
 Everything blocking runs on the worker isolate (Dart) or on whatever thread calls the C API.

@@ -10,6 +10,9 @@ import 'kiln_bindings_generated.dart' as b;
 import 'native.dart';
 import 'types.dart';
 
+const bool _trace = bool.fromEnvironment('KILN_TRACE');
+void _t(String m) { if (_trace) print('[kiln-worker] $m'); } // ignore: avoid_print
+
 class _Req {
   _Req(this.id, this.op, this.args, [this.stream]);
   final int id;
@@ -76,8 +79,10 @@ class KilnWorker {
     rx.listen((msg) {
       if (msg is SendPort) { reply = msg; return; }
       final req = msg as _Req;
+      _t('recv #${req.id} ${req.op}');
       try {
         final result = _dispatch(k, req);
+        _t('done #${req.id} ${req.op}');
         reply!.send([req.id, 'ok', result]);
       } on KilnException catch (e) {
         reply!.send([req.id, 'err', e.status.value, e.message]);
@@ -227,7 +232,9 @@ class KilnWorker {
       sp.ref.seed = p.seed;
       sp.ref.max_tokens = p.maxTokens;
       final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
+      _t('kiln_chat enter');
       final s = k.kiln_chat(ctx, arr, msgs.length, opts, sp, cb.nativeFunction, nullptr, st);
+      _t('kiln_chat exit status=${s.name}');
       final stats = KilnGenStats.fromNative(st.ref).toMap();
       if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) _fail(k, s);
       return {'status': s.value, 'stats': stats};
