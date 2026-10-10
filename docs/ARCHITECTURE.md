@@ -53,7 +53,9 @@
 - [ ] Tool calling: common already parses it; expose `kiln_tool` + a TOOL_CALL channel
 - [ ] Runtime ISA dispatch (i8mm / sve) instead of one baseline build
 - [ ] Context-length auto-cap from available RAM in the probe
-- [ ] Flutter plugin (`kiln_flutter`) via `ffigen`, with a sample chat app that shows stats
+- [x] Flutter plugin (`kiln_flutter`) via `ffigen`, worker isolate, example chat app verified on Pixel 8
+- [ ] iOS: xcframework build of the core and a podspec that vendors it
+- [ ] Example app: throttle setState per piece (UI rebuild costs ~15% tok/s on Pixel 8)
 - [ ] Opt-in benchmark upload from the sample app -> real device compatibility table
 - [ ] QNN backend for Snapdragon NPUs, gated on probe + model artifact availability
 - [ ] JNI binding for Kotlin/Java

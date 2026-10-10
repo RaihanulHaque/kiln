@@ -12,12 +12,31 @@ maintainers happened to own. kiln is built the other way round:
 - **The API tells you what actually happened.** Which backend loaded, how much memory it took,
   real prompt and generation tokens per second. No README can lie about that.
 
-Status: **v0.1.0.** C core, CLI harness, and a test suite that passes on macOS and on a Pixel 8
-with LFM2.5, Qwen3.5, and Gemma 3. The C header is frozen at this tag. Flutter bindings are next.
+Status: **v0.1.0.** C core, CLI harness, a test suite that passes on macOS and on a Pixel 8
+with LFM2.5, Qwen3.5, and Gemma 3, and a Flutter plugin with a working chat example app.
+
+<p>
+<img src="docs/img/01_picker.png" width="180"> <img src="docs/img/03_reply.png" width="180"> <img src="docs/img/04_thinking_multiturn.png" width="180">
+</p>
+
+## Flutter
+
+```dart
+final kiln  = await Kiln.create();
+final model = await kiln.loadModel(path);
+final ctx   = await model.createContext();
+final gen   = ctx.chat([KilnChatMessage.user('Hi')], enableThinking: true);
+await for (final p in gen.pieces) { p.isReasoning ? showThinking(p.text) : showAnswer(p.text); }
+print(await gen.stats);
+```
+
+See [flutter/kiln_flutter](flutter/kiln_flutter/README.md). The plugin builds the C core from this
+repo via Gradle + CMake, so the Android `.so` is always in sync with the header.
 
 ## Layout
 
 ```
+flutter/kiln_flutter/    Flutter plugin (Dart FFI, background isolate) + example chat app
 include/kiln/kiln.h      stable C ABI - bindings are generated from this file only
 src/core/                C API impl, error plumbing, backend registry
 src/probe/               CPU / RAM / ISA feature probe (macOS, Linux, Android)

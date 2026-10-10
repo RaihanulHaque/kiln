@@ -4,3 +4,11 @@ models/
 .DS_Store
 .cache/
 compile_commands.json
+# flutter
+flutter/**/build/
+flutter/**/.dart_tool/
+flutter/**/.flutter-plugins*
+flutter/**/*.iml
+flutter/**/android/local.properties
+flutter/**/android/.gradle/
+flutter/**/.idea/

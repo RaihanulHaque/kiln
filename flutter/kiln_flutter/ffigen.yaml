@@ -1,0 +1,16 @@
+# Run with `dart run ffigen --config ffigen.yaml`.
+name: KilnBindings
+description: |
+  FFI bindings for kiln's C API (include/kiln/kiln.h at the repo root).
+  Regenerate with `dart run ffigen --config ffigen.yaml`.
+output: 'lib/src/kiln_bindings_generated.dart'
+headers:
+  entry-points:
+    - '../../include/kiln/kiln.h'
+  include-directives:
+    - '../../include/kiln/kiln.h'
+preamble: |
+  // ignore_for_file: type=lint
+comments:
+  style: any
+  length: full
