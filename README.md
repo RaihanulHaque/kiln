@@ -1,6 +1,12 @@
-# kiln
+<p align="center">
+  <img src="docs/brand/kiln-lockup.png" width="260" alt="kiln">
+</p>
 
-**On-device LLM runtime for Android and beyond. Honest about what it runs on.**
+<p align="center"><b>On-device LLM runtime for Android and beyond. Honest about what it runs on.</b></p>
+
+<p align="center">
+  <img src="docs/img/kiln_promo.gif" width="720" alt="kiln: ember ignites, a streaming reply with live tok/s, then the numbers">
+</p>
 
 Every mobile LLM library promises "runs on phones" and backs it with a device list the
 maintainers happened to own. kiln is built the other way round:
