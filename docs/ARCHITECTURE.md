@@ -2,15 +2,42 @@
 
 ## Layers
 
+```mermaid
+flowchart TB
+    subgraph app["Your app"]
+        UI["Flutter UI<br/>(main isolate)"]
+    end
+    subgraph plugin["kiln_flutter (Dart)"]
+        API["Kiln · KilnModel · KilnContext · KilnGeneration<br/>lib/src/kiln.dart"]
+        WK["worker isolate<br/>owns native handles, runs blocking calls<br/>lib/src/worker.dart"]
+        FFI["generated bindings<br/>lib/src/kiln_bindings_generated.dart (ffigen)"]
+    end
+    subgraph core["libkiln (C / C++)"]
+        H["kiln.h · stable C ABI<br/>opaque handles, status codes, callbacks"]
+        C["core<br/>kiln.cpp · registry · error · probe"]
+        B["backend: llama.cpp<br/>templates (minja) · prefix reuse · sampling · reasoning splitter · pinned threadpool"]
+        Bq["backend: QNN (planned)"]
+        Bl["backend: LiteRT-LM (planned)"]
+    end
+    subgraph engine["third_party/llama.cpp"]
+        L["llama · common"]
+        G["ggml · CPU kernels · Metal · Vulkan"]
+    end
+    HW["device: fast cores (pinned) · GPU · NPU"]
+
+    UI -- "chat(history)" --> API
+    API -- "SendPort messages" --> WK
+    WK -- "FFI calls" --> FFI
+    FFI --> H
+    H --> C
+    C --> B
+    C -.-> Bq
+    C -.-> Bl
+    B --> L --> G --> HW
+    WK -. "pieces + stats back over a port" .-> UI
 ```
- Flutter (Dart FFI)     Kotlin/Java (JNI)        <- generated from kiln.h, never hand-written
- ---------------------------------------------
- kiln.h   stable C ABI, opaque handles, status codes, callbacks
- ---------------------------------------------
- core     registry picks a backend, probe describes the device, errors are thread-local
- ---------------------------------------------
- backends llama.cpp (CPU / Metal / Vulkan)   [planned] QNN   [planned] LiteRT-LM
-```
+
+Anything above `kiln.h` is generated or thin. Anything below it is C++ that never sees Dart.
 
 ## Rules
 
@@ -29,6 +56,21 @@
    template needs a kwarg (`enable_thinking`), it goes through `kiln_chat_options`.
 6. **Reasoning is a channel, not a string hack.** `ReasoningSplitter` watches for the template's
    own think tags (from `common_chat_params`) and handles tags split across token pieces.
+
+## Build flow
+
+```mermaid
+flowchart LR
+    SRC["include/ + src/ + CMakeLists.txt<br/>+ third_party/llama.cpp (pinned)"]
+    SRC --> H["cmake --preset host<br/>libkiln.dylib · kiln-cli · kiln-tests · kiln-bench"]
+    SRC --> A["cmake --preset android-arm64<br/>libkiln.so · kiln-cli · kiln-tests · kiln-bench"]
+    SRC --> F["flutter build apk<br/>Gradle → src/CMakeLists.txt → add_subdirectory(repo root)<br/>libkiln.so inside the APK"]
+    H --> T1["host test suite · desktop Flutter dev"]
+    A --> T2["scripts/android-test.sh · scripts/bench.sh (adb)"]
+    F --> T3["example app on device"]
+```
+
+One source tree, three outputs, no copies.
 
 ## Threading
 

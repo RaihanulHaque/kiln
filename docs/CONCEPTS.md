@@ -33,6 +33,30 @@ versus 3 tok/s unpinned, same code, same model.
 kiln pins by default. The core set comes from the probe (see below) and can be overridden
 with `KILN_CPU_MASK` for experiments or disabled with `KILN_NO_AFFINITY=1`.
 
+```mermaid
+flowchart LR
+    subgraph unpinned["unpinned: scheduler decides"]
+        direction TB
+        u1["thread 1 → X3"]
+        u2["thread 2 → A715"]
+        u3["thread 3 → A510 ✗ slow"]
+        u4["thread 4 → A715"]
+        u5["thread 5 → A510 ✗ slow"]
+        ub["barrier waits for the A510s<br/>≈ 3 tok/s warm"]
+        u1 & u2 & u3 & u4 & u5 --> ub
+    end
+    subgraph pinned["pinned: kiln decides"]
+        direction TB
+        p1["thread 1 → core 8 (X3)"]
+        p2["thread 2 → core 7 (A715)"]
+        p3["thread 3 → core 6 (A715)"]
+        p4["thread 4 → core 5 (A715)"]
+        p5["thread 5 → core 4 (A715)"]
+        pb["all slices finish together<br/>≈ 21 tok/s warm"]
+        p1 & p2 & p3 & p4 & p5 --> pb
+    end
+```
+
 ## The probe
 
 Before loading anything, kiln reads what the device is: SoC name, how many cores, each
@@ -41,6 +65,21 @@ compiled in. From the per-core clocks it groups cores into **tiers** and drops t
 tier; what remains are the **fast cores**, which become the thread count and the pin set.
 Everything in `kiln_device_info` comes from here and is also what the stats and the sample
 app display.
+
+```mermaid
+flowchart TD
+    A["read cpuinfo_max_freq for every core"] --> B["group cores by max clock into tiers"]
+    B --> C{"more than one tier?"}
+    C -- no --> D["fast set = all cores"]
+    C -- yes --> E["fast set = every core not in the slowest tier"]
+    D --> F["threads = min(fast cores, 8)"]
+    E --> F
+    F --> G["pin thread i to the i-th highest-numbered fast core"]
+    G --> H["Pixel 8: cores 4..8 → X3 + 4× A715, A510s idle"]
+```
+
+This is the v0.1 policy. [CPU.md §6](CPU.md) lists the SoC layouts where it is wrong and
+the auto-tune that should replace it.
 
 ## Why generation speed is about memory, not compute
 

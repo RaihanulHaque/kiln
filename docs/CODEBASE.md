@@ -41,6 +41,44 @@ third_party/llama.cpp               git submodule, pinned to a tag
 
 ## One `kiln_chat` call, top to bottom
 
+```mermaid
+sequenceDiagram
+    participant UI as Flutter UI (main isolate)
+    participant W as worker isolate
+    participant C as kiln.cpp (C API)
+    participant M as LlamaModel
+    participant X as LlamaContext
+    participant G as llama.cpp / ggml
+
+    UI->>W: chat {messages, enableThinking, sampling, piecePort}
+    Note over UI: returns KilnGeneration immediately
+    W->>C: kiln_chat(ctx, msgs, opts, params, cb, stats)
+    C->>M: render_chat(msgs, opts)
+    M->>G: common_chat_templates_apply (minja jinja)
+    G-->>M: prompt text (+ think block open?)
+    M-->>C: RenderedPrompt
+    C->>X: generate(rendered, params, cb)
+    X->>G: llama_tokenize
+    X->>X: longest common prefix vs KV cache
+    X->>G: llama_memory_seq_rm (or clear if refused)
+    loop prompt eval, batches of n_batch
+        X->>G: llama_decode(batch)
+    end
+    loop until EOS / max_tokens / cancel / context full
+        X->>G: llama_sampler_sample
+        X->>G: llama_token_to_piece
+        X->>X: ReasoningSplitter.feed(piece)
+        X-->>W: cb(channel, text)  (same thread)
+        W-->>UI: piecePort.send([channel, text])
+        X->>G: llama_decode(token)
+    end
+    X-->>C: status + kiln_gen_stats
+    C-->>W: return
+    W-->>UI: reply {stats}
+    Note over UI: stream closes, stats future completes
+    UI->>C: kiln_cancel(ctx) (any time, any thread)
+```
+
 1. **Dart** `KilnContext.chat(history)` sends a message to the worker isolate with the
    message list, options, sampling params, and a port for pieces. Returns immediately with a
    `KilnGeneration` wrapping that port's stream.
@@ -70,6 +108,34 @@ third_party/llama.cpp               git submodule, pinned to a tag
 
 `kiln_cancel` can be called from any thread at any point in 6 or 7; it flips an atomic that
 both the abort callback and the loop check.
+
+## The generation loop as a state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Tokenize
+    Tokenize --> PrefixMatch
+    PrefixMatch --> PromptEval: evaluate only the non-cached suffix
+    PromptEval --> Sample
+    Sample --> Done_EOS: token is end-of-generation
+    Sample --> Split: otherwise
+    Split --> Emit_Answer: not inside think tags
+    Split --> Emit_Reasoning: inside think tags
+    Split --> Hold: piece may be a partial tag
+    Emit_Answer --> Decode
+    Emit_Reasoning --> Decode
+    Hold --> Decode
+    Decode --> Sample: n_past < n_ctx
+    Decode --> Done_Full: context full
+    Sample --> Done_Max: max_tokens reached
+    Sample --> Done_Cancel: cancel flag set
+    Emit_Answer --> Done_Stop: callback returned false
+    Done_EOS --> [*]
+    Done_Full --> [*]
+    Done_Max --> [*]
+    Done_Cancel --> [*]
+    Done_Stop --> [*]
+```
 
 ## Threading model in one paragraph
 
