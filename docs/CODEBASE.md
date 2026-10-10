@@ -19,14 +19,21 @@ tools/kiln-cli/main.cpp             command-line harness; --chat for multi-turn,
 tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark
 tests/test_core.cpp                 the C test suite (host and device)
 flutter/kiln_flutter/
-    src/CMakeLists.txt              Gradle entry: builds the core from the repo root
+    src/CMakeLists.txt              Gradle entry: builds the core from src/core (vendored) or the repo root
     ffigen.yaml                     generates lib/src/kiln_bindings_generated.dart from kiln.h
-    lib/src/native.dart             loads libkiln for the platform
+    lib/src/native.dart             loads libkiln for the platform (process() on iOS)
     lib/src/types.dart              Dart mirrors of the C structs, map <-> native
     lib/src/worker.dart             background isolate that owns handles and runs blocking calls
     lib/src/kiln.dart               public API: Kiln, KilnModel, KilnContext, KilnGeneration
+    ios/kiln_flutter.podspec        vendors ios/Frameworks/kiln.xcframework with -force_load
     example/lib/main.dart           the demo chat app
-scripts/                            android-run / android-test / bench / bench_plot / bench_compare / brand / make_promo
+    example/integration_test/       on-device test suite (+ KILN_SPEED speed group)
+scripts/
+    android-run.sh, android-test.sh push the CLI / C tests to a phone over adb
+    bench.sh, bench_plot.py, bench_compare.py   resource benchmarks and charts
+    vendor_flutter.sh               copy the core into the plugin for pub.dev
+    build_ios.sh                    static libs + xcframework for iOS
+    brand.py, export_brand.py, make_promo.py    logo, assets, promo video
 third_party/llama.cpp               git submodule, pinned to a tag
 ```
 
@@ -170,7 +177,8 @@ calling thread; the Dart layer turns that into an async stream.
 |---|---|---|
 | `host` | `build/host/libkiln.dylib`, `kiln-cli`, `kiln-tests`, `kiln-bench` | dev loop, host tests, desktop Flutter |
 | `android-arm64` | `build/android-arm64/libkiln.so` + the same tools | adb scripts, benchmarks |
-| Gradle via plugin | `libkiln.so` inside the APK | the Flutter app |
+| Gradle via plugin | `libkiln.so` inside the APK | the Flutter app on Android |
+| `scripts/build_ios.sh` | `kiln.xcframework` (static, Metal) | the Flutter app on iOS via CocoaPods |
 
 The three builds compile the same sources; the Gradle path just points CMake at the repo
 root. ISA baseline for Android is `armv8.2-a+dotprod+fp16`.

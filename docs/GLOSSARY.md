@@ -73,6 +73,15 @@ confuses you, it should be here. If it is not, add it.
   variable: run 1 is cold, run 5 is hot. See
   [bench/README.md](bench/README.md#why-the-same-prompt-runs-5-times).
 
+## Packaging
+
+- **xcframework**: Apple's bundle of one static library per platform slice (device arm64,
+  simulator arm64). `scripts/build_ios.sh` makes kiln's; the podspec vendors it.
+- **vendoring**: copying the C core and the pinned llama.cpp into the Flutter package so it
+  builds without the monorepo. `scripts/vendor_flutter.sh`; required for pub.dev.
+- **integration test**: a Flutter test that runs inside the real app on a real device, as
+  opposed to a unit test on the host. `example/integration_test/`.
+
 ## Models and files
 
 - **GGUF**: the single-file model format llama.cpp reads. Weights + tokenizer + chat template +
