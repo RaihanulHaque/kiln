@@ -25,6 +25,10 @@
    downgraded.
 4. **`kiln_model_info` and `kiln_gen_stats` are not optional niceties.** They are the product.
    The Flutter sample app will surface them on screen.
+5. **Templates are the model's, executed faithfully.** No per-model special cases in kiln. If a
+   template needs a kwarg (`enable_thinking`), it goes through `kiln_chat_options`.
+6. **Reasoning is a channel, not a string hack.** `ReasoningSplitter` watches for the template's
+   own think tags (from `common_chat_params`) and handles tags split across token pieces.
 
 ## Threading
 
@@ -40,8 +44,13 @@
 - [x] Clamp reported `n_gpu_layers_used` to real layer count; map `mtl` -> `metal`
 - [x] Fast-core detection + pinned ggml threadpool on Android (Pixel 8: 61 -> 108 tok/s)
 - [ ] Validate the "highest core index = biggest core" assumption on Snapdragon and MediaTek
-- [x] `enable_thinking` chat option (Qwen3.5 verified on Pixel 8)
-- [ ] Stream reasoning and answer as separate channels in `kiln_token_cb`
+- [x] Jinja chat templates via llama.cpp common/minja; `enable_thinking` detected empirically
+- [x] Reasoning / answer channels in `kiln_token_cb`, tags stripped, split-across-pieces safe
+- [x] `kiln_chat` with KV prefix reuse; recurrent-model fallback; EOG cached so turns chain
+- [x] Test suite (host + adb), 127 checks green on M4 Pro and Pixel 8
+- [x] v0.1.0: header frozen
+- [ ] KV state checkpoints (`llama_state_seq_*`) so hybrid models reuse cache across turns
+- [ ] Tool calling: common already parses it; expose `kiln_tool` + a TOOL_CALL channel
 - [ ] Runtime ISA dispatch (i8mm / sve) instead of one baseline build
 - [ ] Context-length auto-cap from available RAM in the probe
 - [ ] Flutter plugin (`kiln_flutter`) via `ffigen`, with a sample chat app that shows stats

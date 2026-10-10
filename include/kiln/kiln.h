@@ -118,6 +118,7 @@ typedef struct kiln_model_info {
     int32_t  n_vocab;
     int32_t  n_gpu_layers_used;
     uint64_t model_bytes;         /* resident weight memory */
+    bool     supports_thinking;   /* chat template has a reasoning switch (Qwen3.x, Gemma 4, ...) */
 } kiln_model_info;
 
 KILN_API kiln_status kiln_model_get_info(const kiln_model* m, kiln_model_info* out);
@@ -161,12 +162,14 @@ typedef struct kiln_chat_message {
 
 typedef struct kiln_chat_options {
     bool add_assistant_prefix;    /* append the "assistant:" turn opener (true for generation) */
-    bool enable_thinking;         /* reasoning models only (Qwen3.x etc). false = answer directly. */
+    bool enable_thinking;         /* reasoning models only. false = answer directly. Ignored if unsupported. */
 } kiln_chat_options;
 
 KILN_API kiln_chat_options kiln_chat_options_default(void);
 
-/* Applies the model's built-in chat template.
+/* Renders the model's own chat template (full jinja via llama.cpp/minja).
+ * Prefer kiln_chat() for generation: it also knows whether the prompt opened a
+ * reasoning block, which this function cannot tell you.
  * Returns bytes written (excluding NUL), or negative = required size. */
 KILN_API int32_t kiln_apply_chat_template(const kiln_model* m,
                                           const kiln_chat_message* msgs,
@@ -191,12 +194,20 @@ typedef struct kiln_sampling_params {
 
 KILN_API kiln_sampling_params kiln_sampling_params_default(void);
 
-/* Called once per generated token piece. Return false to stop generation. */
-typedef bool (*kiln_token_cb)(const char* piece, int32_t token_id, void* user);
+typedef enum kiln_channel {
+    KILN_CHANNEL_ANSWER    = 0,
+    KILN_CHANNEL_REASONING = 1   /* text inside the model's think block; tags themselves are stripped */
+} kiln_channel;
+
+/* Called once per generated token piece. Return false to stop generation.
+ * Pieces are UTF-8 but a multi-byte character may be split across calls. */
+typedef bool (*kiln_token_cb)(kiln_channel channel, const char* piece, int32_t token_id, void* user);
 
 typedef struct kiln_gen_stats {
-    int32_t  prompt_tokens;
+    int32_t  prompt_tokens;       /* total tokens in the rendered prompt */
+    int32_t  cached_tokens;       /* of those, how many were already in the KV cache (multi-turn) */
     int32_t  generated_tokens;
+    int32_t  reasoning_tokens;    /* subset of generated_tokens that went to the reasoning channel */
     double   prompt_ms;
     double   gen_ms;
     double   prompt_tps;
@@ -205,8 +216,18 @@ typedef struct kiln_gen_stats {
     bool     stopped_by_user;
 } kiln_gen_stats;
 
-/* Blocking. Feeds `prompt` (already templated), streams pieces to cb.
- * stats may be NULL. Safe to call kiln_cancel from another thread. */
+/* High-level, recommended. Renders msgs with the model's template, reuses whatever
+ * prefix of the conversation is already in the KV cache, streams pieces to cb.
+ * Pass the full history every turn; kiln figures out what changed.
+ * Blocking. stats may be NULL. Safe to call kiln_cancel from another thread. */
+KILN_API kiln_status kiln_chat(kiln_context* c,
+                               const kiln_chat_message* msgs, int32_t n_msgs,
+                               const kiln_chat_options* chat_opts,
+                               const kiln_sampling_params* params,
+                               kiln_token_cb cb, void* user,
+                               kiln_gen_stats* stats);
+
+/* Low-level. Feeds a raw, already-templated prompt. Same prefix reuse and streaming. */
 KILN_API kiln_status kiln_generate(kiln_context* c,
                                    const char* prompt,
                                    const kiln_sampling_params* params,

@@ -3,16 +3,24 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <string>
 #include <vector>
 
 static void usage() {
     fprintf(stderr,
         "usage: kiln-cli --probe\n"
-        "       kiln-cli -m model.gguf [-p \"prompt\"] [-n max_tokens] [--cpu|--gpu] [-t threads] [-c n_ctx] [--raw] [--think] [-v]\n");
+        "       kiln-cli -m model.gguf [-p \"prompt\"] [-n max_tokens] [--cpu|--gpu] [-t threads] [-c n_ctx] [--think] [--raw] [--chat] [-v]\n"
+        "  --chat   interactive multi-turn REPL (shows KV prefix reuse per turn)\n"
+        "  --think  enable reasoning on models that support it; reasoning is printed dimmed\n");
 }
 
-static bool on_token(const char* piece, int32_t, void*) { fputs(piece, stdout); fflush(stdout); return true; }
+static bool on_piece(kiln_channel ch, const char* piece, int32_t, void*) {
+    static kiln_channel last = KILN_CHANNEL_ANSWER;
+    if (ch != last) { fputs(ch == KILN_CHANNEL_REASONING ? "\033[2m" : "\033[0m", stdout); last = ch; }
+    fputs(piece, stdout); fflush(stdout);
+    return true;
+}
 
 static void print_probe(const kiln_device_info& d) {
     printf("soc:        %s\n", d.soc);
@@ -24,10 +32,16 @@ static void print_probe(const kiln_device_info& d) {
     printf("npu:        %s%s\n", d.has_npu ? "yes - " : "no", d.has_npu ? d.npu_name : "");
 }
 
+static void print_stats(const kiln_gen_stats& st) {
+    fprintf(stderr, "\033[0m\nprompt:   %d tok (%d cached) in %.0f ms (%.1f tok/s)\n", st.prompt_tokens, st.cached_tokens, st.prompt_ms, st.prompt_tps);
+    fprintf(stderr, "generate: %d tok (%d reasoning) in %.0f ms (%.1f tok/s)%s\n", st.generated_tokens, st.reasoning_tokens, st.gen_ms, st.gen_tps,
+            st.stopped_by_eos ? " [eos]" : st.stopped_by_user ? " [stopped]" : "");
+}
+
 int main(int argc, char** argv) {
     std::string model, prompt = "Explain in one sentence why the sky is blue.";
     int max_tokens = 128, threads = 0, n_ctx = 0;
-    bool probe = false, raw = false, think = false;
+    bool probe = false, raw = false, think = false, chat = false;
     kiln_backend_kind backend = KILN_BACKEND_AUTO;
 
     for (int i = 1; i < argc; ++i) {
@@ -43,6 +57,7 @@ int main(int argc, char** argv) {
         else if (a == "--gpu")   backend = KILN_BACKEND_GPU;
         else if (a == "--raw")   raw = true;
         else if (a == "--think") think = true;
+        else if (a == "--chat")  chat = true;
         else if (a == "-v")      kiln_set_log_level(KILN_LOG_INFO);
         else if (a == "-vv")     kiln_set_log_level(KILN_LOG_DEBUG);
         else { usage(); return 2; }
@@ -56,45 +71,60 @@ int main(int argc, char** argv) {
     kiln_model_params mp = kiln_model_params_default();
     mp.backend = backend; mp.n_threads = threads;
     kiln_model* m = nullptr;
-    if (kiln_model_load(model.c_str(), &mp, &m) != KILN_OK) {
-        fprintf(stderr, "load failed: %s\n", kiln_last_error()); return 1;
-    }
+    if (kiln_model_load(model.c_str(), &mp, &m) != KILN_OK) { fprintf(stderr, "load failed: %s\n", kiln_last_error()); return 1; }
     kiln_model_info mi; kiln_model_get_info(m, &mi);
 
     kiln_context_params cp = kiln_context_params_default();
     cp.n_ctx = n_ctx;
     kiln_context* c = nullptr;
-    if (kiln_context_create(m, &cp, &c) != KILN_OK) {
-        fprintf(stderr, "context failed: %s\n", kiln_last_error()); return 1;
-    }
+    if (kiln_context_create(m, &cp, &c) != KILN_OK) { fprintf(stderr, "context failed: %s\n", kiln_last_error()); return 1; }
 
-    std::string full = prompt;
-    if (!raw) {
-        kiln_chat_message msgs[] = { {"user", prompt.c_str()} };
-        kiln_chat_options co = kiln_chat_options_default();
-        co.enable_thinking = think;
-        int need = kiln_apply_chat_template(m, msgs, 1, &co, nullptr, 0);
-        if (need < 0) need = -need;
-        std::vector<char> buf(need + 1);
-        int n = kiln_apply_chat_template(m, msgs, 1, &co, buf.data(), (int)buf.size());
-        if (n > 0) full.assign(buf.data(), n);
-    }
+    fprintf(stderr, "--- kiln %s ---\n", kiln_version());
+    fprintf(stderr, "device:   %s | %s | %d cores | %.1f GB RAM\n", dev.soc, dev.abi, dev.cpu_cores, dev.ram_total_bytes / 1e9);
+    fprintf(stderr, "backend:  %s (gpu layers: %d)\n", mi.backend_name, mi.n_gpu_layers_used);
+    fprintf(stderr, "model:    %s %s, %.2fB params, %.2f GB resident, ctx_train=%d, thinking=%s\n",
+            mi.arch, mi.quant, mi.n_params / 1e9, mi.model_bytes / 1e9, mi.n_ctx_train, mi.supports_thinking ? "yes" : "no");
 
     kiln_sampling_params sp = kiln_sampling_params_default();
     sp.max_tokens = max_tokens;
+    kiln_chat_options co = kiln_chat_options_default();
+    co.enable_thinking = think;
     kiln_gen_stats st;
-    kiln_status s = kiln_generate(c, full.c_str(), &sp, on_token, nullptr, &st);
-    printf("\n");
-    if (s != KILN_OK && s != KILN_ERR_CANCELLED) fprintf(stderr, "generate failed: %s\n", kiln_last_error());
+    kiln_status s = KILN_OK;
 
-    fprintf(stderr, "\n--- kiln %s ---\n", kiln_version());
-    fprintf(stderr, "device:   %s | %s | %d cores | %.1f GB RAM\n", dev.soc, dev.abi, dev.cpu_cores, dev.ram_total_bytes / 1e9);
-    fprintf(stderr, "backend:  %s (gpu layers: %d)\n", mi.backend_name, mi.n_gpu_layers_used);
-    fprintf(stderr, "model:    %s %s, %.2fB params, %.2f GB resident, ctx_train=%d\n",
-            mi.arch, mi.quant, mi.n_params / 1e9, mi.model_bytes / 1e9, mi.n_ctx_train);
-    fprintf(stderr, "prompt:   %d tok in %.0f ms (%.1f tok/s)\n", st.prompt_tokens, st.prompt_ms, st.prompt_tps);
-    fprintf(stderr, "generate: %d tok in %.0f ms (%.1f tok/s)%s\n", st.generated_tokens, st.gen_ms, st.gen_tps,
-            st.stopped_by_eos ? " [eos]" : st.stopped_by_user ? " [stopped]" : "");
+    if (raw) {
+        s = kiln_generate(c, prompt.c_str(), &sp, on_piece, nullptr, &st);
+        print_stats(st);
+    } else if (chat) {
+        std::vector<std::string> store;            // owns message text
+        std::vector<kiln_chat_message> msgs;
+        std::string line;
+        fprintf(stderr, "(chat mode: type a message, empty line to quit)\n");
+        while (true) {
+            fprintf(stderr, "\n> "); 
+            if (!std::getline(std::cin, line) || line.empty()) break;
+            store.push_back(line);
+            msgs.push_back({"user", store.back().c_str()});
+            // rebuild pointers in case store reallocated
+            for (size_t i = 0; i < msgs.size(); ++i) msgs[i].content = store[i].c_str();
+            std::string reply;
+            auto collect = [](kiln_channel ch, const char* p, int32_t t, void* u) -> bool {
+                if (ch == KILN_CHANNEL_ANSWER) static_cast<std::string*>(u)->append(p);
+                return on_piece(ch, p, t, nullptr);
+            };
+            s = kiln_chat(c, msgs.data(), (int)msgs.size(), &co, &sp, collect, &reply, &st);
+            print_stats(st);
+            if (s != KILN_OK) { fprintf(stderr, "error: %s\n", kiln_last_error()); break; }
+            store.push_back(reply);
+            msgs.push_back({"assistant", store.back().c_str()});
+            for (size_t i = 0; i < msgs.size(); ++i) msgs[i].content = store[i].c_str();
+        }
+    } else {
+        kiln_chat_message msgs[] = { {"user", prompt.c_str()} };
+        s = kiln_chat(c, msgs, 1, &co, &sp, on_piece, nullptr, &st);
+        print_stats(st);
+    }
+    if (s != KILN_OK && s != KILN_ERR_CANCELLED) fprintf(stderr, "failed: %s\n", kiln_last_error());
 
     kiln_context_free(c);
     kiln_model_free(m);

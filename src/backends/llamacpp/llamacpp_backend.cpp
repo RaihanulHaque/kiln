@@ -1,9 +1,12 @@
 // llama.cpp backend. This is the guaranteed tier: CPU everywhere, GPU where ggml has a device.
 #include "../../core/internal.h"
+#include "reasoning_splitter.h"
 #include "llama.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
+#include "chat.h"          // llama.cpp/common: jinja templates via minja
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -56,121 +59,159 @@ int default_threads(const kiln_device_info& d) {
     return n > 8 ? 8 : n;
 }
 
+std::string rtrim(std::string s) {
+    while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
+    return s;
+}
+
+struct ThinkTags {
+    bool supported = false;
+    std::string start;
+    std::vector<std::string> ends;
+};
+
 // ------------------------------------------------------------------ Context
 
 class LlamaContext final : public kiln::Context {
 public:
-    LlamaContext(llama_model* model, llama_context* ctx, int n_batch, ggml_threadpool_t tp)
-        : model_(model), ctx_(ctx), vocab_(llama_model_get_vocab(model)), n_batch_(n_batch), tp_(tp) {}
+    LlamaContext(llama_model* model, const ThinkTags& tags) : model_(model), vocab_(llama_model_get_vocab(model)), tags_(tags) {}
     ~LlamaContext() override {
-        if (tp_) llama_detach_threadpool(ctx_);
-        llama_free(ctx_);
+        if (ctx_) { if (tp_) llama_detach_threadpool(ctx_); llama_free(ctx_); }
         if (tp_) ggml_threadpool_free(tp_);
     }
 
+    // set by LlamaModel::create_context after llama_init_from_model
+    llama_context*    ctx_ = nullptr;
+    ggml_threadpool_t tp_  = nullptr;
+    int               n_batch_ = 512;
+    std::atomic<bool> cancel_{false};
+
+    static bool abort_cb(void* user) { return static_cast<LlamaContext*>(user)->cancel_.load(); }
+
     kiln_status reset() override {
         llama_memory_clear(llama_get_memory(ctx_), true);
-        n_past_ = 0;
+        cache_.clear();
         return KILN_OK;
     }
 
     void cancel() override { cancel_.store(true); }
 
-    static bool abort_cb(void* user) { return static_cast<LlamaContext*>(user)->cancel_.load(); }
-
-    kiln_status generate(const char* prompt, const kiln_sampling_params& sp,
+    kiln_status generate(const kiln::RenderedPrompt& in, const kiln_sampling_params& sp,
                          kiln_token_cb cb, void* user, kiln_gen_stats* stats) override {
         cancel_.store(false);
         kiln_gen_stats st{};
+        auto done = [&](kiln_status s) { if (stats) *stats = st; return s; };
 
-        // tokenize
-        int n = -llama_tokenize(vocab_, prompt, (int)strlen(prompt), nullptr, 0, true, true);
-        if (n <= 0) return kiln::set_error(KILN_ERR_INVALID_ARG, "empty prompt");
+        // ---- tokenize
+        const char* text = in.prompt.c_str();
+        int n = -llama_tokenize(vocab_, text, (int)in.prompt.size(), nullptr, 0, true, true);
+        if (n <= 0) return done(kiln::set_error(KILN_ERR_INVALID_ARG, "empty prompt"));
         std::vector<llama_token> toks(n);
-        n = llama_tokenize(vocab_, prompt, (int)strlen(prompt), toks.data(), n, true, true);
-        if (n < 0) return kiln::set_error(KILN_ERR_INTERNAL, "tokenize failed");
+        n = llama_tokenize(vocab_, text, (int)in.prompt.size(), toks.data(), n, true, true);
+        if (n < 0) return done(kiln::set_error(KILN_ERR_INTERNAL, "tokenize failed"));
         toks.resize(n);
         st.prompt_tokens = n;
 
         const int n_ctx = (int)llama_n_ctx(ctx_);
-        if (n_past_ + n >= n_ctx)
-            return kiln::set_error(KILN_ERR_CONTEXT_FULL, "prompt does not fit in context");
+        if (n >= n_ctx)
+            return done(kiln::set_error(KILN_ERR_CONTEXT_FULL, "prompt (" + std::to_string(n) + " tok) does not fit in context (" + std::to_string(n_ctx) + ")"));
 
-        // sampler chain
+        // ---- prefix reuse: keep what the KV cache already has, drop the rest
+        size_t common = 0;
+        while (common < cache_.size() && common < toks.size() && cache_[common] == toks[common]) ++common;
+        if (common == toks.size()) --common;            // identical prompt: re-decode last token to get logits
+        if (common < cache_.size()) {
+            // Recurrent / hybrid models (LFM2, Qwen3.5, Mamba) cannot drop a partial tail of their
+            // state. seq_rm tells us; fall back to a full re-eval rather than generate from stale state.
+            if (!llama_memory_seq_rm(llama_get_memory(ctx_), 0, (llama_pos)common, -1)) {
+                llama_memory_clear(llama_get_memory(ctx_), true);
+                common = 0;
+            }
+        }
+        cache_.resize(common);
+        st.cached_tokens = (int32_t)common;
+        int n_past = (int)common;
+
+        // ---- sampler chain
         llama_sampler* smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
         if (sp.repeat_last_n > 0 && sp.repeat_penalty != 1.0f)
             llama_sampler_chain_add(smpl, llama_sampler_init_penalties(llama_vocab_n_tokens(vocab_), sp.repeat_last_n, sp.repeat_penalty, 0.0f, 0.0f));
         if (sp.temperature <= 0.0f) {
             llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
         } else {
-            if (sp.top_k > 0)      llama_sampler_chain_add(smpl, llama_sampler_init_top_k(sp.top_k));
-            if (sp.top_p < 1.0f)   llama_sampler_chain_add(smpl, llama_sampler_init_top_p(sp.top_p, 1));
-            if (sp.min_p > 0.0f)   llama_sampler_chain_add(smpl, llama_sampler_init_min_p(sp.min_p, 1));
+            if (sp.top_k > 0)    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(sp.top_k));
+            if (sp.top_p < 1.0f) llama_sampler_chain_add(smpl, llama_sampler_init_top_p(sp.top_p, 1));
+            if (sp.min_p > 0.0f) llama_sampler_chain_add(smpl, llama_sampler_init_min_p(sp.min_p, 1));
             llama_sampler_chain_add(smpl, llama_sampler_init_temp(sp.temperature));
             llama_sampler_chain_add(smpl, llama_sampler_init_dist(sp.seed ? sp.seed : LLAMA_DEFAULT_SEED));
         }
+        for (auto t : toks) llama_sampler_accept(smpl, t);   // penalties see the prompt
+        struct SmplGuard { llama_sampler* s; ~SmplGuard() { llama_sampler_free(s); } } guard{smpl};
 
-        // prompt eval
+        // ---- prompt eval
         auto t0 = clock_t_::now();
-        for (int i = 0; i < n; i += n_batch_) {
+        for (int i = (int)common; i < n; i += n_batch_) {
             int cnt = std::min(n_batch_, n - i);
-            llama_batch b = llama_batch_get_one(toks.data() + i, cnt);
-            if (cancel_.load()) { llama_sampler_free(smpl); st.stopped_by_user = true; if (stats) *stats = st; return KILN_ERR_CANCELLED; }
-            int rc = llama_decode(ctx_, b);
-            if (rc != 0) {
-                llama_sampler_free(smpl);
-                if (rc == 2) { st.stopped_by_user = true; if (stats) *stats = st; return KILN_ERR_CANCELLED; }
-                return kiln::set_error(rc == 1 ? KILN_ERR_CONTEXT_FULL : KILN_ERR_BACKEND,
-                                       "llama_decode failed during prompt eval, rc=" + std::to_string(rc));
-            }
-            n_past_ += cnt;
+            if (cancel_.load()) { st.stopped_by_user = true; return done(KILN_ERR_CANCELLED); }
+            int rc = llama_decode(ctx_, llama_batch_get_one(toks.data() + i, cnt));
+            if (rc == 2) { st.stopped_by_user = true; return done(KILN_ERR_CANCELLED); }
+            if (rc != 0) return done(kiln::set_error(rc == 1 ? KILN_ERR_CONTEXT_FULL : KILN_ERR_BACKEND, "llama_decode failed in prompt eval, rc=" + std::to_string(rc)));
+            n_past += cnt;
+            cache_.insert(cache_.end(), toks.begin() + i, toks.begin() + i + cnt);
         }
         st.prompt_ms = ms_since(t0);
 
-        // generation
+        // ---- generation
+        kiln::ReasoningSplitter split(tags_.start, tags_.ends, in.starts_in_reasoning);
+        bool user_stopped = false;
+        auto emit = [&](kiln_channel ch, const std::string& s) -> bool {
+            if (!cb) return true;
+            if (!cb(ch, s.c_str(), -1, user)) { user_stopped = true; return false; }
+            return true;
+        };
+
         auto t1 = clock_t_::now();
         std::vector<char> piece(256);
         kiln_status result = KILN_OK;
         for (;;) {
             if (sp.max_tokens > 0 && st.generated_tokens >= sp.max_tokens) break;
             if (cancel_.load()) { st.stopped_by_user = true; result = KILN_ERR_CANCELLED; break; }
-            if (n_past_ >= n_ctx) { result = KILN_ERR_CONTEXT_FULL; break; }
+            if (n_past >= n_ctx) { result = kiln::set_error(KILN_ERR_CONTEXT_FULL, "context full after " + std::to_string(st.generated_tokens) + " tokens"); break; }
 
             llama_token tok = llama_sampler_sample(smpl, ctx_, -1);
             llama_sampler_accept(smpl, tok);
-            if (llama_vocab_is_eog(vocab_, tok)) { st.stopped_by_eos = true; break; }
-
-            int len = llama_token_to_piece(vocab_, tok, piece.data(), (int)piece.size(), 0, false);
-            if (len < 0) { piece.resize(-len + 1); len = llama_token_to_piece(vocab_, tok, piece.data(), (int)piece.size(), 0, false); }
-            piece[len] = 0;
-            st.generated_tokens++;
-            if (cb && !cb(piece.data(), tok, user)) { st.stopped_by_user = true; break; }
-
-            llama_batch b = llama_batch_get_one(&tok, 1);
-            int rc = llama_decode(ctx_, b);
-            if (rc != 0) {
-                if (rc == 2) { st.stopped_by_user = true; result = KILN_ERR_CANCELLED; }
-                else result = kiln::set_error(rc == 1 ? KILN_ERR_CONTEXT_FULL : KILN_ERR_BACKEND, "llama_decode failed, rc=" + std::to_string(rc));
-                break;
+            if (llama_vocab_is_eog(vocab_, tok)) {
+                // Feed the EOG token too: the next turn's template re-emits it, so the whole
+                // conversation so far stays a pure prefix and even recurrent models reuse the cache.
+                if (n_past < n_ctx && llama_decode(ctx_, llama_batch_get_one(&tok, 1)) == 0) { n_past++; cache_.push_back(tok); }
+                st.stopped_by_eos = true; break;
             }
-            n_past_++;
+
+            // special=true so think tags surface as text for the splitter to strip
+            int len = llama_token_to_piece(vocab_, tok, piece.data(), (int)piece.size(), 0, true);
+            if (len < 0) { piece.resize(-len + 1); len = llama_token_to_piece(vocab_, tok, piece.data(), (int)piece.size(), 0, true); }
+            st.generated_tokens++;
+            if (split.in_reasoning()) st.reasoning_tokens++;
+            if (!split.feed(std::string(piece.data(), (size_t)len), emit)) { st.stopped_by_user = true; break; }
+
+            int rc = llama_decode(ctx_, llama_batch_get_one(&tok, 1));
+            if (rc == 2) { st.stopped_by_user = true; result = KILN_ERR_CANCELLED; break; }
+            if (rc != 0) { result = kiln::set_error(rc == 1 ? KILN_ERR_CONTEXT_FULL : KILN_ERR_BACKEND, "llama_decode failed, rc=" + std::to_string(rc)); break; }
+            n_past++;
+            cache_.push_back(tok);
         }
+        if (!user_stopped && result != KILN_ERR_CANCELLED) split.finish(emit);
         st.gen_ms = ms_since(t1);
-        st.prompt_tps = st.prompt_ms > 0 ? st.prompt_tokens * 1000.0 / st.prompt_ms : 0;
+        st.prompt_tps = st.prompt_ms > 0 ? (st.prompt_tokens - st.cached_tokens) * 1000.0 / st.prompt_ms : 0;
         st.gen_tps    = st.gen_ms > 0 ? st.generated_tokens * 1000.0 / st.gen_ms : 0;
-        llama_sampler_free(smpl);
-        if (stats) *stats = st;
-        return result;
+        return done(result);
     }
 
 private:
-    llama_model*       model_;
-    llama_context*     ctx_;
-    const llama_vocab* vocab_;
-    int                n_batch_;
-    int                n_past_ = 0;
-    ggml_threadpool_t  tp_ = nullptr;
-    std::atomic<bool>  cancel_{false};
+    llama_model*             model_;
+    const llama_vocab*       vocab_;
+    ThinkTags                tags_;
+    std::vector<llama_token> cache_;   // tokens currently in the KV cache, in order
 };
 
 // ------------------------------------------------------------------ Model
@@ -179,7 +220,26 @@ class LlamaModel final : public kiln::Model {
 public:
     LlamaModel(llama_model* m, std::string backend_name, kiln_backend_kind kind, int gpu_layers, int threads, uint64_t fast_mask)
         : model_(m), vocab_(llama_model_get_vocab(m)), backend_name_(std::move(backend_name)),
-          kind_(kind), gpu_layers_(gpu_layers), threads_(threads), fast_mask_(fast_mask) {}
+          kind_(kind), gpu_layers_(gpu_layers), threads_(threads), fast_mask_(fast_mask) {
+        tmpls_ = common_chat_templates_init(model_, "");
+        // Probe the template once: learn its reasoning tags, and whether enable_thinking actually
+        // changes the prompt (common's supports_thinking is a heuristic that also fires on templates
+        // that merely strip old </think> blocks, e.g. LFM2.5).
+        common_chat_templates_inputs in;
+        { common_chat_msg m; m.role = "user"; m.content = "hi"; in.messages.push_back(std::move(m)); }
+        try {
+            in.enable_thinking = true;
+            auto on = common_chat_templates_apply(tmpls_.get(), in);
+            in.enable_thinking = false;
+            auto off = common_chat_templates_apply(tmpls_.get(), in);
+            tags_.supported = on.supports_thinking && on.prompt != off.prompt;
+            tags_.start = on.thinking_start_tag;
+            tags_.ends  = on.thinking_end_tags;
+        } catch (const std::exception& e) {
+            kiln::log(KILN_LOG_WARN, "chat template probe failed: %s", e.what());
+        }
+        if (tags_.start.empty() && tags_.ends.empty()) { tags_.start = "<think>"; tags_.ends = {"</think>"}; }
+    }
     ~LlamaModel() override { llama_model_free(model_); }
 
     kiln_status info(kiln_model_info& out) const override {
@@ -189,15 +249,15 @@ public:
         llama_model_meta_val_str(model_, "general.architecture", out.arch, sizeof out.arch);
         char desc[128] = {0};
         llama_model_desc(model_, desc, sizeof desc);
-        // desc looks like "qwen2 1.5B Q4_K - Medium": keep everything after the 2nd space
         const char* p = desc; int spaces = 0;
         while (*p && spaces < 2) { if (*p == ' ') ++spaces; ++p; }
         strncpy(out.quant, p, sizeof out.quant - 1);
-        out.n_params         = (int64_t)llama_model_n_params(model_);
-        out.n_ctx_train      = llama_model_n_ctx_train(model_);
-        out.n_vocab          = llama_vocab_n_tokens(vocab_);
+        out.n_params          = (int64_t)llama_model_n_params(model_);
+        out.n_ctx_train       = llama_model_n_ctx_train(model_);
+        out.n_vocab           = llama_vocab_n_tokens(vocab_);
         out.n_gpu_layers_used = gpu_layers_;
-        out.model_bytes      = llama_model_size(model_);
+        out.model_bytes       = llama_model_size(model_);
+        out.supports_thinking = tags_.supported;
         return KILN_OK;
     }
 
@@ -207,68 +267,72 @@ public:
     int32_t detokenize(const int32_t* toks, int32_t n, char* out, int32_t cap) const override {
         return llama_detokenize(vocab_, toks, n, out, cap, false, false);
     }
-    int32_t apply_chat_template(const kiln_chat_message* msgs, int32_t n, const kiln_chat_options& o,
-                                char* out, int32_t cap) const override {
-        const char* tmpl = llama_model_chat_template(model_, nullptr);
-        if (!tmpl) tmpl = "chatml";
-        std::vector<llama_chat_message> cm(n);
-        for (int i = 0; i < n; ++i) cm[i] = { msgs[i].role, msgs[i].content };
 
-        // llama.cpp's built-in matcher reduces Qwen3.x's jinja template to plain chatml and drops
-        // the enable_thinking branch. Reproduce it: an empty think block tells the model to answer directly.
-        std::string suffix;
-        if (o.add_assistant_prefix && !o.enable_thinking && strstr(tmpl, "<think>") != nullptr)
-            suffix = "<think>\n\n</think>\n\n";
-
-        int32_t need = llama_chat_apply_template(tmpl, cm.data(), (size_t)n, o.add_assistant_prefix, nullptr, 0);
-        if (need < 0) return need;
-        int32_t total = need + (int32_t)suffix.size();
-        if (!out || cap < total + 1) return -total;
-        int32_t w = llama_chat_apply_template(tmpl, cm.data(), (size_t)n, o.add_assistant_prefix, out, cap);
-        if (w < 0) return w;
-        memcpy(out + w, suffix.c_str(), suffix.size() + 1);
-        return w + (int32_t)suffix.size();
+    kiln_status render_chat(const kiln_chat_message* msgs, int32_t n, const kiln_chat_options& o,
+                            kiln::RenderedPrompt& out) const override {
+        common_chat_templates_inputs in;
+        for (int i = 0; i < n; ++i) {
+            if (!msgs[i].role || !msgs[i].content) return kiln::set_error(KILN_ERR_INVALID_ARG, "message role/content is null");
+            common_chat_msg m; m.role = msgs[i].role; m.content = msgs[i].content;
+            in.messages.push_back(std::move(m));
+        }
+        in.add_generation_prompt = o.add_assistant_prefix;
+        in.enable_thinking = o.enable_thinking && tags_.supported;
+        in.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+        try {
+            auto p = common_chat_templates_apply(tmpls_.get(), in);
+            out.prompt = p.prompt;
+            out.starts_in_reasoning = in.enable_thinking && !tags_.start.empty()
+                                   && rtrim(p.prompt).size() >= tags_.start.size()
+                                   && rtrim(p.prompt).compare(rtrim(p.prompt).size() - tags_.start.size(), tags_.start.size(), tags_.start) == 0;
+            return KILN_OK;
+        } catch (const std::exception& e) {
+            return kiln::set_error(KILN_ERR_BACKEND, std::string("chat template failed: ") + e.what());
+        }
     }
 
     kiln_status create_context(const kiln_context_params& p, std::unique_ptr<kiln::Context>& out) override {
+        auto c = std::make_unique<LlamaContext>(model_, tags_);
+
         llama_context_params cp = llama_context_default_params();
         cp.n_ctx           = p.n_ctx > 0 ? (uint32_t)p.n_ctx : 4096;
         cp.n_batch         = p.n_batch > 0 ? (uint32_t)p.n_batch : 512;
         cp.n_threads       = threads_;
         cp.n_threads_batch = threads_;
         cp.flash_attn_type = p.flash_attn ? LLAMA_FLASH_ATTN_TYPE_AUTO : LLAMA_FLASH_ATTN_TYPE_DISABLED;
-        auto* holder = new LlamaContext*(nullptr);
-        cp.abort_callback      = [](void* u) { auto* h = *static_cast<LlamaContext**>(u); return h && LlamaContext::abort_cb(h); };
-        cp.abort_callback_data = holder;
-        llama_context* ctx = llama_init_from_model(model_, cp);
-        if (!ctx) { delete holder; return kiln::set_error(KILN_ERR_OUT_OF_MEMORY, "llama_init_from_model failed (n_ctx=" + std::to_string(cp.n_ctx) + ")"); }
+        cp.abort_callback      = LlamaContext::abort_cb;
+        cp.abort_callback_data = c.get();
+
+        c->ctx_ = llama_init_from_model(model_, cp);
+        if (!c->ctx_) return kiln::set_error(KILN_ERR_OUT_OF_MEMORY, "llama_init_from_model failed (n_ctx=" + std::to_string(cp.n_ctx) + ")");
+        c->n_batch_ = (int)cp.n_batch;
+
         // Pin worker threads to the fast cores. Without this, Android schedules ggml workers onto
         // little cores and every barrier waits for the slowest one: measured 1 thread > 5 threads on Pixel 8.
-        ggml_threadpool_t tp = nullptr;
         if (fast_mask_) {
             ggml_threadpool_params tpp = ggml_threadpool_params_default(threads_);
             int set = 0;
             for (int i = 63; i >= 0 && set < threads_; --i)      // highest-index cores are usually the biggest
                 if (fast_mask_ & (1ull << i)) { tpp.cpumask[i] = true; ++set; }
             tpp.strict_cpu = true;
-            tp = ggml_threadpool_new(&tpp);
-            if (tp) llama_attach_threadpool(ctx, tp, tp);
+            c->tp_ = ggml_threadpool_new(&tpp);
+            if (c->tp_) llama_attach_threadpool(c->ctx_, c->tp_, c->tp_);
             else kiln::log(KILN_LOG_WARN, "threadpool creation failed, running without affinity");
         }
-        auto* c = new LlamaContext(model_, ctx, (int)cp.n_batch, tp);
-        *holder = c;   // small leak of one pointer per context; acceptable for now, tracked in TODO
-        out.reset(c);
+        out = std::move(c);
         return KILN_OK;
     }
 
 private:
-    llama_model*       model_;
-    const llama_vocab* vocab_;
-    std::string        backend_name_;
-    kiln_backend_kind  kind_;
-    int                gpu_layers_;
-    int                threads_;
-    uint64_t           fast_mask_;
+    llama_model*              model_;
+    const llama_vocab*        vocab_;
+    std::string               backend_name_;
+    kiln_backend_kind         kind_;
+    int                       gpu_layers_;
+    int                       threads_;
+    uint64_t                  fast_mask_;
+    common_chat_templates_ptr tmpls_;
+    ThinkTags                 tags_;
 };
 
 // ------------------------------------------------------------------ Backend

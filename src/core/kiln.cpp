@@ -35,19 +35,22 @@ kiln_status kiln_model_load(const char* path, const kiln_model_params* params, k
     kiln_model_params p = params ? *params : kiln_model_params_default();
     const kiln_device_info& dev = cached_device();
 
+    kiln_status last = KILN_OK;
+    std::string last_msg;
     for (auto* b : backends()) {
         if (!b->supports(p.backend, dev)) continue;
         std::unique_ptr<Model> m;
         kiln_status s = b->load_model(path, p, dev, m);
         if (s == KILN_OK) {
-            auto* h = new kiln_model{std::move(m), dev};
-            *out = h;
+            *out = new kiln_model{std::move(m), dev};
             return KILN_OK;
         }
-        log(KILN_LOG_WARN, "backend %s failed to load %s: %s", b->name(), path, kiln_last_error());
+        last = s; last_msg = kiln_last_error();
+        log(KILN_LOG_WARN, "backend %s failed to load %s: %s", b->name(), path, last_msg.c_str());
         if (p.backend != KILN_BACKEND_AUTO) return s;   // explicit request, don't fall through
     }
-    return set_error(KILN_ERR_NO_BACKEND, "no backend could load the model on this device");
+    if (last != KILN_OK) return set_error(last, last_msg);   // every capable backend tried and failed
+    return set_error(KILN_ERR_NO_BACKEND, "no backend supports the requested kind on this device");
 }
 
 void kiln_model_free(kiln_model* m) { delete m; }
@@ -69,7 +72,7 @@ kiln_status kiln_context_create(kiln_model* m, const kiln_context_params* params
     std::unique_ptr<Context> c;
     kiln_status s = m->impl->create_context(p, c);
     if (s != KILN_OK) return s;
-    *out = new kiln_context{std::move(c)};
+    *out = new kiln_context{std::move(c), m->impl.get()};
     return KILN_OK;
 }
 
@@ -95,7 +98,12 @@ int32_t kiln_apply_chat_template(const kiln_model* m, const kiln_chat_message* m
                                  const kiln_chat_options* opts, char* out, int32_t cap) {
     if (!m || !msgs) return 0;
     kiln_chat_options o = opts ? *opts : kiln_chat_options_default();
-    return m->impl->apply_chat_template(msgs, n, o, out, cap);
+    RenderedPrompt r;
+    if (m->impl->render_chat(msgs, n, o, r) != KILN_OK) return 0;
+    int32_t need = (int32_t)r.prompt.size();
+    if (!out || cap < need + 1) return -need;
+    memcpy(out, r.prompt.data(), need); out[need] = 0;
+    return need;
 }
 
 kiln_sampling_params kiln_sampling_params_default(void) {
@@ -109,7 +117,21 @@ kiln_status kiln_generate(kiln_context* c, const char* prompt, const kiln_sampli
                           kiln_token_cb cb, void* user, kiln_gen_stats* stats) {
     if (!c || !prompt) return set_error(KILN_ERR_INVALID_ARG, "null handle/prompt");
     kiln_sampling_params p = params ? *params : kiln_sampling_params_default();
-    return c->impl->generate(prompt, p, cb, user, stats);
+    RenderedPrompt r; r.prompt = prompt;
+    return c->impl->generate(r, p, cb, user, stats);
+}
+
+kiln_status kiln_chat(kiln_context* c, const kiln_chat_message* msgs, int32_t n_msgs,
+                      const kiln_chat_options* chat_opts, const kiln_sampling_params* params,
+                      kiln_token_cb cb, void* user, kiln_gen_stats* stats) {
+    if (!c || !msgs || n_msgs <= 0) return set_error(KILN_ERR_INVALID_ARG, "null handle/messages");
+    kiln_chat_options o = chat_opts ? *chat_opts : kiln_chat_options_default();
+    o.add_assistant_prefix = true;
+    kiln_sampling_params p = params ? *params : kiln_sampling_params_default();
+    RenderedPrompt r;
+    kiln_status s = c->model->render_chat(msgs, n_msgs, o, r);
+    if (s != KILN_OK) return s;
+    return c->impl->generate(r, p, cb, user, stats);
 }
 
 void kiln_cancel(kiln_context* c) { if (c) c->impl->cancel(); }

@@ -16,8 +16,11 @@ set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_COMMON   OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_COMMON   ON  CACHE BOOL "" FORCE)   # chat templates (minja) live here
 set(LLAMA_CURL           OFF CACHE BOOL "" FORCE)
+set(LLAMA_OPENSSL        OFF CACHE BOOL "" FORCE)
+set(LLAMA_SUBPROCESS     OFF CACHE BOOL "" FORCE)
+set(LLAMA_LLGUIDANCE     OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL      OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE)   # fold ggml+llama into libkiln
 
@@ -55,8 +58,8 @@ endif()
 
 target_include_directories(kiln
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    PRIVATE third_party/llama.cpp/include third_party/llama.cpp/ggml/include)
-target_link_libraries(kiln PRIVATE llama ggml)
+    PRIVATE third_party/llama.cpp/include third_party/llama.cpp/ggml/include third_party/llama.cpp/common)
+target_link_libraries(kiln PRIVATE llama-common llama ggml)
 target_compile_definitions(kiln PRIVATE KILN_BUILD)
 if(ANDROID)
     target_link_libraries(kiln PRIVATE log)
@@ -80,3 +83,15 @@ install(TARGETS kiln
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/kiln)
+
+# ---- tests ----
+option(KILN_BUILD_TESTS "Build kiln tests" ON)
+if(KILN_BUILD_TESTS)
+    enable_testing()
+    add_executable(kiln-tests tests/test_core.cpp)
+    target_link_libraries(kiln-tests PRIVATE kiln)
+    if(ANDROID)
+        set_target_properties(kiln-tests PROPERTIES BUILD_RPATH "$ORIGIN")
+    endif()
+    add_test(NAME core COMMAND kiln-tests ${CMAKE_CURRENT_SOURCE_DIR}/models)
+endif()

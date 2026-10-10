@@ -12,8 +12,8 @@ maintainers happened to own. kiln is built the other way round:
 - **The API tells you what actually happened.** Which backend loaded, how much memory it took,
   real prompt and generation tokens per second. No README can lie about that.
 
-Status: **v0.1, pre-alpha.** C core and CLI harness work on macOS and cross-compile for Android.
-Flutter bindings are next.
+Status: **v0.1.0.** C core, CLI harness, and a test suite that passes on macOS and on a Pixel 8
+with LFM2.5, Qwen3.5, and Gemma 3. The C header is frozen at this tag. Flutter bindings are next.
 
 ## Layout
 
@@ -91,16 +91,55 @@ not faster than the CPU path for small models. Measure before you ship it.
 kiln_model* m;   kiln_model_load("model.gguf", NULL, &m);
 kiln_context* c; kiln_context_create(m, NULL, &c);
 
-kiln_chat_message msgs[] = {{"user", "Hi"}};
-char prompt[4096];
-kiln_apply_chat_template(m, msgs, 1, NULL, prompt, sizeof prompt);   // NULL opts = no thinking
+bool on_piece(kiln_channel ch, const char* piece, int32_t tok, void* user) {
+    // ch is KILN_CHANNEL_ANSWER or KILN_CHANNEL_REASONING; think tags never reach you
+    fputs(piece, stdout);
+    return true;                                   // false = stop
+}
 
+kiln_chat_message history[] = {{"user", "Hi"}};
+kiln_chat_options opts = kiln_chat_options_default();   // enable_thinking = false
 kiln_gen_stats st;
-kiln_generate(c, prompt, NULL, on_piece, NULL, &st);   // on_piece streams tokens
-// kiln_cancel(c) from any thread stops it
+kiln_chat(c, history, 1, &opts, NULL, on_piece, NULL, &st);
+// st.cached_tokens tells you how much of the conversation was reused from the KV cache.
+// Pass the full history every turn; kiln diffs it against what the cache already holds.
+// kiln_cancel(c) from any thread stops a running call.
 
-kiln_model_info info; kiln_model_get_info(m, &info);   // info.backend_name, info.model_bytes ...
+kiln_model_info info; kiln_model_get_info(m, &info);   // backend_name, model_bytes, supports_thinking ...
 ```
+
+### Chat templates and reasoning
+
+kiln runs the model's own jinja template through llama.cpp's minja engine, not the
+heuristic built-in matcher. That means system prompts, role alternation rules (Gemma), and
+`enable_thinking` all behave the way the model authors intended. Verified: LFM2.5, Qwen3.5,
+Gemma 3. Anything with a sane jinja template should work; file an issue with the GGUF if not.
+
+Reasoning models stream on two channels. The think tags themselves are stripped and the
+`reasoning_tokens` count is in the stats, so a UI can show a collapsible "thinking" block and
+bill tokens honestly.
+
+### Multi-turn and the KV cache
+
+`kiln_chat` keeps the tokens currently in the KV cache and only evaluates the suffix that
+changed. Pure transformers (Gemma, Llama) get full reuse. Hybrid and recurrent models (LFM2,
+Qwen3.5, Mamba) cannot drop a partial tail of their state, so kiln falls back to a full
+re-evaluation whenever the history diverges before the end of the cache. With Qwen3.5 that
+happens every turn because its template strips the previous think block from history. Correct,
+but slower; state checkpoints are on the roadmap.
+
+## Tests
+
+```bash
+cmake --build --preset host && ./build/host/kiln-tests models     # host
+scripts/android-test.sh                                            # device via adb
+```
+
+Needs the three test GGUFs in `models/` (LFM2.5-350M Q4_K_M, Qwen3.5-0.8B Q4_K_M,
+Gemma-3-270M-it Q8_0). Missing models are skipped. The suite covers probe, bad files,
+tokenizer round trip, template rendering, single and multi-turn chat, callback stop,
+cross-thread cancel, reset, thinking on/off channel separation, and context overflow in both
+the prompt and generation phases.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the roadmap.
 
