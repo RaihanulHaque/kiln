@@ -48,7 +48,7 @@ third_party/llama.cpp    pinned submodule
 ## Build (host, macOS or Linux)
 
 ```bash
-git clone --recursive https://github.com/<you>/kiln && cd kiln
+git clone --recursive https://github.com/RaihanulHaque/kiln && cd kiln
 cmake --preset host && cmake --build --preset host -j
 ./build/host/kiln-cli --probe
 ./build/host/kiln-cli -m path/to/model.gguf -p "Why is the sky blue?"

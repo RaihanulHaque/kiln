@@ -192,7 +192,7 @@ def beat_end(t, T=4.2):
         d.rounded_rectangle((x, 440, x + w, 484), 22, outline=lerp(BG, EMBER, ai), width=2)
         d.text((x + 15, 449), c, font=CHIP, fill=lerp(BG, INK, ai))
         x += w + 10
-    d.text((100, 560), "open source · MIT · github.com/<you>/kiln", font=TAG, fill=lerp(BG, DIM, ease((t - 2.2) / 0.6)))
+    d.text((100, 560), "open source · MIT · github.com/RaihanulHaque/kiln", font=TAG, fill=lerp(BG, DIM, ease((t - 2.2) / 0.6)))
     return fade(img, 1 - ease((t - (T - 0.5)) / 0.5))
 
 def render(beat, T):
