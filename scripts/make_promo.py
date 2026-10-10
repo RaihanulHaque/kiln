@@ -33,19 +33,88 @@ def text_center(d, y, s, f, fill):
     w = d.textlength(s, font=f)
     d.text(((W - w) / 2, y), s, font=f, fill=fill)
 
+def text_center_a(img, y, s, f, color, alpha):
+    """Centered text composited with real alpha (no ghosting over gradients)."""
+    if alpha <= 0:
+        return
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    w = d.textlength(s, font=f)
+    d.text(((W - w) / 2, y), s, font=f, fill=color + (int(255 * min(1.0, alpha)),))
+    img.paste(layer, (0, 0), layer)
+
 def fade(img, a):
     return Image.blend(Image.new("RGB", (W, H), BG), img, max(0.0, min(1.0, a)))
 
-# --------------------------------------------------------------- beat 1: logo (3.6 s)
-def beat_logo(t, T=3.6):
+# --------------------------------------------------------------- beat 1: logo (5.2 s)
+def ease_out(t, p=4):          # ease-out-quart: fast start, long soft settle
+    t = max(0.0, min(1.0, t))
+    return 1 - (1 - t) ** p
+
+def letters_layer(size, t, start, stagger=0.16, dur=1.1):
+    """'kiln' drawn letter by letter: each letter fades in from a soft blur and drifts
+    2 px into place. Returns an RGBA layer sized to the word."""
+    from brand import wordmark_font
+    f = wordmark_font(size)
+    tmp = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    bb = tmp.textbbox((0, 0), "kiln", font=f)
+    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+    pad = 24
+    out = Image.new("RGBA", (tw + 2 * pad, th + 2 * pad), (0, 0, 0, 0))
+    x = pad - bb[0]
+    for i, ch in enumerate("kiln"):
+        a = ease_out((t - start - i * stagger) / dur)
+        if a > 0:
+            layer = Image.new("RGBA", out.size, (0, 0, 0, 0))
+            ImageDraw.Draw(layer).text((x + (1 - a) * 6, pad - bb[1]), ch, font=f, fill=INK + (int(255 * a),))
+            blur = (1 - a) * 5
+            if blur > 0.2:
+                layer = layer.filter(ImageFilter.GaussianBlur(blur))
+            out.alpha_composite(layer)
+        x += tmp.textlength(ch, font=f)
+    return out, bb
+
+def beat_logo(t, T=5.2):
     img = base()
-    lk = lockup(150, 168, t=t, draw_progress=t / 1.0, mark_alpha=ease((t - 0.7) / 0.6), text_alpha=ease((t - 1.0) / 0.6))
-    rise = (1 - ease((t - 1.0) / 0.6)) * 10
-    put(img, lk, (W - lk.width) / 2, H / 2 - lk.height / 2 - 48 + rise)
-    d = ImageDraw.Draw(img)
-    text_center(d, H / 2 + 92, "on-device LLM runtime", TAG, lerp(BG, INK, ease((t - 1.5) / 0.6)))
-    text_center(d, H / 2 + 136, "honest about what it runs on", TAG, lerp(BG, EMBER_HI, ease((t - 1.9) / 0.6)))
-    return fade(img, 1 - ease((t - (T - 0.45)) / 0.45))
+    # floor glow warms up slowly over the whole beat
+    warm = Image.new("RGB", (W, H), BG)
+    ImageDraw.Draw(warm).ellipse((W * 0.3, H * 0.55, W * 0.7, H * 1.3), fill=(70, 26, 10))
+    img = Image.blend(img, warm.filter(ImageFilter.GaussianBlur(120)), 0.6 * ease_out(t / 3.0, 2))
+
+    size_text = 168
+    from brand import wordmark_font
+    f = wordmark_font(size_text)
+    tmp = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    bb = tmp.textbbox((0, 0), "kiln", font=f)
+    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+    mark_size = int(round(th / 0.80))
+    gap = int(th * 0.30)
+    total_w = mark_size + gap + tw
+    x0 = (W - total_w) / 2
+    y_text = H / 2 - th / 2 - 48
+    y_mark = y_text - (mark_size - th) / 2
+
+    # 1. ember ignites alone (0 - 1.4 s), 2. arch breathes in around it (0.6 - 2.2 s)
+    glow = ease_out(t / 1.4, 3)
+    arch_a = ease_out((t - 0.6) / 1.6, 4)
+    scale = 0.965 + 0.035 * arch_a
+    from brand import render_mark, EMBER
+    mark = render_mark(mark_size, t=t, glow=glow, stroke_color=lerp(BG, EMBER, arch_a))
+    if scale < 1:
+        ms = int(mark_size * scale)
+        mark = mark.resize((ms, ms), Image.LANCZOS)
+        put(img, mark, x0 + (mark_size - ms) / 2, y_mark + (mark_size - ms) / 2)
+    else:
+        put(img, mark, x0, y_mark)
+
+    # 3. letters settle in (1.5 s onward)
+    layer, lbb = letters_layer(size_text, t, start=1.5)
+    put(img, layer, x0 + mark_size + gap - 24, y_text - 24)
+
+    # 4. taglines, pure fades, long tail
+    text_center_a(img, H / 2 + 92, "on-device LLM runtime", TAG, INK, ease_out((t - 2.6) / 1.2, 3))
+    text_center_a(img, H / 2 + 136, "honest about what it runs on", TAG, EMBER_HI, ease_out((t - 3.1) / 1.2, 3))
+    return fade(img, 1 - ease((t - (T - 0.6)) / 0.6))
 
 # --------------------------------------------------------------- beat 2: terminal (8 s)
 CMD = "$ kiln-cli -m qwen3.5-0.8b.gguf --think -p \"Why is the sky blue?\""
@@ -130,7 +199,7 @@ def render(beat, T):
     for i in range(int(T * FPS)):
         frames.append(beat(i / FPS, T))
 
-render(beat_logo, 3.6)
+render(beat_logo, 5.2)
 render(beat_terminal, 8.0)
 render(beat_end, 4.2)
 
