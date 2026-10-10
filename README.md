@@ -54,6 +54,19 @@ cmake --preset android-arm64 && cmake --build --preset android-arm64 -j
 scripts/android-run.sh path/to/model.gguf -n 64      # pushes to a connected device via adb
 ```
 
+Measured on a Pixel 8 (Tensor G3, 1x X3 + 4x A715 + 4x A510) with the same 350M Q4_K_M model:
+
+| threads | affinity | generate tok/s |
+|---|---|---|
+| 1 | none | 61 |
+| 5 | none | 22 to 32 |
+| 5 (auto) | pinned to the 5 fast cores | 108 to 111 |
+
+Without affinity, more threads is *slower*: Android schedules ggml workers onto the A510 little
+cores and every barrier waits for the slowest one. kiln's probe groups cores by max frequency,
+drops the slowest cluster, and pins a ggml threadpool to the rest. This is the kind of thing
+that makes "runs on phones" true or false.
+
 Targets `android-29`, `arm64-v8a`, baseline ISA `armv8.2-a+dotprod+fp16`. Vulkan is
 available as the `android-arm64-vulkan` preset and is experimental: on most phone GPUs it is
 not faster than the CPU path for small models. Measure before you ship it.

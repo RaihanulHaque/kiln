@@ -17,7 +17,7 @@ static bool on_token(const char* piece, int32_t, void*) { fputs(piece, stdout); 
 static void print_probe(const kiln_device_info& d) {
     printf("soc:        %s\n", d.soc);
     printf("abi:        %s\n", d.abi);
-    printf("cores:      %d (big: %d)\n", d.cpu_cores, d.cpu_big_cores);
+    printf("cores:      %d (fast: %d, mask: 0x%llx)\n", d.cpu_cores, d.cpu_big_cores, (unsigned long long)d.cpu_fast_mask);
     printf("ram:        %.1f GB total, %.1f GB available\n", d.ram_total_bytes / 1e9, d.ram_available_bytes / 1e9);
     printf("cpu feats:  fp16=%d dotprod=%d i8mm=%d sve=%d\n", d.has_fp16, d.has_dotprod, d.has_i8mm, d.has_sve);
     printf("gpu:        %s%s\n", d.has_gpu ? "yes - " : "no", d.has_gpu ? d.gpu_name : "");

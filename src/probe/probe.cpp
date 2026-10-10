@@ -129,15 +129,22 @@ void probe_cpu(kiln_device_info& d) {
     (void)hw2;
 #    endif
 #  endif
-    // big.LITTLE: count cores whose max freq is within 85% of the top one. Best-effort.
+    // big.LITTLE: group cores by max freq. "Fast" = every core not in the slowest cluster.
+    // On Tensor G3 that is X3 + 4x A715 (5 cores); the 4x A510 are excluded.
     {
-        long maxf = 0; std::vector<long> freqs;
-        for (int i = 0; i < d.cpu_cores; ++i) {
+        std::vector<long> freqs(d.cpu_cores, 0);
+        long minf = 0, maxf = 0;
+        for (int i = 0; i < d.cpu_cores && i < 64; ++i) {
             char p[96]; snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
-            std::ifstream f(p); long v = 0; if (f >> v) { freqs.push_back(v); if (v > maxf) maxf = v; }
+            std::ifstream f(p); long v = 0; if (f >> v) freqs[i] = v;
+            if (v) { if (!minf || v < minf) minf = v; if (v > maxf) maxf = v; }
         }
-        int big = 0; for (long v : freqs) if (maxf && v >= maxf * 0.85) ++big;
-        d.cpu_big_cores = big;
+        if (maxf > minf) {
+            int fast = 0; uint64_t mask = 0;
+            for (int i = 0; i < d.cpu_cores && i < 64; ++i)
+                if (freqs[i] > minf) { ++fast; mask |= (1ull << i); }
+            d.cpu_big_cores = fast; d.cpu_fast_mask = mask;
+        }
     }
 #endif
     if (d.cpu_big_cores <= 0) d.cpu_big_cores = d.cpu_cores;

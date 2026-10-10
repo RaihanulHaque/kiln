@@ -37,7 +37,9 @@
 ## Roadmap
 
 - [x] C core, llama.cpp backend, probe, CLI, host + Android builds
-- [ ] Clamp reported `n_gpu_layers_used` to real layer count; map `mtl` -> `metal`
+- [x] Clamp reported `n_gpu_layers_used` to real layer count; map `mtl` -> `metal`
+- [x] Fast-core detection + pinned ggml threadpool on Android (Pixel 8: 61 -> 108 tok/s)
+- [ ] Validate the "highest core index = biggest core" assumption on Snapdragon and MediaTek
 - [ ] Context-length auto-cap from available RAM in the probe
 - [ ] Flutter plugin (`kiln_flutter`) via `ffigen`, with a sample chat app that shows stats
 - [ ] Opt-in benchmark upload from the sample app -> real device compatibility table

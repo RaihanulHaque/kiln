@@ -2,6 +2,7 @@
 #include "../../core/internal.h"
 #include "llama.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 
 #include <atomic>
 #include <chrono>
@@ -59,9 +60,13 @@ int default_threads(const kiln_device_info& d) {
 
 class LlamaContext final : public kiln::Context {
 public:
-    LlamaContext(llama_model* model, llama_context* ctx, int n_batch)
-        : model_(model), ctx_(ctx), vocab_(llama_model_get_vocab(model)), n_batch_(n_batch) {}
-    ~LlamaContext() override { llama_free(ctx_); }
+    LlamaContext(llama_model* model, llama_context* ctx, int n_batch, ggml_threadpool_t tp)
+        : model_(model), ctx_(ctx), vocab_(llama_model_get_vocab(model)), n_batch_(n_batch), tp_(tp) {}
+    ~LlamaContext() override {
+        if (tp_) llama_detach_threadpool(ctx_);
+        llama_free(ctx_);
+        if (tp_) ggml_threadpool_free(tp_);
+    }
 
     kiln_status reset() override {
         llama_memory_clear(llama_get_memory(ctx_), true);
@@ -164,6 +169,7 @@ private:
     const llama_vocab* vocab_;
     int                n_batch_;
     int                n_past_ = 0;
+    ggml_threadpool_t  tp_ = nullptr;
     std::atomic<bool>  cancel_{false};
 };
 
@@ -171,9 +177,9 @@ private:
 
 class LlamaModel final : public kiln::Model {
 public:
-    LlamaModel(llama_model* m, std::string backend_name, kiln_backend_kind kind, int gpu_layers, int threads)
+    LlamaModel(llama_model* m, std::string backend_name, kiln_backend_kind kind, int gpu_layers, int threads, uint64_t fast_mask)
         : model_(m), vocab_(llama_model_get_vocab(m)), backend_name_(std::move(backend_name)),
-          kind_(kind), gpu_layers_(gpu_layers), threads_(threads) {}
+          kind_(kind), gpu_layers_(gpu_layers), threads_(threads), fast_mask_(fast_mask) {}
     ~LlamaModel() override { llama_model_free(model_); }
 
     kiln_status info(kiln_model_info& out) const override {
@@ -222,7 +228,20 @@ public:
         cp.abort_callback_data = holder;
         llama_context* ctx = llama_init_from_model(model_, cp);
         if (!ctx) { delete holder; return kiln::set_error(KILN_ERR_OUT_OF_MEMORY, "llama_init_from_model failed (n_ctx=" + std::to_string(cp.n_ctx) + ")"); }
-        auto* c = new LlamaContext(model_, ctx, (int)cp.n_batch);
+        // Pin worker threads to the fast cores. Without this, Android schedules ggml workers onto
+        // little cores and every barrier waits for the slowest one: measured 1 thread > 5 threads on Pixel 8.
+        ggml_threadpool_t tp = nullptr;
+        if (fast_mask_) {
+            ggml_threadpool_params tpp = ggml_threadpool_params_default(threads_);
+            int set = 0;
+            for (int i = 63; i >= 0 && set < threads_; --i)      // highest-index cores are usually the biggest
+                if (fast_mask_ & (1ull << i)) { tpp.cpumask[i] = true; ++set; }
+            tpp.strict_cpu = true;
+            tp = ggml_threadpool_new(&tpp);
+            if (tp) llama_attach_threadpool(ctx, tp, tp);
+            else kiln::log(KILN_LOG_WARN, "threadpool creation failed, running without affinity");
+        }
+        auto* c = new LlamaContext(model_, ctx, (int)cp.n_batch, tp);
         *holder = c;   // small leak of one pointer per context; acceptable for now, tracked in TODO
         out.reset(c);
         return KILN_OK;
@@ -235,6 +254,7 @@ private:
     kiln_backend_kind  kind_;
     int                gpu_layers_;
     int                threads_;
+    uint64_t           fast_mask_;
 };
 
 // ------------------------------------------------------------------ Backend
@@ -290,12 +310,15 @@ public:
             if (auto* dev = first_gpu_device()) {
                 bname = std::string("llama.cpp/") + ggml_backend_reg_name(ggml_backend_dev_backend_reg(dev));
                 for (auto& ch : bname) ch = (char)tolower(ch);
+                if (bname == "llama.cpp/mtl") bname = "llama.cpp/metal";
                 kind = KILN_BACKEND_GPU;
             }
+            int n_layer = llama_model_n_layer(m) + 1;   // +1 = output layer
+            if (mp.n_gpu_layers > n_layer) mp.n_gpu_layers = n_layer;
         }
         int threads = p.n_threads > 0 ? p.n_threads : default_threads(d);
         kiln::log(KILN_LOG_INFO, "loaded %s via %s, threads=%d, gpu_layers=%d", path, bname.c_str(), threads, mp.n_gpu_layers);
-        out.reset(new LlamaModel(m, bname, kind, mp.n_gpu_layers, threads));
+        out.reset(new LlamaModel(m, bname, kind, mp.n_gpu_layers, threads, d.cpu_fast_mask));
         return KILN_OK;
     }
 };
