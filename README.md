@@ -2,7 +2,7 @@
   <img src="docs/brand/kiln-lockup.png" width="260" alt="kiln">
 </p>
 
-<p align="center"><b>On-device LLM runtime for Android and beyond. Honest about what it runs on.</b></p>
+<p align="center"><b>On-device LLM runtime for Android, iOS and desktop. Honest about what it runs on.</b></p>
 
 <p align="center">
   <img src="docs/img/kiln_promo.gif" width="720" alt="kiln: ember ignites, a streaming reply with live tok/s, then the numbers">
@@ -12,170 +12,151 @@ Every mobile LLM library promises "runs on phones" and backs it with a device li
 maintainers happened to own. kiln is built the other way round:
 
 - **The slow path is the promise.** llama.cpp on CPU with a Q4 model is the guaranteed tier.
-  It works on any arm64 device with enough RAM, full stop.
-- **Acceleration is detected, never assumed.** GPU and NPU backends are enabled only when the
-  runtime probe finds them, and silently fall back when they fail.
-- **The API tells you what actually happened.** Which backend loaded, how much memory it took,
-  real prompt and generation tokens per second. No README can lie about that.
+  It works on any arm64 device with enough RAM.
+- **Acceleration is detected, never assumed.** Metal on Apple silicon today; NPU backends
+  later. Enabled only when the probe finds them, never silently.
+- **The API tells you what actually happened.** Which backend loaded, how much memory it
+  took, real tokens per second for every call, how much of the conversation was reused.
 
-Status: **v0.1.0.** C core, CLI harness, a test suite that passes on macOS and on a Pixel 8
-with LFM2.5, Qwen3.5, and Gemma 3, and a Flutter plugin with a working chat example app.
+## Status
+
+v0.1.0. C core frozen. Verified on real hardware on 2026-10-10:
+
+| platform | backend | what passed |
+|---|---|---|
+| Pixel 8 (Tensor G3, Android 16) | llama.cpp CPU, 5 threads pinned | 127 C checks, 10 Flutter integration tests, benchmarks |
+| iPhone 16 Pro (A18 Pro, iOS 26.6) | llama.cpp Metal | 7 of 9 Flutter integration tests; remaining 2 hit a Dart bug fixed since, not yet re-run |
+| MacBook Pro M4 Pro | llama.cpp Metal / CPU | 125 C checks, benchmarks |
+
+Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M.
+Not yet: Snapdragon or MediaTek phones, 4 GB RAM devices, x86 emulators, Linux desktop.
+See the [release checklist](docs/RELEASE.md) for what gates a pub.dev release.
+
+## Quick start
+
+### Flutter
+
+```dart
+final kiln  = await Kiln.create();
+final model = await kiln.loadModel('/path/to/model.gguf');
+print(model.info);                       // qwen35 Q4_K_M, 0.75B, via llama.cpp/cpu, thinking
+
+final ctx = await model.createContext();
+final gen = ctx.chat([KilnChatMessage.user('Why is the sky blue?')], enableThinking: true);
+await for (final p in gen.pieces) {
+  p.isReasoning ? showThinking(p.text) : showAnswer(p.text);
+}
+print(await gen.stats);                  // 36.8 tok/s, 21 of 40 prompt tokens cached, [eos]
+gen.cancel();                            // from anywhere, any time
+```
+
+Package: [flutter/kiln_flutter](flutter/kiln_flutter/README.md). Everything blocking runs on a
+background isolate. The example app in `flutter/kiln_flutter/example` is a full chat UI with
+a model downloader, thinking toggle, collapsible reasoning and per-reply stats.
 
 <p>
 <img src="docs/img/01_picker.png" width="180"> <img src="docs/img/03_reply.png" width="180"> <img src="docs/img/04_thinking_multiturn.png" width="180">
 </p>
 
-## Flutter
-
-```dart
-final kiln  = await Kiln.create();
-final model = await kiln.loadModel(path);
-final ctx   = await model.createContext();
-final gen   = ctx.chat([KilnChatMessage.user('Hi')], enableThinking: true);
-await for (final p in gen.pieces) { p.isReasoning ? showThinking(p.text) : showAnswer(p.text); }
-print(await gen.stats);
-```
-
-See [flutter/kiln_flutter](flutter/kiln_flutter/README.md). The plugin builds the C core from this
-repo via Gradle + CMake, so the Android `.so` is always in sync with the header.
-
-## Layout
-
-```
-flutter/kiln_flutter/    Flutter plugin (Dart FFI, background isolate) + example chat app
-include/kiln/kiln.h      stable C ABI - bindings are generated from this file only
-src/core/                C API impl, error plumbing, backend registry
-src/probe/               CPU / RAM / ISA feature probe (macOS, Linux, Android)
-src/backends/llamacpp/   guaranteed-tier backend (CPU + Metal/Vulkan via ggml)
-tools/kiln-cli/          test harness: load a GGUF, run a prompt, print the truth
-third_party/llama.cpp    pinned submodule
-```
-
-## Build (host, macOS or Linux)
-
-```bash
-git clone --recursive https://github.com/RaihanulHaque/kiln && cd kiln
-cmake --preset host && cmake --build --preset host -j
-./build/host/kiln-cli --probe
-./build/host/kiln-cli -m path/to/model.gguf -p "Why is the sky blue?"
-```
-
-Sample output on an M4 Pro with a 350M model, showing why the stats matter
-(CPU beats the GPU on a model this small):
-
-```
-backend:  llama.cpp/cpu (gpu layers: 0)
-model:    lfm2 Q4_K - Medium, 0.35B params, 0.23 GB resident
-prompt:   20 tok in 17 ms (1163.0 tok/s)
-generate: 18 tok in 35 ms (517.4 tok/s) [eos]
-```
-
-## Build (Android arm64)
-
-Needs an NDK under `~/Library/Android/sdk/ndk` or `ANDROID_NDK_HOME` set.
-
-```bash
-cmake --preset android-arm64 && cmake --build --preset android-arm64 -j
-scripts/android-run.sh path/to/model.gguf -n 64      # pushes to a connected device via adb
-```
-
-Measured on a Pixel 8 (Tensor G3, 1x X3 + 4x A715 + 4x A510) with the same 350M Q4_K_M model:
-
-| threads | affinity | generate tok/s |
-|---|---|---|
-| 1 | none | 61 |
-| 5 | none | 22 to 32 |
-| 5 (auto) | pinned to the 5 fast cores | 108 to 111 |
-
-Without affinity, more threads is *slower*: Android schedules ggml workers onto the A510 little
-cores and every barrier waits for the slowest one. kiln's probe groups cores by max frequency,
-drops the slowest cluster, and pins a ggml threadpool to the rest. This is the kind of thing
-that makes "runs on phones" true or false.
-
-### Results so far
-
-Generate tok/s, Q4_K_M, CPU path with pinned threads on the Pixel, Metal on the Mac.
-
-| model | params | resident | Pixel 8 (Tensor G3) | M4 Pro Metal | M4 Pro CPU |
-|---|---|---|---|---|---|
-| LFM2.5 350M | 0.35B | 0.23 GB | 108 to 111 | 173 | 517 |
-| Qwen3.5 0.8B | 0.75B | 0.52 GB | 41 to 42 | 124 | 173 |
-
-Reasoning models: Qwen3.5's own template defaults to thinking **off** by emitting an empty
-`<think>` block, but llama.cpp's built-in template matcher reduces it to plain chatml and the
-model then thinks whenever it feels like it, burning your token budget on drafts. kiln's
-`kiln_chat_options.enable_thinking` (default false) reproduces the template's intent.
-
-### Sustained performance and thermals
-
-Short benchmarks lie on phones. Over 60 seconds of continuous generation on the Pixel 8 the
-CPU cluster sits at 80 °C and the fast cores step from 2.48 GHz down to 1.69 GHz, costing
-11 to 18% of token rate before the OS even reports throttling. Full charts, raw CSVs and the
-method are in [docs/bench](docs/bench/README.md); reproduce with `scripts/bench.sh`.
-
-![](docs/bench/pixel8_Qwen3.5-0.8B-Q4_K_M.png)
-
-Targets `android-29`, `arm64-v8a`, baseline ISA `armv8.2-a+dotprod+fp16`. Vulkan is
-available as the `android-arm64-vulkan` preset and is experimental: on most phone GPUs it is
-not faster than the CPU path for small models. Measure before you ship it.
-
-## API in one screen
+### C
 
 ```c
-kiln_model* m;   kiln_model_load("model.gguf", NULL, &m);
+kiln_model*   m; kiln_model_load("model.gguf", NULL, &m);
 kiln_context* c; kiln_context_create(m, NULL, &c);
 
 bool on_piece(kiln_channel ch, const char* piece, int32_t tok, void* user) {
-    // ch is KILN_CHANNEL_ANSWER or KILN_CHANNEL_REASONING; think tags never reach you
-    fputs(piece, stdout);
-    return true;                                   // false = stop
+    fputs(piece, stdout);                // ch: KILN_CHANNEL_ANSWER or KILN_CHANNEL_REASONING
+    return true;                         // false = stop
 }
 
 kiln_chat_message history[] = {{"user", "Hi"}};
-kiln_chat_options opts = kiln_chat_options_default();   // enable_thinking = false
 kiln_gen_stats st;
-kiln_chat(c, history, 1, &opts, NULL, on_piece, NULL, &st);
-// st.cached_tokens tells you how much of the conversation was reused from the KV cache.
-// Pass the full history every turn; kiln diffs it against what the cache already holds.
-// kiln_cancel(c) from any thread stops a running call.
-
-kiln_model_info info; kiln_model_get_info(m, &info);   // backend_name, model_bytes, supports_thinking ...
+kiln_chat(c, history, 1, NULL, NULL, on_piece, NULL, &st);   // pass the full history each turn
 ```
 
-### Chat templates and reasoning
+```bash
+git clone --recursive https://github.com/RaihanulHaque/kiln && cd kiln
+cmake --preset host && cmake --build --preset host -j        # macOS / Linux
+./build/host/kiln-cli --probe
+./build/host/kiln-cli -m model.gguf --chat                   # interactive, shows cache reuse per turn
 
-kiln runs the model's own jinja template through llama.cpp's minja engine, not the
-heuristic built-in matcher. That means system prompts, role alternation rules (Gemma), and
-`enable_thinking` all behave the way the model authors intended. Verified: LFM2.5, Qwen3.5,
-Gemma 3. Anything with a sane jinja template should work; file an issue with the GGUF if not.
+cmake --preset android-arm64 && cmake --build --preset android-arm64 -j
+scripts/android-run.sh model.gguf -n 64                      # push to a phone over adb and run
+scripts/build_ios.sh                                         # xcframework for the Flutter plugin
+```
 
-Reasoning models stream on two channels. The think tags themselves are stripped and the
-`reasoning_tokens` count is in the stats, so a UI can show a collapsible "thinking" block and
-bill tokens honestly.
+## What makes it honest
 
-### Multi-turn and the KV cache
+**Threads are pinned to the fast cores.** The probe groups cores by clock, drops the slowest
+tier and binds one ggml worker to each remaining core. On a Pixel 8 that is the difference
+between 21 tok/s and 3 tok/s once the phone is warm: unpinned, Android parks workers on the
+little cores and every matmul waits for the slowest one. [Sweep](docs/bench/threads/README.md).
 
-`kiln_chat` keeps the tokens currently in the KV cache and only evaluates the suffix that
-changed. Pure transformers (Gemma, Llama) get full reuse. Hybrid and recurrent models (LFM2,
-Qwen3.5, Mamba) cannot drop a partial tail of their state, so kiln falls back to a full
-re-evaluation whenever the history diverges before the end of the cache. With Qwen3.5 that
-happens every turn because its template strips the previous think block from history. Correct,
-but slower; state checkpoints are on the roadmap.
+**Templates are the model's own.** The GGUF's jinja template runs through llama.cpp's minja
+engine, so system prompts, Gemma's role rules and Qwen's `enable_thinking` switch all behave
+as the model authors intended. No per-model code in kiln.
+
+**Reasoning is a channel.** Think tags are stripped and each piece is tagged answer or
+reasoning, with `reasoning_tokens` in the stats, so a UI can show a collapsible thinking
+block and count tokens truthfully.
+
+**Multi-turn reuses the KV cache.** Pass the whole history; kiln evaluates only the suffix
+that changed. Hybrid models (LFM2, Qwen3.5) cannot rewind partial state, so they fall back
+to a full re-read when history diverges. Correct, slower, reported in `cached_tokens`.
+
+**Stats are per call.** Prompt and generation tok/s, cache hits, why it stopped. On a phone
+the number falls as the chip heats; kiln lets the app see that instead of hiding it.
+
+## Measured
+
+Generation tok/s, 3 to 8 runs back to back of the same job. "cold" is the first run,
+"warm" the last. Details, charts and raw CSVs in [docs/bench](docs/bench/README.md).
+
+| model | quant | resident | Pixel 8 cold → warm | iPhone 16 Pro | M4 Pro Metal |
+|---|---|---|---|---|---|
+| LFM2.5 350M | Q4_K_M | 0.23 GB | 111 → 90 | runs, not benchmarked | 210 to 360 |
+| Qwen3.5 0.8B | Q4_K_M | 0.52 GB | 38 → 31 | not run | 140 to 147 |
+| Gemma 3 270M | Q8_0 | 0.29 GB | 80 → 71 | not run | 118 to 166 |
+
+Sustained generation on the Pixel 8 holds the CPU cluster at 80 °C and steps the fast cores
+from 2.48 GHz to 1.69 GHz within a minute; token rate follows. Any phone benchmark shorter
+than a minute reports the cold number.
+
+<img src="docs/bench/pixel8_Qwen3.5-0.8B-Q4_K_M.png" width="720">
+
+## Repository
+
+```
+include/kiln/kiln.h          the C API; bindings are generated from this file only
+src/core/                    C API implementation, backend registry, error plumbing
+src/probe/                   device probe: SoC, cores, clocks, RAM, ISA features
+src/backends/llamacpp/       the guaranteed-tier backend
+tools/kiln-cli, kiln-bench   test harness and resource benchmark
+tests/                       C test suite (host and device)
+flutter/kiln_flutter/        Flutter plugin, example app, integration test
+scripts/                     adb runners, benchmarks, vendoring, iOS build, brand assets
+docs/                        concepts, codebase walkthrough, architecture, glossary, benchmarks
+third_party/llama.cpp        pinned submodule
+```
 
 ## Tests
 
 ```bash
-cmake --build --preset host && ./build/host/kiln-tests models     # host
-scripts/android-test.sh                                            # device via adb
+./build/host/kiln-tests models                               # C suite on the host
+scripts/android-test.sh                                      # C suite on a phone over adb
+cd flutter/kiln_flutter/example && flutter test integration_test -d <device>
 ```
 
-Needs the three test GGUFs in `models/` (LFM2.5-350M Q4_K_M, Qwen3.5-0.8B Q4_K_M,
-Gemma-3-270M-it Q8_0). Missing models are skipped. The suite covers probe, bad files,
-tokenizer round trip, template rendering, single and multi-turn chat, callback stop,
-cross-thread cancel, reset, thinking on/off channel separation, and context overflow in both
-the prompt and generation phases.
+The C suite needs the three test GGUFs in `models/`; missing ones are skipped. The Flutter
+integration test downloads what it needs. Add `--dart-define=KILN_SPEED=true` for a
+per-model speed run through the plugin.
 
-Docs: [concepts](docs/CONCEPTS.md) (start here), [codebase walkthrough](docs/CODEBASE.md), [architecture and roadmap](docs/ARCHITECTURE.md), [glossary](docs/GLOSSARY.md), [benchmarks](docs/bench/README.md), [release checklist](docs/RELEASE.md).
+## Docs
+
+Start with [CONCEPTS](docs/CONCEPTS.md), then the [codebase walkthrough](docs/CODEBASE.md).
+Also: [architecture and roadmap](docs/ARCHITECTURE.md), [CPU notes](docs/CPU.md),
+[glossary](docs/GLOSSARY.md), [benchmarks](docs/bench/README.md),
+[release checklist](docs/RELEASE.md).
 
 ## License
 

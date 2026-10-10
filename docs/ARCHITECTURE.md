@@ -102,7 +102,9 @@ One source tree, three outputs, no copies.
 - [ ] Runtime ISA dispatch (i8mm / sve) instead of one baseline build
 - [ ] Context-length auto-cap from available RAM in the probe
 - [x] Flutter plugin (`kiln_flutter`) via `ffigen`, worker isolate, example chat app verified on Pixel 8
-- [ ] iOS: xcframework build of the core and a podspec that vendors it
+- [x] iOS: xcframework via scripts/build_ios.sh, podspec vendors it; runs on iPhone 16 Pro (Metal)
+- [x] Flutter integration test (10 cases) green on Pixel 8; vendoring script for pub.dev
+- [ ] iOS: re-run the integration suite after the chat() deadlock fix; simulator slice in CI; SoC name in the iOS probe
 - [ ] Example app: throttle setState per piece (UI rebuild costs ~15% tok/s on Pixel 8)
 - [ ] Opt-in benchmark upload from the sample app -> real device compatibility table
 - [ ] QNN backend for Snapdragon NPUs, gated on probe + model artifact availability

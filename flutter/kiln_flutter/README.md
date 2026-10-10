@@ -1,8 +1,7 @@
 # kiln_flutter
 
 Flutter bindings for [kiln](../../README.md), an on-device LLM runtime that is honest about
-what it runs on. Android first. The native core is built from this repo by the plugin's
-Gradle/CMake step, so there is one source of truth.
+what it runs on. Android and iOS.
 
 ```dart
 final kiln  = await Kiln.create();
@@ -19,25 +18,49 @@ final stats = await gen.stats;  // tok/s, cached prefix, reasoning tokens, why i
 gen.cancel();                   // from anywhere, any time
 ```
 
-Everything blocking runs on a background isolate; the UI thread only receives pieces.
-Pass the full history to `chat` every turn and kiln reuses whatever prefix the KV cache
-already holds.
+Everything blocking runs on a background isolate; the UI thread only receives pieces. You may
+await `stats` without listening to `pieces`. Pass the full history to `chat` every turn and
+kiln reuses whatever prefix the KV cache already holds.
+
+## Status
+
+| platform | native | verified |
+|---|---|---|
+| Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Pixel 8: 10 of 10 integration tests, speed run |
+| iOS 15+ | `kiln.xcframework` from `scripts/build_ios.sh`, vendored by the podspec, Metal | iPhone 16 Pro: 7 of 9 before a Dart fix, re-run pending |
+
+Desktop (macOS/Linux) works for development by passing a host build:
+`Kiln.create(libraryPath: '<repo>/build/host/libkiln.dylib')`.
 
 ## Example app
 
-`example/` is a chat UI that shows the device probe, what actually loaded, a thinking toggle
-for models that support it, collapsible reasoning, and per-reply stats. Get a model onto the
-device with the in-app downloader or
+`example/` is a chat UI: device probe, model picker with in-app download, thinking toggle for
+models that support it, collapsible reasoning, per-reply stats, stop button. Get a model
+onto an Android device with the downloader or
 
 ```bash
 adb push model.gguf /sdcard/Android/data/dev.kiln.kiln_flutter_example/files/
 ```
 
-## Desktop development
+## Integration test
 
-On macOS or Linux, build the host core (`cmake --preset host && cmake --build --preset host`)
-and pass its path: `Kiln.create(libraryPath: '<repo>/build/host/libkiln.dylib')`. iOS is not
-wired up yet.
+```bash
+cd example && flutter test integration_test -d <device-id>
+```
+
+Downloads a 229 MB model on first run. Covers probe, bad files, info, template, single turn,
+KV reuse on turn 2, cancel, busy-context guard, context overflow, and Qwen3.5 thinking
+channels (fetches Qwen, 533 MB). `--dart-define=KILN_SPEED=true` adds a 3-run speed test per
+model. iOS needs Rosetta on Apple-silicon Macs for Flutter's device bridge.
+
+## Building the native side
+
+- **Inside this repo**: nothing to do. `src/CMakeLists.txt` points at the repo root.
+- **For pub.dev**: `scripts/vendor_flutter.sh` copies the core and the pinned llama.cpp into
+  `src/core/` (35 MB) so the package builds alone; `--check` proves it by building the example
+  APK with the repo root hidden.
+- **iOS**: `scripts/build_ios.sh` produces `ios/Frameworks/kiln.xcframework` (device + simulator;
+  `--device-only` to skip the simulator slice). Rebuild it after any change to the C core.
 
 ## Regenerating bindings
 
