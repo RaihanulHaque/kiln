@@ -68,8 +68,10 @@ confuses you, it should be here. If it is not, add it.
 - **skin temperature**: the phone's outside. Rises slowly. This is what the OS throttles on.
 - **OS throttle status**: Android `ThermalStatus` 0 to 6. On the Pixel 8 status 1 begins at
   39 °C skin, 2 at 43 °C, 3 at 45 °C.
-- **run N**: the N-th repetition of the benchmark job. Run 1 is cold, run 5 is hot. See
-  [bench/README.md](bench/README.md#how-to-read-the-tables).
+- **run N**: the N-th repetition of the benchmark job. Only the benchmark repeats; the app
+  answers each prompt once. The repeats imitate a multi-message chat with heat as the only
+  variable: run 1 is cold, run 5 is hot. See
+  [bench/README.md](bench/README.md#why-the-same-prompt-runs-5-times).
 
 ## Models and files
 

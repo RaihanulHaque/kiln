@@ -9,6 +9,20 @@ mean frequency of the fast cores, CPU cluster and skin temperature (Android: `du
 thermalservice`, since `/sys/class/thermal` is not readable by apps on Android 14+), and the
 OS thermal throttle status. 2026-10-10, kiln v0.1.0, llama.cpp b11548.
 
+## Why the same prompt runs 5 times
+
+In the app, one prompt gives one answer. Nothing is repeated. The 5 repeats exist only in the
+benchmark, to imitate a long chat session under controlled conditions.
+
+A user chatting for a minute sends several messages back to back. Each one heats the phone a
+little more, so message 5 runs on a hotter SoC than message 1 and comes out slower. To measure
+that effect the bench could send 5 different prompts, but then a speed difference might come
+from the prompts differing in length or difficulty. So it sends the *same* prompt 5 times:
+now the only thing that changes between run 1 and run 5 is heat.
+
+So "how fast is kiln on a Pixel 8 with Qwen3.5 0.8B?" has two honest answers: 38 tok/s for
+the first message, about 31 tok/s a minute into the conversation. Quote both.
+
 ## How to read the tables
 
 - **run**: one repetition of the job: reset the context, feed the ~65-token prompt, generate
