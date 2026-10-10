@@ -9,6 +9,30 @@ mean frequency of the fast cores, CPU cluster and skin temperature (Android: `du
 thermalservice`, since `/sys/class/thermal` is not readable by apps on Android 14+), and the
 OS thermal throttle status. 2026-10-10, kiln v0.1.0, llama.cpp b11548.
 
+## How to read the tables
+
+- **run**: one repetition of the job: reset the context, feed the ~65-token prompt, generate
+  256 tokens. The bench does 5 runs back to back with a 0.5 s gap. Run 1 starts on a cool
+  phone. Run 5 starts after 40 to 60 s of nonstop generation, on a hot phone. Nothing else
+  changes between runs: same model, prompt, seed, code.
+- **gen tok/s run 1 → 5**: generation speed measured in run 1, then in run 5. The gap between
+  the two numbers is the cost of heat. Report the run-5 number if you want to be honest about
+  what a chat session feels like.
+- **fast-core MHz run 1 → 5**: average clock of the five fast cores while generating, run 1
+  versus run 5. The SoC lowers the clock to hold the cluster at ~80 °C. Fewer MHz, fewer
+  tok/s; the two columns move together.
+- **CPU temp**: hottest CPU cluster reported by the thermal HAL, at bench start → maximum.
+- **OS throttle**: Android's thermal status (0 none, 1 light, 2 moderate, 3 severe, up to 6).
+  Driven by *skin* temperature, not cluster temperature; on the Pixel 8 status 1 starts at
+  39 °C skin. "not within 20 s" means the run was too short to trigger it.
+- **RSS after load / peak RSS**: resident memory of the process right after the model and
+  context are created, and the maximum seen. Includes the mmap'd model file once touched.
+- **process CPU%**: CPU time consumed per wall second, summed over threads. 100 = one core
+  fully busy; 500 = five cores fully busy.
+- **load**: wall time for `kiln_model_load` + `kiln_context_create`.
+
+See [../GLOSSARY.md](../GLOSSARY.md) for the rest of the project's vocabulary.
+
 ## Pixel 8 (Tensor G3, CPU, 5 threads pinned to X3 + 4x A715)
 
 | model | load | RSS after load | peak RSS | gen tok/s run 1 → 5 | fast-core MHz run 1 → 5 | CPU temp | OS throttle |
