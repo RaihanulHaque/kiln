@@ -175,7 +175,7 @@ tokenizer round trip, template rendering, single and multi-turn chat, callback s
 cross-thread cancel, reset, thinking on/off channel separation, and context overflow in both
 the prompt and generation phases.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the roadmap.
+Docs: [concepts](docs/CONCEPTS.md) (start here), [codebase walkthrough](docs/CODEBASE.md), [architecture and roadmap](docs/ARCHITECTURE.md), [glossary](docs/GLOSSARY.md), [benchmarks](docs/bench/README.md), [release checklist](docs/RELEASE.md).
 
 ## License
 
