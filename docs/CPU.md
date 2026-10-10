@@ -122,6 +122,13 @@ promised.
 Until that exists, `KILN_CPU_MASK` and `KILN_NO_AFFINITY` let a developer override the
 policy, and `kiln-bench` plus `scripts/bench_compare.py` quantify any configuration.
 
+### Measured on the Pixel 8 (Qwen3.5 0.8B)
+
+Full results in [bench/threads](bench/threads/README.md). Short version: 5 pinned threads
+beat every alternative cold (37 tok/s) and hot (21 tok/s); fewer threads ran *hotter* (a lone
+X3 reaches 96 °C); and 5 unpinned threads on a warm phone collapsed to 2 to 5 tok/s because
+the scheduler moved them to the little cores. Pinning is the policy's load-bearing part.
+
 ## 7. How to read a thread sweep
 
 `scripts/bench_compare.py` plots, per configuration, tok/s and clock and temperature across

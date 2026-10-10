@@ -50,7 +50,7 @@
 - [x] Test suite (host + adb), 127 checks green on M4 Pro and Pixel 8
 - [x] v0.1.0: header frozen
 - [x] kiln-bench: RSS / CPU / freq / thermal over time, host + device, charts (docs/bench)
-- [ ] Thread sweep on Pixel 8 (in progress) -> docs/bench/threads
+- [x] Thread sweep on Pixel 8: 5 pinned wins; unpinned collapses to 3 tok/s warm (docs/bench/threads)
 - [ ] Generalised core-set policy: tier grouping with tolerance, no-little layouts (see docs/CPU.md §6)
 - [ ] Auto-tune: micro-benchmark candidate core sets on first run, cache per (soc, arch)
 - [ ] Validate the "highest core index = biggest core" assumption on Snapdragon and MediaTek
