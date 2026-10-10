@@ -9,7 +9,7 @@
 static void usage() {
     fprintf(stderr,
         "usage: kiln-cli --probe\n"
-        "       kiln-cli -m model.gguf [-p \"prompt\"] [-n max_tokens] [--cpu|--gpu] [-t threads] [-c n_ctx] [--raw] [-v]\n");
+        "       kiln-cli -m model.gguf [-p \"prompt\"] [-n max_tokens] [--cpu|--gpu] [-t threads] [-c n_ctx] [--raw] [--think] [-v]\n");
 }
 
 static bool on_token(const char* piece, int32_t, void*) { fputs(piece, stdout); fflush(stdout); return true; }
@@ -27,7 +27,7 @@ static void print_probe(const kiln_device_info& d) {
 int main(int argc, char** argv) {
     std::string model, prompt = "Explain in one sentence why the sky is blue.";
     int max_tokens = 128, threads = 0, n_ctx = 0;
-    bool probe = false, raw = false;
+    bool probe = false, raw = false, think = false;
     kiln_backend_kind backend = KILN_BACKEND_AUTO;
 
     for (int i = 1; i < argc; ++i) {
@@ -42,6 +42,7 @@ int main(int argc, char** argv) {
         else if (a == "--cpu")   backend = KILN_BACKEND_CPU;
         else if (a == "--gpu")   backend = KILN_BACKEND_GPU;
         else if (a == "--raw")   raw = true;
+        else if (a == "--think") think = true;
         else if (a == "-v")      kiln_set_log_level(KILN_LOG_INFO);
         else if (a == "-vv")     kiln_set_log_level(KILN_LOG_DEBUG);
         else { usage(); return 2; }
@@ -70,10 +71,12 @@ int main(int argc, char** argv) {
     std::string full = prompt;
     if (!raw) {
         kiln_chat_message msgs[] = { {"user", prompt.c_str()} };
-        int need = kiln_apply_chat_template(m, msgs, 1, true, nullptr, 0);
+        kiln_chat_options co = kiln_chat_options_default();
+        co.enable_thinking = think;
+        int need = kiln_apply_chat_template(m, msgs, 1, &co, nullptr, 0);
         if (need < 0) need = -need;
         std::vector<char> buf(need + 1);
-        int n = kiln_apply_chat_template(m, msgs, 1, true, buf.data(), (int)buf.size());
+        int n = kiln_apply_chat_template(m, msgs, 1, &co, buf.data(), (int)buf.size());
         if (n > 0) full.assign(buf.data(), n);
     }
 

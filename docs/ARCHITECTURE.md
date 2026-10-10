@@ -40,6 +40,9 @@
 - [x] Clamp reported `n_gpu_layers_used` to real layer count; map `mtl` -> `metal`
 - [x] Fast-core detection + pinned ggml threadpool on Android (Pixel 8: 61 -> 108 tok/s)
 - [ ] Validate the "highest core index = biggest core" assumption on Snapdragon and MediaTek
+- [x] `enable_thinking` chat option (Qwen3.5 verified on Pixel 8)
+- [ ] Stream reasoning and answer as separate channels in `kiln_token_cb`
+- [ ] Runtime ISA dispatch (i8mm / sve) instead of one baseline build
 - [ ] Context-length auto-cap from available RAM in the probe
 - [ ] Flutter plugin (`kiln_flutter`) via `ffigen`, with a sample chat app that shows stats
 - [ ] Opt-in benchmark upload from the sample app -> real device compatibility table

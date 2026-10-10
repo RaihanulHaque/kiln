@@ -87,10 +87,15 @@ int32_t kiln_detokenize(const kiln_model* m, const int32_t* toks, int32_t n, cha
     if (!m || !toks) return 0;
     return m->impl->detokenize(toks, n, out, cap);
 }
+kiln_chat_options kiln_chat_options_default(void) {
+    kiln_chat_options o{}; o.add_assistant_prefix = true; o.enable_thinking = false; return o;
+}
+
 int32_t kiln_apply_chat_template(const kiln_model* m, const kiln_chat_message* msgs, int32_t n,
-                                 bool add_ass, char* out, int32_t cap) {
+                                 const kiln_chat_options* opts, char* out, int32_t cap) {
     if (!m || !msgs) return 0;
-    return m->impl->apply_chat_template(msgs, n, add_ass, out, cap);
+    kiln_chat_options o = opts ? *opts : kiln_chat_options_default();
+    return m->impl->apply_chat_template(msgs, n, o, out, cap);
 }
 
 kiln_sampling_params kiln_sampling_params_default(void) {

@@ -207,13 +207,27 @@ public:
     int32_t detokenize(const int32_t* toks, int32_t n, char* out, int32_t cap) const override {
         return llama_detokenize(vocab_, toks, n, out, cap, false, false);
     }
-    int32_t apply_chat_template(const kiln_chat_message* msgs, int32_t n, bool add_ass,
+    int32_t apply_chat_template(const kiln_chat_message* msgs, int32_t n, const kiln_chat_options& o,
                                 char* out, int32_t cap) const override {
         const char* tmpl = llama_model_chat_template(model_, nullptr);
         if (!tmpl) tmpl = "chatml";
         std::vector<llama_chat_message> cm(n);
         for (int i = 0; i < n; ++i) cm[i] = { msgs[i].role, msgs[i].content };
-        return llama_chat_apply_template(tmpl, cm.data(), (size_t)n, add_ass, out, cap);
+
+        // llama.cpp's built-in matcher reduces Qwen3.x's jinja template to plain chatml and drops
+        // the enable_thinking branch. Reproduce it: an empty think block tells the model to answer directly.
+        std::string suffix;
+        if (o.add_assistant_prefix && !o.enable_thinking && strstr(tmpl, "<think>") != nullptr)
+            suffix = "<think>\n\n</think>\n\n";
+
+        int32_t need = llama_chat_apply_template(tmpl, cm.data(), (size_t)n, o.add_assistant_prefix, nullptr, 0);
+        if (need < 0) return need;
+        int32_t total = need + (int32_t)suffix.size();
+        if (!out || cap < total + 1) return -total;
+        int32_t w = llama_chat_apply_template(tmpl, cm.data(), (size_t)n, o.add_assistant_prefix, out, cap);
+        if (w < 0) return w;
+        memcpy(out + w, suffix.c_str(), suffix.size() + 1);
+        return w + (int32_t)suffix.size();
     }
 
     kiln_status create_context(const kiln_context_params& p, std::unique_ptr<kiln::Context>& out) override {

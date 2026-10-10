@@ -159,12 +159,19 @@ typedef struct kiln_chat_message {
     const char* content;
 } kiln_chat_message;
 
+typedef struct kiln_chat_options {
+    bool add_assistant_prefix;    /* append the "assistant:" turn opener (true for generation) */
+    bool enable_thinking;         /* reasoning models only (Qwen3.x etc). false = answer directly. */
+} kiln_chat_options;
+
+KILN_API kiln_chat_options kiln_chat_options_default(void);
+
 /* Applies the model's built-in chat template.
  * Returns bytes written (excluding NUL), or negative = required size. */
 KILN_API int32_t kiln_apply_chat_template(const kiln_model* m,
                                           const kiln_chat_message* msgs,
                                           int32_t n_msgs,
-                                          bool add_assistant_prefix,
+                                          const kiln_chat_options* opts,
                                           char* out, int32_t out_cap);
 
 /* ------------------------------------------------------------------ */

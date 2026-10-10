@@ -67,6 +67,20 @@ cores and every barrier waits for the slowest one. kiln's probe groups cores by 
 drops the slowest cluster, and pins a ggml threadpool to the rest. This is the kind of thing
 that makes "runs on phones" true or false.
 
+### Results so far
+
+Generate tok/s, Q4_K_M, CPU path with pinned threads on the Pixel, Metal on the Mac.
+
+| model | params | resident | Pixel 8 (Tensor G3) | M4 Pro Metal | M4 Pro CPU |
+|---|---|---|---|---|---|
+| LFM2.5 350M | 0.35B | 0.23 GB | 108 to 111 | 173 | 517 |
+| Qwen3.5 0.8B | 0.75B | 0.52 GB | 41 to 42 | 124 | 173 |
+
+Reasoning models: Qwen3.5's own template defaults to thinking **off** by emitting an empty
+`<think>` block, but llama.cpp's built-in template matcher reduces it to plain chatml and the
+model then thinks whenever it feels like it, burning your token budget on drafts. kiln's
+`kiln_chat_options.enable_thinking` (default false) reproduces the template's intent.
+
 Targets `android-29`, `arm64-v8a`, baseline ISA `armv8.2-a+dotprod+fp16`. Vulkan is
 available as the `android-arm64-vulkan` preset and is experimental: on most phone GPUs it is
 not faster than the CPU path for small models. Measure before you ship it.
@@ -79,7 +93,7 @@ kiln_context* c; kiln_context_create(m, NULL, &c);
 
 kiln_chat_message msgs[] = {{"user", "Hi"}};
 char prompt[4096];
-kiln_apply_chat_template(m, msgs, 1, true, prompt, sizeof prompt);
+kiln_apply_chat_template(m, msgs, 1, NULL, prompt, sizeof prompt);   // NULL opts = no thinking
 
 kiln_gen_stats st;
 kiln_generate(c, prompt, NULL, on_piece, NULL, &st);   // on_piece streams tokens

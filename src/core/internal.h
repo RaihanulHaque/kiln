@@ -26,7 +26,7 @@ public:
     virtual kiln_status info(kiln_model_info& out) const = 0;
     virtual int32_t tokenize(const char* text, bool add_special, int32_t* out, int32_t cap) const = 0;
     virtual int32_t detokenize(const int32_t* toks, int32_t n, char* out, int32_t cap) const = 0;
-    virtual int32_t apply_chat_template(const kiln_chat_message* msgs, int32_t n, bool add_ass,
+    virtual int32_t apply_chat_template(const kiln_chat_message* msgs, int32_t n, const kiln_chat_options& o,
                                         char* out, int32_t cap) const = 0;
     virtual kiln_status create_context(const kiln_context_params& p, std::unique_ptr<Context>& out) = 0;
 };
