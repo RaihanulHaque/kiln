@@ -10,7 +10,6 @@ from PIL import Image, ImageDraw, ImageFilter
 
 sys.path.insert(0, os.path.dirname(__file__))
 from brand import BG, INK, DIM, EMBER, EMBER_HI, ease, lerp, lockup, render_mark, ui_font, font  # noqa: E402
-from promo_audio import render as render_audio, write_wav  # noqa: E402
 
 W, H = 1200, 676
 FPS = 24
@@ -203,10 +202,6 @@ def render(beat, T):
 BEATS = [(5.2, beat_logo), (8.0, beat_terminal), (4.2, beat_end)]
 for T, beat in BEATS:
     render(beat, T)
-DURATION = sum(T for T, _ in BEATS)
-# audio crests: ember ignition, terminal opens, answer starts streaming, end card
-T_LOGO, T_TERM = BEATS[0][0], BEATS[1][0]
-AUDIO_BEATS = [(1.0, 1.0), (T_LOGO + 0.6, 0.55), (T_LOGO + 3.9, 0.45), (T_LOGO + T_TERM + 0.8, 0.9)]
 
 out = sys.argv[1] if len(sys.argv) > 1 else "kiln_promo"
 os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
@@ -214,13 +209,8 @@ mp4 = out + ".mp4"
 with tempfile.TemporaryDirectory() as td:
     for i, f in enumerate(frames):
         f.save(os.path.join(td, f"f{i:05d}.png"))
-    wav = os.path.join(td, "bed.wav")
-    write_wav(wav, render_audio(DURATION, AUDIO_BEATS))
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(FPS), "-i", os.path.join(td, "f%05d.png"),
-                    "-i", wav, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20",
-                    "-c:a", "aac", "-b:a", "128k", "-shortest", "-movflags", "+faststart", mp4], check=True)
-    # silent variant for places that reject audio tracks
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", mp4, "-an", "-c:v", "copy", out + "_silent.mp4"], check=True)
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-movflags", "+faststart", mp4], check=True)
 gif = out + ".gif"
 small = [f.resize((W // 2, H // 2), Image.LANCZOS) for f in frames[::2]]
 small[0].save(gif, save_all=True, append_images=small[1:], duration=int(1000 / (FPS / 2)), loop=0, optimize=True)
