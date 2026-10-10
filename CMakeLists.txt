@@ -68,13 +68,15 @@ set_target_properties(kiln PROPERTIES
     VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
     PUBLIC_HEADER include/kiln/kiln.h)
 
-# ---- CLI ----
+# ---- CLI + bench ----
 if(KILN_BUILD_CLI)
     add_executable(kiln-cli tools/kiln-cli/main.cpp)
+    add_executable(kiln-bench tools/kiln-bench/main.cpp)
     target_link_libraries(kiln-cli PRIVATE kiln)
+    target_link_libraries(kiln-bench PRIVATE kiln)
     if(ANDROID)
-        # let the binary find libkiln.so next to itself when pushed via adb
-        set_target_properties(kiln-cli PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+        # let the binaries find libkiln.so next to themselves when pushed via adb
+        set_target_properties(kiln-cli kiln-bench PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
     endif()
 endif()
 

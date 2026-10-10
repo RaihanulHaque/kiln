@@ -100,6 +100,15 @@ Reasoning models: Qwen3.5's own template defaults to thinking **off** by emittin
 model then thinks whenever it feels like it, burning your token budget on drafts. kiln's
 `kiln_chat_options.enable_thinking` (default false) reproduces the template's intent.
 
+### Sustained performance and thermals
+
+Short benchmarks lie on phones. Over 60 seconds of continuous generation on the Pixel 8 the
+CPU cluster sits at 80 °C and the fast cores step from 2.48 GHz down to 1.69 GHz, costing
+11 to 18% of token rate before the OS even reports throttling. Full charts, raw CSVs and the
+method are in [docs/bench](docs/bench/README.md); reproduce with `scripts/bench.sh`.
+
+![](docs/bench/pixel8_Qwen3.5-0.8B-Q4_K_M.png)
+
 Targets `android-29`, `arm64-v8a`, baseline ISA `armv8.2-a+dotprod+fp16`. Vulkan is
 available as the `android-arm64-vulkan` preset and is experimental: on most phone GPUs it is
 not faster than the CPU path for small models. Measure before you ship it.

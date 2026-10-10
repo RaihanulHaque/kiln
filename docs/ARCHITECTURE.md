@@ -49,6 +49,9 @@
 - [x] `kiln_chat` with KV prefix reuse; recurrent-model fallback; EOG cached so turns chain
 - [x] Test suite (host + adb), 127 checks green on M4 Pro and Pixel 8
 - [x] v0.1.0: header frozen
+- [x] kiln-bench: RSS / CPU / freq / thermal over time, host + device, charts (docs/bench)
+- [ ] Thermal-aware threading: test 4 vs 5 threads for *sustained* tok/s on Pixel 8
+- [ ] GPU utilisation in kiln-bench on Metal
 - [ ] KV state checkpoints (`llama_state_seq_*`) so hybrid models reuse cache across turns
 - [ ] Tool calling: common already parses it; expose `kiln_tool` + a TOOL_CALL channel
 - [ ] Runtime ISA dispatch (i8mm / sve) instead of one baseline build
