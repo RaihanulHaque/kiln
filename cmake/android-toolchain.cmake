@@ -1,6 +1,9 @@
 # Thin wrapper: finds the NDK if ANDROID_NDK_HOME is not set, then defers to the NDK toolchain.
 if(NOT DEFINED ENV{ANDROID_NDK_HOME} OR "$ENV{ANDROID_NDK_HOME}" STREQUAL "")
     file(GLOB _ndks LIST_DIRECTORIES true "$ENV{HOME}/Library/Android/sdk/ndk/*" "$ENV{HOME}/Android/Sdk/ndk/*")
+    if(NOT _ndks)
+        message(FATAL_ERROR "Android NDK not found in ~/Library/Android/sdk/ndk or ~/Android/Sdk/ndk; set ANDROID_NDK_HOME")
+    endif()
     list(SORT _ndks)
     list(REVERSE _ndks)
     list(GET _ndks 0 _ndk)

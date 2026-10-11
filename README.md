@@ -85,6 +85,9 @@ scripts/android-run.sh model.gguf -n 64                      # push to a phone o
 scripts/build_ios.sh                                         # xcframework for the Flutter plugin
 ```
 
+The Android presets and scripts find the NDK under `~/Library/Android/sdk/ndk` (macOS) or
+`~/Android/Sdk/ndk` (Linux); set `ANDROID_NDK_HOME` if it lives elsewhere.
+
 Already cloned without `--recursive`? Run `git submodule update --init --recursive` (the CMake
 configure step also tries this automatically when `third_party/llama.cpp` is empty).
 
@@ -137,7 +140,7 @@ src/backends/llamacpp/       the guaranteed-tier backend
 tools/kiln-cli, kiln-bench   test harness and resource benchmark
 tests/                       C test suite (host and device)
 flutter/kiln_flutter/        Flutter plugin, example app, integration test
-scripts/                     adb runners, benchmarks, vendoring, iOS build, brand assets
+scripts/                     model download, adb runners, benchmarks, vendoring, iOS build, brand assets
 docs/                        concepts, codebase walkthrough, architecture, glossary, benchmarks
 third_party/llama.cpp        pinned submodule
 ```
@@ -145,12 +148,13 @@ third_party/llama.cpp        pinned submodule
 ## Tests
 
 ```bash
+scripts/fetch_models.sh                                      # the three test GGUFs into models/ (~1 GB)
 ./build/host/kiln-tests models                               # C suite on the host
 scripts/android-test.sh                                      # C suite on a phone over adb
 cd flutter/kiln_flutter/example && flutter test integration_test -d <device>
 ```
 
-The C suite needs the three test GGUFs in `models/`; missing ones are skipped. The Flutter
+The C suite needs the three test GGUFs in `models/` (`scripts/fetch_models.sh`); missing ones are skipped. The Flutter
 integration test downloads what it needs. Add `--dart-define=KILN_SPEED=true` for a
 per-model speed run through the plugin.
 

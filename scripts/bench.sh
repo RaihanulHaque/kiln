@@ -5,8 +5,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUNS="${1:-5}"; N="${2:-256}"
 OUT="$ROOT/docs/bench"; mkdir -p "$OUT"
-PY="${KILN_PYTHON:-$HOME/miniconda3/envs/ML/bin/python}"
-HOST_TAG="$(sysctl -n machdep.cpu.brand_string 2>/dev/null | tr -d ' ' | tr '[:upper:]' '[:lower:]' || echo host)"
+PY="${KILN_PYTHON:-python3}"   # needs matplotlib + pandas
+CPU_NAME="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo 2>/dev/null | head -1 || true)"
+HOST_TAG="$(printf '%s' "${CPU_NAME:-host}" | tr -d ' ()' | tr '[:upper:]' '[:lower:]')"
 DEV=/data/local/tmp/kiln
 
 for m in "$ROOT"/models/*.gguf; do
