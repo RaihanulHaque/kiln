@@ -1,7 +1,7 @@
 # kiln_flutter
 
 Flutter bindings for [kiln](../../README.md), an on-device LLM runtime that is honest about
-what it runs on. Android and iOS.
+what it runs on. Android today; iOS is in progress.
 
 ```dart
 final kiln  = await Kiln.create();
@@ -80,7 +80,7 @@ The example app has a Decide screen that uses this. `chat` on a decision model a
 | platform | native | verified |
 |---|---|---|
 | Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Pixel 8: 16 of 16 integration tests, speed run |
-| iOS 15+ | `kiln.xcframework` from `scripts/build_ios.sh`, vendored by the podspec, Metal | iPhone 16 Pro: 7 of 9 before a Dart fix, re-run pending |
+| iOS 15+ | `kiln.xcframework` from `scripts/build_ios.sh`, vendored by the podspec, Metal | **In progress, not supported yet.** iPhone 16 Pro at v0.1.0: 7 of 9 integration tests; not re-run for v0.2.0 |
 
 Desktop (macOS/Linux) works for development by passing a host build:
 `Kiln.create(libraryPath: '<repo>/build/host/libkiln.dylib')`.
