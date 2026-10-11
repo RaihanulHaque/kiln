@@ -7,7 +7,7 @@ BUILD="${KILN_ANDROID_BUILD:-$ROOT/build/android-arm64}"
 MODEL="${1:?model.gguf required}"; shift || true
 DEV=/data/local/tmp/kiln
 # NDK default locations: Android Studio on macOS, then Linux
-NDK="${ANDROID_NDK_HOME:-$(ls -d "$HOME"/Library/Android/sdk/ndk/* "$HOME"/Android/Sdk/ndk/* 2>/dev/null | sort | tail -1)}"
+NDK="${ANDROID_NDK_HOME:-$(ls -d "$HOME"/Library/Android/sdk/ndk/* "$HOME"/Android/Sdk/ndk/* 2>/dev/null | sort | tail -1 || true)}"
 [ -d "$NDK" ] || { echo "Android NDK not found; set ANDROID_NDK_HOME" >&2; exit 1; }
 # prebuilt host dir is darwin-x86_64 on macOS, linux-x86_64 on Linux
 LIBCXX="$(ls "$NDK"/toolchains/llvm/prebuilt/*/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so | head -1)"
