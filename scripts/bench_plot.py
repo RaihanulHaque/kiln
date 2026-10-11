@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn kiln-bench CSVs into charts and a summary table.
 
-usage: conda run -n ML python scripts/bench_plot.py docs/bench
+usage: python3 scripts/bench_plot.py docs/bench      (needs matplotlib + pandas)
 Reads <device>_<model>.csv, writes <device>_<model>.png and summary.md next to them.
 """
 import glob
