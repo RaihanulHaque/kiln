@@ -54,7 +54,7 @@ final urgency = await ctx.decide(
 print(urgency.value);     // expected level, 0 to 2
 ```
 
-`chat` on a decision model and `decide` on a chat model both throw a `KilnException` with
+The example app has a Decide screen that uses this. `chat` on a decision model and `decide` on a chat model both throw a `KilnException` with
 `KILN_ERR_NOT_SUPPORTED`. The d1-omni weights are under Liquid AI's `lfm1.0` license, not MIT.
 
 ## Status
@@ -69,9 +69,23 @@ Desktop (macOS/Linux) works for development by passing a host build:
 
 ## Example app
 
-`example/` is a chat UI: device probe, model picker with in-app download, thinking toggle for
-models that support it, collapsible reasoning, per-reply stats, stop button. Get a model
-onto an Android device with the downloader or
+<p>
+<img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/01_picker.png" width="170" alt="Model library"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/04_thinking_multiturn.png" width="170" alt="Thinking, streamed"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/03_reply.png" width="170" alt="Chat reply with stats"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/06_decide.png" width="170" alt="Decide screen"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/05_light.png" width="170" alt="Light theme">
+</p>
+
+`example/` is a small chat app in one file, with a light and a dark theme that follow the system.
+
+- **Model library**: what the probe found on the device, the models already on it, and three
+  small models to download with one tap (progress, cancel, delete). Any other GGUF by link.
+- **Chat**: streaming replies with basic markdown, a Think switch on models that support it,
+  reasoning that folds away once the answer starts, speed and cache reuse under each reply,
+  stop, copy, and new chat.
+- **Decide**: opens instead of the chat when the loaded model is a decision model (LFM2
+  d1-omni is in the download list). Type a text and a yes / no, choice or score question, or
+  use one of three presets, and see the answer with a probability bar per option.
+
+`--dart-define=KILN_THEME=light` or `dark` forces a theme. Besides the downloader, a model can
+be copied to an Android device with
 
 ```bash
 adb push model.gguf /sdcard/Android/data/dev.kiln.kiln_flutter_example/files/
