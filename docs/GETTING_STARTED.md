@@ -10,7 +10,7 @@ What you need:
 - A real **arm64 Android phone** running Android 10 or newer. The x86 emulator is not supported.
 - Around 250 MB free on the phone for the smallest model
 
-iOS works from a clone of this repo, not yet from the dependency below; see [iOS](#ios).
+iOS is in progress and not supported yet; see [iOS](#ios).
 
 ## 1. Add the dependency
 
@@ -236,15 +236,20 @@ flutter run --release
 
 ## iOS
 
-iOS needs a native framework that is built by a script and is not stored in the repo, so the
-GitHub dependency above does not work for iOS yet. From a clone, on a Mac with Xcode:
+**In progress. Not supported yet.**
+
+kiln built and ran on an iPhone 16 Pro at v0.1.0, using the phone's GPU. For v0.2.0 it has not
+been run again, and the GitHub dependency above does not work for iOS, because iOS needs a
+native framework that is built by a script and is not stored in the repo.
+
+If you want to try it anyway, on a Mac with Xcode and a clone of this repo:
 
 ```bash
 scripts/build_ios.sh          # builds flutter/kiln_flutter/ios/Frameworks/kiln.xcframework
 ```
 
 Then depend on the plugin by path (`kiln_flutter: {path: <clone>/flutter/kiln_flutter}`).
-iOS was last run at v0.1.0 on an iPhone 16 Pro and has not been re-run for v0.2.0.
+Expect rough edges, and please open an issue with what you find.
 
 ## When something goes wrong
 

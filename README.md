@@ -2,7 +2,7 @@
   <img src="docs/brand/kiln-lockup.png" width="260" alt="kiln">
 </p>
 
-<p align="center"><b>On-device LLM runtime for Android, iOS and desktop. Honest about what it runs on.</b></p>
+<p align="center"><b>On-device LLM runtime for Android and desktop, with iOS in progress. Honest about what it runs on.</b></p>
 
 <p align="center">
   <img src="docs/img/kiln_promo.gif" width="720" alt="kiln: ember ignites, a streaming reply with live tok/s, then the numbers">
@@ -27,12 +27,15 @@ from v0.1.0 (2026-10-10), and the benchmarks were not repeated for v0.2.0:
 | platform | backend | what passed |
 |---|---|---|
 | Pixel 8 (Tensor G3, Android 16), v0.2.0 | llama.cpp CPU, 5 threads pinned | 154 C checks, 16 Flutter integration tests; benchmarks at v0.1.0 |
-| iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | 7 of 9 Flutter integration tests; remaining 2 hit a Dart bug fixed since, not yet re-run |
+| iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
 | MacBook Pro M4 Pro, v0.2.0 | llama.cpp Metal | 154 C checks; benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.2.0 | llama.cpp CPU | 154 C checks |
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
 and the decision model LFM2 d1-omni 600M (C API, and `decide` in the Flutter plugin on the Pixel 8).
+**iOS is in progress.** It built and ran on an iPhone at v0.1.0, but it has not been re-run for
+v0.2.0 and cannot be installed from the GitHub dependency yet. Use Android for now.
+
 Not yet: Snapdragon or MediaTek phones, 4 GB RAM devices, x86 emulators.
 See the [release checklist](docs/RELEASE.md) for what gates a pub.dev release.
 

@@ -68,7 +68,7 @@ re-run for the version, remove `ios` from `platforms` in `pubspec.yaml` instead 
 
 ## Known limitations to state in the release notes
 
-- Android arm64 only; no x86_64 emulator build; no iOS
+- Android arm64 only; no x86_64 emulator build; iOS is in progress and not supported yet
 - CPU backend only on Android (Vulkan preset is experimental and unmeasured)
 - Hybrid models re-read the last assistant reply each turn (the template rewrites it), and the
   whole prompt when history diverges before the previous turn's checkpoint
