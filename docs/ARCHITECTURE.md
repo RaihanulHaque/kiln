@@ -98,6 +98,10 @@ One source tree, three outputs, no copies.
 - [ ] Validate the "highest core index = biggest core" assumption on Snapdragon and MediaTek
 - [ ] GPU utilisation in kiln-bench on Metal
 - [x] KV state checkpoints (`llama_state_seq_*`) so hybrid models reuse cache across turns
+- [x] Thinking budget: `max_reasoning_tokens` closes the think block; `reasoning_truncated` in stats
+- [ ] Sampling defaults for thinking mode: the repeat penalty made the answer loop more often (13 vs 16 of 16 runs)
+- [ ] Probe: one thread per physical core (SMT), and rank cores by measured speed or `acpi_cppc/highest_perf` (docs/CPU.md §8)
+- [x] v0.2.0: ABI changed (chat options, gen stats, model info); see CHANGELOG.md
 - [x] Decision models (LFM2 d1-omni, text state): `kiln_decide`, ported from llama.cpp's server
 - [ ] Decision models: images and audio (mtmd + mmproj), other families, Flutter binding
 - [ ] Tool calling: common already parses it; expose `kiln_tool` + a TOOL_CALL channel

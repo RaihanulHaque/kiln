@@ -15,8 +15,10 @@ src/probe/probe.cpp                 device probe: SoC, cores, clocks -> fast-cor
 src/backends/llamacpp/
     llamacpp_backend.cpp            the one backend: load, template, generate, threadpool pinning
     reasoning_splitter.h            splits streamed text into answer / reasoning by think tags
-tools/kiln-cli/main.cpp             command-line harness; --chat for multi-turn, --think
+    decision.h                      decision models: render the systemone template, one pass, scores -> probabilities
+tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models)
 tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark
+tools/barrier-lab/main.cpp          standalone experiment (not in the CMake build): split work + ggml-style barrier
 tests/test_core.cpp                 the C test suite (host and device)
 flutter/kiln_flutter/
     src/CMakeLists.txt              Gradle entry: builds the core from src/core (vendored) or the repo root
@@ -29,6 +31,7 @@ flutter/kiln_flutter/
     example/lib/main.dart           the demo chat app
     example/integration_test/       on-device test suite (+ KILN_SPEED speed group)
 scripts/
+    fetch_models.sh                 download the four test GGUFs into models/
     android-run.sh, android-test.sh push the CLI / C tests to a phone over adb
     bench.sh, bench_plot.py, bench_compare.py   resource benchmarks and charts
     vendor_flutter.sh               copy the core into the plugin for pub.dev
@@ -110,6 +113,9 @@ sequenceDiagram
    stop on end-of-generation, otherwise turn the token into text and feed it to the
    `ReasoningSplitter`, which emits answer/reasoning pieces to the callback, holding back any
    partial think tag until it can decide. Decode the token into the KV cache and repeat.
+   With a thinking budget (`max_reasoning_tokens`), once that many reasoning tokens have been
+   produced the loop decodes the end tag (`\n</think>\n\n`) into the context itself, feeds it
+   to the splitter, sets `reasoning_truncated`, and carries on: the model now writes the answer.
 8. **Callback** fires on the worker isolate's thread; it posts `[channel, text]` to the Dart
    port. Returning `false` from the callback stops generation.
 9. **End**: the EOG token is decoded too (so next turn's history is a pure prefix), stats are
@@ -118,6 +124,27 @@ sequenceDiagram
 
 `kiln_cancel` can be called from any thread at any point in 6 or 7; it flips an atomic that
 both the abort callback and the loop check.
+
+## One `kiln_decide` call
+
+A decision model shares none of the loop above: there is no sampling and no KV reuse.
+
+1. **C API** (`kiln.cpp`) validates the question and forwards to `Context::decide`.
+2. **`DecisionHead::decide`** (`decision.h`) builds the option list (noul is always
+   `[false, true]`; score levels are numbered from 0), then renders the model's `systemone`
+   template with the state, question and options. The template marks its pieces with
+   `<<d1omni:...>>` separators.
+3. The pieces are tokenized one by one: the question and each option are cut to a token budget,
+   the state gets whatever room is left. Each option ends in the vocab's mask token.
+4. **One `llama_decode`** over the whole prompt. The context was created in embeddings mode
+   with `n_batch = n_ubatch = n_ctx`, because the model is not causal and must see the prompt
+   in a single batch (`DecisionHead::configure`).
+5. The score of option *i* is read from `llama_get_embeddings_ith` at its mask token, in the
+   column for the question type (choice, score, noul). A softmax with the calibration
+   temperature from the GGUF metadata turns scores into probabilities.
+
+`kiln_chat` on a decision model, and `kiln_decide` on a chat model, return
+`KILN_ERR_NOT_SUPPORTED`.
 
 ## The generation loop as a state machine
 
@@ -171,6 +198,9 @@ calling thread; the Dart layer turns that into an async stream.
 | change thread/pin policy | `probe.cpp` (which cores are "fast") and `create_context` in the backend |
 | support a new engine | implement `Backend/Model/Context` from `internal.h`, register in `registry.cpp` |
 | change how thinking is detected | `LlamaModel` constructor (empirical on/off render) |
+| change the thinking budget behaviour | the end of the sampling loop in `LlamaContext::generate` |
+| change cache checkpoints for hybrid models | `save_checkpoint` / `restore_checkpoint` in `LlamaContext`; `stable_prefix` in `render_chat` |
+| support another decision model family | `decision.h`; port its path from llama.cpp `tools/server/server-decision.cpp` and compare with `llama-server` |
 | change sampling defaults | `kiln_sampling_params_default` in `kiln.cpp` |
 | change the example app | `flutter/kiln_flutter/example/lib/main.dart` |
 
@@ -178,7 +208,7 @@ calling thread; the Dart layer turns that into an async stream.
 
 | preset | output | used by |
 |---|---|---|
-| `host` | `build/host/libkiln.dylib`, `kiln-cli`, `kiln-tests`, `kiln-bench` | dev loop, host tests, desktop Flutter |
+| `host` | `build/host/libkiln.dylib` (`.so` on Linux), `kiln-cli`, `kiln-tests`, `kiln-bench` | dev loop, host tests, desktop Flutter |
 | `android-arm64` | `build/android-arm64/libkiln.so` + the same tools | adb scripts, benchmarks |
 | Gradle via plugin | `libkiln.so` inside the APK | the Flutter app on Android |
 | `scripts/build_ios.sh` | `kiln.xcframework` (static, Metal) | the Flutter app on iOS via CocoaPods |
