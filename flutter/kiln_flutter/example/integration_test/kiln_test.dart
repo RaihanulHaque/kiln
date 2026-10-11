@@ -21,13 +21,42 @@ const qwen = 'Qwen3.5-0.8B-Q4_K_M.gguf';
 // any device (229 MB, once). Qwen is optional: push it if you want the thinking test.
 const lfmUrl = 'https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/main/LFM2.5-350M-Q4_K_M.gguf';
 const gemma = 'gemma-3-270m-it-Q8_0.gguf';
-// Speed group: these are fetched on demand (533 MB + 292 MB) only when KILN_SPEED=1.
+// Speed group: these are fetched on demand (533 MB + 292 MB) only when KILN_SPEED=true.
 const speedModels = {
   lfm: lfmUrl,
   qwen: 'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf',
   gemma: 'https://huggingface.co/unsloth/gemma-3-270m-it-GGUF/resolve/main/gemma-3-270m-it-Q8_0.gguf',
 };
 const bool speed = bool.fromEnvironment('KILN_SPEED');
+
+/// Download to a .part file and rename when complete, so a dropped connection never leaves a
+/// truncated file that a later run would take for a model. Three attempts.
+Future<File> download(Directory dir, String name, String url) async {
+  final f = File('${dir.path}/$name');
+  if (f.existsSync()) return f;
+  final part = File('${f.path}.part');
+  for (var attempt = 1; ; attempt++) {
+    // ignore: avoid_print
+    print('downloading $name (attempt $attempt) ...');
+    final client = http.Client();
+    try {
+      final resp = await client.send(http.Request('GET', Uri.parse(url)));
+      if (resp.statusCode != 200) throw HttpException('HTTP ${resp.statusCode}');
+      await resp.stream.pipe(part.openWrite());
+      final want = resp.contentLength;
+      if (want != null && part.lengthSync() != want) throw const HttpException('short download');
+      part.renameSync(f.path);
+      // ignore: avoid_print
+      print('downloaded ${f.lengthSync() ~/ 1000000} MB');
+      return f;
+    } catch (e) {
+      if (part.existsSync()) part.deleteSync();
+      if (attempt == 3) rethrow;
+    } finally {
+      client.close();
+    }
+  }
+}
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -40,29 +69,11 @@ void main() {
     dir = Platform.isAndroid
         ? ((await getExternalStorageDirectory()) ?? await getApplicationDocumentsDirectory())
         : await getApplicationDocumentsDirectory();
-    final f = File('${dir.path}/$lfm');
-    if (!f.existsSync()) {
-      // ignore: avoid_print
-      print('downloading $lfm ...');
-      final resp = await http.Client().send(http.Request('GET', Uri.parse(lfmUrl)));
-      final sink = f.openWrite();
-      await resp.stream.pipe(sink);
-      // ignore: avoid_print
-      print('downloaded ${f.lengthSync() ~/ 1000000} MB');
-    }
+    await download(dir, lfm, lfmUrl);
   });
   tearDownAll(() => kiln.dispose());
 
-  Future<File> fetch(String name, String url) async {
-    final f = File('${dir.path}/$name');
-    if (!f.existsSync()) {
-      // ignore: avoid_print
-      print('downloading $name ...');
-      final resp = await http.Client().send(http.Request('GET', Uri.parse(url)));
-      await resp.stream.pipe(f.openWrite());
-    }
-    return f;
-  }
+  Future<File> fetch(String name, String url) => download(dir, name, url);
 
   File? model(String name) {
     final f = File('${dir.path}/$name');
@@ -205,7 +216,7 @@ void main() {
     for (final entry in speedModels.entries) {
       test(entry.key, () async {
         if (!speed) {
-          markTestSkipped('run with --dart-define=KILN_SPEED=1');
+          markTestSkipped('run with --dart-define=KILN_SPEED=true');
           return;
         }
         final f = await fetch(entry.key, entry.value);

@@ -50,21 +50,25 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 - **Decision models (`kiln_decide`) are a port of llama.cpp's server code**, which the library
   does not contain. To check a change, build `llama-server` from the submodule and compare
   `/v1/systemone` one question per request; the probabilities should match to six decimals.
-- **`kiln_bindings_generated.dart` was last edited by hand** to match `kiln.h`. Re-run ffigen
-  when Dart is available, and diff the result.
+- **`kiln_bindings_generated.dart` is generated.** After changing `kiln.h`, run
+  `dart run ffigen --config ffigen.yaml` in `flutter/kiln_flutter`; do not edit it by hand.
+- **`flutter/kiln_flutter/src/core` wins over the repo source** when it exists (it is the
+  vendored copy made by `scripts/vendor_flutter.sh`, git-ignored). Delete it after a publish
+  check, or the plugin builds an old core against new bindings.
+- **A shell glob that matches nothing makes `ls` fail**, and with `set -o pipefail` that ends
+  the script without a message. This broke the Android scripts on macOS once.
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
 
 ## Not yet verified (as of 0.2.0)
 
-Everything added in 0.2.0 was run on Linux x86 (Ryzen 5 8500G, CPU) only. Remove items from
-this list as they are checked.
+Checked on 2026-10-11: `kiln-tests models` gives 154 passed on Linux x86 (Ryzen 5 8500G),
+macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes on the Pixel 8
+(13 tests) with ffigen-generated bindings. Still open:
 
-- macOS and Metal: `kiln-tests models` (cache checkpoints, thinking budget, `kiln_decide`).
-- Android (Pixel 8): `scripts/android-test.sh`, and the benchmarks if the core changed.
-- Flutter: regenerate bindings with ffigen, then the integration test on a device. The
-  `maxReasoningTokens` / `reasoningTruncated` changes have never been compiled.
 - iOS: the items already listed in `docs/RELEASE.md`.
-- `v0.2.0` is not tagged; tag after the checks above.
+- Benchmarks on 0.2.0. Run them on a cool phone: after the test suites the Pixel 8 capped its
+  fast cores at 1.07 of 2.37 GHz and LFM2.5 ran at 55 tok/s instead of about 105.
+- `v0.2.0` is not tagged.
 
 Known gaps: decision models take a text state only (no images or audio, no Flutter binding,
 only the lfm2-d1-omni family); the probe counts hyperthreads as cores and trusts max frequency

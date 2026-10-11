@@ -17,6 +17,21 @@ built against 0.1.0 headers must be rebuilt.
 - `kiln-cli`: `--think-budget`, and `--state` / `--ask` / `-o` for decision models.
 - `tools/barrier-lab`: a small experiment showing how ggml's per-op barrier behaves.
 
+Verified with `kiln-tests` (154 checks) on Linux x86 (Ryzen 5 8500G, CPU), macOS (M4 Pro,
+Metal) and Android (Pixel 8, CPU). The Flutter plugin was run on the Pixel 8: 13 integration
+tests, including `maxReasoningTokens` / `reasoningTruncated`; its bindings are regenerated
+with ffigen. Not re-run on iOS. Benchmarks were not repeated; a back-to-back run of the 0.1.0
+and 0.2.0 builds on a warm Pixel 8 gave the same speed (50 to 57 tok/s, LFM2.5 350M).
+
+Also fixed after the version bump: `scripts/android-test.sh` and `android-run.sh` exited
+silently on macOS (the Linux NDK path did not exist, and `pipefail` ended the script); the
+Flutter integration test downloads models to a `.part` file with retries.
+
+llama.cpp submodule is initialised at configure time if it is missing; Android
+  scripts find the NDK on Linux; `scripts/fetch_models.sh` downloads the test models.
+- `kiln-cli`: `--think-budget`, and `--state` / `--ask` / `-o` for decision models.
+- `tools/barrier-lab`: a small experiment showing how ggml's per-op barrier behaves.
+
 Verified on Linux x86 (Ryzen 5 8500G, CPU) only: 154 checks in `kiln-tests`. Not re-run on
 Android, iOS or macOS. The Flutter changes (`maxReasoningTokens`, `reasoningTruncated`) are
 untested and the generated bindings were edited by hand.

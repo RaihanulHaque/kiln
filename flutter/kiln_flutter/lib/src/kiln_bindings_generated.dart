@@ -430,6 +430,47 @@ class KilnBindings {
   late final _kiln_cancel = _kiln_cancelPtr
       .asFunction<void Function(ffi.Pointer<kiln_context>)>();
 
+  /// state: the text the question is about; may be NULL. probs receives one probability per
+  /// option (2 for noul) and must hold at least that many. Blocking.
+  /// Returns KILN_ERR_NOT_SUPPORTED on a model that is not a decision model.
+  kiln_status kiln_decide(
+    ffi.Pointer<kiln_context> c,
+    ffi.Pointer<ffi.Char> state,
+    ffi.Pointer<kiln_decision_question> question,
+    ffi.Pointer<ffi.Float> probs,
+    int probs_cap,
+    ffi.Pointer<kiln_decision_answer> answer,
+  ) {
+    return kiln_status.fromValue(
+      _kiln_decide(c, state, question, probs, probs_cap, answer),
+    );
+  }
+
+  late final _kiln_decidePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<kiln_context>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<kiln_decision_question>,
+            ffi.Pointer<ffi.Float>,
+            ffi.Int32,
+            ffi.Pointer<kiln_decision_answer>,
+          )
+        >
+      >('kiln_decide');
+  late final _kiln_decide = _kiln_decidePtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<kiln_context>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<kiln_decision_question>,
+          ffi.Pointer<ffi.Float>,
+          int,
+          ffi.Pointer<kiln_decision_answer>,
+        )
+      >();
+
   void kiln_set_log_callback(kiln_log_cb cb, ffi.Pointer<ffi.Void> user) {
     return _kiln_set_log_callback(cb, user);
   }
@@ -642,6 +683,10 @@ final class kiln_model_info extends ffi.Struct {
   /// chat template has a reasoning switch (Qwen3.x, Gemma 4, ...)
   @ffi.Bool()
   external bool supports_thinking;
+
+  /// answers typed questions with kiln_decide; cannot generate text
+  @ffi.Bool()
+  external bool is_decision_model;
 }
 
 final class kiln_context extends ffi.Opaque {}
@@ -787,6 +832,81 @@ final class kiln_gen_stats extends ffi.Struct {
   external bool reasoning_truncated;
 }
 
+/// A decision model (kiln_model_info.is_decision_model) does not write text. It reads a
+/// state and one typed question and returns a probability per option, in one forward pass.
+/// Supported today: LFM2 d1-omni, text state only (no images or audio).
+enum kiln_question_type {
+  /// yes / no
+  KILN_QUESTION_NOUL(0),
+
+  /// pick one of the options
+  KILN_QUESTION_CHOICE(1),
+
+  /// rate on a scale; options are the levels, lowest first (2 to 10)
+  KILN_QUESTION_SCORE(2);
+
+  final int value;
+  const kiln_question_type(this.value);
+
+  static kiln_question_type fromValue(int value) => switch (value) {
+    0 => KILN_QUESTION_NOUL,
+    1 => KILN_QUESTION_CHOICE,
+    2 => KILN_QUESTION_SCORE,
+    _ => throw ArgumentError('Unknown value for kiln_question_type: $value'),
+  };
+}
+
+final class kiln_decision_option extends ffi.Struct {
+  /// choice: the label returned. noul: "true" or "false" (also "yes" / "no"). score: ignored
+  external ffi.Pointer<ffi.Char> key;
+
+  /// what the option means; may be NULL
+  external ffi.Pointer<ffi.Char> description;
+}
+
+final class kiln_decision_question extends ffi.Struct {
+  /// short name of the question, e.g. "wants_refund"
+  external ffi.Pointer<ffi.Char> id;
+
+  @ffi.UnsignedInt()
+  external int typeAsInt;
+
+  kiln_question_type get type => kiln_question_type.fromValue(typeAsInt);
+
+  /// the question itself
+  external ffi.Pointer<ffi.Char> instructions;
+
+  /// noul: optional, only to describe what yes and no mean
+  external ffi.Pointer<kiln_decision_option> options;
+
+  @ffi.Int32()
+  external int n_options;
+}
+
+final class kiln_decision_answer extends ffi.Struct {
+  /// probabilities written to probs. noul: 2, [0] = no, [1] = yes
+  @ffi.Int32()
+  external int n_probs;
+
+  /// index of the most probable entry
+  @ffi.Int32()
+  external int best;
+
+  /// noul: P(yes). score: expected level, 0 .. n-1. choice: P(best)
+  @ffi.Float()
+  external double value;
+
+  /// 0 .. 1 for choice and score; for noul how far P(yes) is from 0.5
+  @ffi.Float()
+  external double confidence;
+
+  @ffi.Int32()
+  external int prompt_tokens;
+
+  @ffi.Double()
+  external double ms;
+}
+
 /// ------------------------------------------------------------------ */
 /// /* Logging                                                             */
 /// /* ------------------------------------------------------------------
@@ -824,6 +944,6 @@ typedef kiln_log_cb = ffi.Pointer<ffi.NativeFunction<kiln_log_cbFunction>>;
 
 const int KILN_VERSION_MAJOR = 0;
 
-const int KILN_VERSION_MINOR = 1;
+const int KILN_VERSION_MINOR = 2;
 
 const int KILN_VERSION_PATCH = 0;
