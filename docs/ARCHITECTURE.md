@@ -103,7 +103,7 @@ One source tree, three outputs, no copies.
 - [ ] Probe: one thread per physical core (SMT), and rank cores by measured speed or `acpi_cppc/highest_perf` (docs/CPU.md §8)
 - [x] v0.2.0: ABI changed (chat options, gen stats, model info); see CHANGELOG.md
 - [x] Decision models (LFM2 d1-omni, text state): `kiln_decide`, ported from llama.cpp's server
-- [ ] Decision models: images and audio (mtmd + mmproj), other families, Flutter binding
+- [ ] Decision models: images and audio (mtmd + mmproj), other families
 - [ ] Tool calling: common already parses it; expose `kiln_tool` + a TOOL_CALL channel
 - [ ] Runtime ISA dispatch (i8mm / sve) instead of one baseline build
 - [ ] Context-length auto-cap from available RAM in the probe

@@ -63,13 +63,13 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 
 Checked on 2026-10-11: `kiln-tests models` gives 154 passed on Linux x86 (Ryzen 5 8500G),
 macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes on the Pixel 8
-(13 tests) with ffigen-generated bindings. Still open:
+(16 tests, including `decide`) with ffigen-generated bindings. Still open:
 
 - iOS: the items already listed in `docs/RELEASE.md`.
 - Benchmarks on 0.2.0. Run them on a cool phone: after the test suites the Pixel 8 capped its
   fast cores at 1.07 of 2.37 GHz and LFM2.5 ran at 55 tok/s instead of about 105.
 - `v0.2.0` is not tagged.
 
-Known gaps: decision models take a text state only (no images or audio, no Flutter binding,
+Known gaps: decision models take a text state only (no images or audio,
 only the lfm2-d1-omni family); the probe counts hyperthreads as cores and trusts max frequency
 to tell cores apart (`docs/CPU.md` §8).

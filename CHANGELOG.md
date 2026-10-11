@@ -10,7 +10,7 @@ built against 0.1.0 headers must be rebuilt.
 - Thinking budget: `kiln_chat_options.max_reasoning_tokens` closes the think block after N
   reasoning tokens so the model answers; `kiln_gen_stats.reasoning_truncated` reports it.
 - Decision models: `kiln_decide` and `kiln_model_info.is_decision_model`. LFM2 d1-omni with a
-  text state; no images or audio, not in the Flutter plugin.
+  text state; no images or audio. In the Flutter plugin as `KilnContext.decide`.
 - Fixed a crash when `KILN_CPU_MASK` had fewer CPUs than the default thread count (OpenMP builds).
 - Build: the llama.cpp submodule is initialised at configure time if it is missing; Android
   scripts find the NDK on Linux; `scripts/fetch_models.sh` downloads the test models.
@@ -18,8 +18,8 @@ built against 0.1.0 headers must be rebuilt.
 - `tools/barrier-lab`: a small experiment showing how ggml's per-op barrier behaves.
 
 Verified with `kiln-tests` (154 checks) on Linux x86 (Ryzen 5 8500G, CPU), macOS (M4 Pro,
-Metal) and Android (Pixel 8, CPU). The Flutter plugin was run on the Pixel 8: 13 integration
-tests, including `maxReasoningTokens` / `reasoningTruncated`; its bindings are regenerated
+Metal) and Android (Pixel 8, CPU). The Flutter plugin was run on the Pixel 8: 16 integration
+tests, including `maxReasoningTokens` / `reasoningTruncated` and `decide`; its bindings are regenerated
 with ffigen. Not re-run on iOS. Benchmarks were not repeated; a back-to-back run of the 0.1.0
 and 0.2.0 builds on a warm Pixel 8 gave the same speed (50 to 57 tok/s, LFM2.5 350M).
 

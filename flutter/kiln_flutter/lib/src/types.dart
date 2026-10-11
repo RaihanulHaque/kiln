@@ -101,6 +101,7 @@ class KilnModelInfo {
     required this.gpuLayersUsed,
     required this.modelBytes,
     required this.supportsThinking,
+    this.isDecisionModel = false,
   });
 
   factory KilnModelInfo.fromNative(b.kiln_model_info i) => KilnModelInfo(
@@ -114,6 +115,7 @@ class KilnModelInfo {
         gpuLayersUsed: i.n_gpu_layers_used,
         modelBytes: i.model_bytes,
         supportsThinking: i.supports_thinking,
+        isDecisionModel: i.is_decision_model,
       );
 
   final KilnBackend backend;
@@ -121,22 +123,27 @@ class KilnModelInfo {
   final int nParams, nCtxTrain, nVocab, gpuLayersUsed, modelBytes;
   final bool supportsThinking;
 
+  /// The model answers typed questions with [KilnContext.decide] and cannot generate text.
+  final bool isDecisionModel;
+
   Map<String, Object> toMap() => {
         'backend': backend.index, 'backendName': backendName, 'arch': arch, 'quant': quant,
         'nParams': nParams, 'nCtxTrain': nCtxTrain, 'nVocab': nVocab,
         'gpuLayersUsed': gpuLayersUsed, 'modelBytes': modelBytes, 'supportsThinking': supportsThinking,
+        'isDecisionModel': isDecisionModel,
       };
   factory KilnModelInfo.fromMap(Map m) => KilnModelInfo(
         backend: KilnBackend.values[m['backend']], backendName: m['backendName'], arch: m['arch'],
         quant: m['quant'], nParams: m['nParams'], nCtxTrain: m['nCtxTrain'], nVocab: m['nVocab'],
         gpuLayersUsed: m['gpuLayersUsed'], modelBytes: m['modelBytes'], supportsThinking: m['supportsThinking'],
+        isDecisionModel: m['isDecisionModel'] ?? false,
       );
 
   @override
   String toString() =>
       '$arch $quant, ${(nParams / 1e9).toStringAsFixed(2)}B params, '
       '${(modelBytes / 1e9).toStringAsFixed(2)} GB, via $backendName'
-      '${supportsThinking ? ', thinking' : ''}';
+      '${supportsThinking ? ', thinking' : ''}${isDecisionModel ? ', decision model' : ''}';
 }
 
 class KilnModelParams {
@@ -254,6 +261,119 @@ class KilnGenStats {
       'gen $generatedTokens tok ($reasoningTokens reasoning${reasoningTruncated ? ', cut at budget' : ''}) ${genMs.round()} ms, '
       '${genTps.toStringAsFixed(1)} tok/s'
       '${stoppedByEos ? ' [eos]' : stoppedByUser ? ' [stopped]' : ''}';
+}
+
+enum KilnQuestionType { yesNo, choice, score }
+
+/// One option of a [KilnQuestion].
+class KilnOption {
+  const KilnOption(this.key, [this.description]);
+
+  /// The label of the option, e.g. "billing".
+  final String key;
+
+  /// What the option means. Helps the model; may be left out.
+  final String? description;
+
+  Map<String, Object?> toMap() => {'key': key, 'description': description};
+  factory KilnOption.fromMap(Map m) => KilnOption(m['key'], m['description']);
+}
+
+/// A typed question for a decision model. See [KilnContext.decide].
+class KilnQuestion {
+  const KilnQuestion._(this.type, this.instructions, this.id, this.options);
+
+  /// A yes / no question. [yes] and [no] optionally describe what each answer means.
+  factory KilnQuestion.yesNo(String instructions, {String id = 'question', String? yes, String? no}) =>
+      KilnQuestion._(KilnQuestionType.yesNo, instructions, id, [
+        if (yes != null) KilnOption('true', yes),
+        if (no != null) KilnOption('false', no),
+      ]);
+
+  /// Pick one of [options] (at least two).
+  const KilnQuestion.choice(String instructions, List<KilnOption> options, {String id = 'question'})
+      : this._(KilnQuestionType.choice, instructions, id, options);
+
+  /// Rate on a scale. [levels] describe each level, lowest first (2 to 10 of them).
+  factory KilnQuestion.score(String instructions, List<String> levels, {String id = 'question'}) =>
+      KilnQuestion._(KilnQuestionType.score, instructions, id,
+          [for (var i = 0; i < levels.length; i++) KilnOption('$i', levels[i])]);
+
+  final KilnQuestionType type;
+
+  /// The question itself.
+  final String instructions;
+
+  /// A short name for the question, e.g. "wants_refund".
+  final String id;
+  final List<KilnOption> options;
+
+  Map<String, Object?> toMap() => {
+        'type': type.index, 'instructions': instructions, 'id': id,
+        'options': [for (final o in options) o.toMap()],
+      };
+  factory KilnQuestion.fromMap(Map m) => KilnQuestion._(KilnQuestionType.values[m['type']],
+      m['instructions'], m['id'], [for (final o in m['options'] as List) KilnOption.fromMap(o as Map)]);
+}
+
+/// The answer of a decision model to one [KilnQuestion].
+class KilnDecision {
+  KilnDecision({
+    required this.type,
+    required this.probabilities,
+    required this.keys,
+    required this.best,
+    required this.value,
+    required this.confidence,
+    required this.promptTokens,
+    required this.ms,
+  });
+
+  final KilnQuestionType type;
+
+  /// One probability per option, in the order the options were given; they sum to 1.
+  /// For a yes / no question there are two: `[0]` is no, `[1]` is yes.
+  final List<double> probabilities;
+
+  /// The label of each entry of [probabilities]. Yes / no: `['no', 'yes']`.
+  /// Score: the level descriptions.
+  final List<String> keys;
+
+  /// Index of the most probable entry.
+  final int best;
+
+  /// Label of the most probable entry.
+  String get bestKey => keys[best];
+
+  /// Yes / no: the probability of yes. Score: the expected level, from 0 to levels - 1.
+  /// Choice: the probability of the best option.
+  final double value;
+
+  /// 0 to 1 for choice and score. For yes / no, how far the probability of yes is from 0.5.
+  final double confidence;
+
+  final int promptTokens;
+  final double ms;
+
+  /// Yes / no questions only: the model says yes.
+  bool get yes => type == KilnQuestionType.yesNo && best == 1;
+
+  Map<String, Object> toMap() => {
+        'type': type.index, 'probabilities': probabilities, 'keys': keys, 'best': best,
+        'value': value, 'confidence': confidence, 'promptTokens': promptTokens, 'ms': ms,
+      };
+  factory KilnDecision.fromMap(Map m) => KilnDecision(
+        type: KilnQuestionType.values[m['type']],
+        probabilities: (m['probabilities'] as List).cast<double>(),
+        keys: (m['keys'] as List).cast<String>(),
+        best: m['best'], value: m['value'], confidence: m['confidence'],
+        promptTokens: m['promptTokens'], ms: m['ms'],
+      );
+
+  @override
+  String toString() =>
+      '$bestKey (${(probabilities[best] * 100).toStringAsFixed(1)}%), '
+      '$promptTokens tok, ${ms.round()} ms';
 }
 
 /// One streamed fragment of model output.
