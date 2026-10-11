@@ -3,7 +3,10 @@
 # builds standalone (pub.dev users do not have the monorepo). Prunes everything the build
 # does not need to keep the package small. Idempotent. Run before `dart pub publish`.
 #
-# usage: scripts/vendor_flutter.sh [--check]     (--check: build an APK from the vendored tree)
+# usage: scripts/vendor_flutter.sh [--check]     (--check: build an APK from the files pub would publish)
+#
+# src/core is git-ignored. Delete it when you are done (rm -rf flutter/kiln_flutter/src/core):
+# while it exists, the plugin builds it instead of the repo's own sources.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PKG="$ROOT/flutter/kiln_flutter"
@@ -41,11 +44,19 @@ SIZE="$(du -sh "$DST" | cut -f1)"
 echo "vendored core -> $DST ($SIZE), llama.cpp $LLAMA_TAG"
 
 if [[ "${1:-}" == "--check" ]]; then
-  # Build the example APK with the monorepo root hidden, so only the vendored core can be used.
-  echo "building example APK from the vendored core..."
+  # Build the example APK from exactly the files pub would upload, in a folder outside the repo.
+  # Copying the package folder is not enough: pub drops whatever .gitignore / .pubignore exclude,
+  # and a build can pass from the folder while the published package is missing the core.
+  echo "building example APK from the files pub would publish..."
   TMP="$(mktemp -d)"
-  cp -R "$PKG" "$TMP/kiln_flutter"
-  ( cd "$TMP/kiln_flutter/example" && flutter pub get >/dev/null && flutter build apk --release 2>&1 | grep -E "✓|error|Error" )
+  mkdir -p "$TMP/kiln_flutter"
+  "$ROOT/scripts/pub_files.py" "$PKG" > "$TMP/files.txt"
+  N="$(wc -l < "$TMP/files.txt" | tr -d ' ')"
+  grep -q '^src/core/CMakeLists.txt$' "$TMP/files.txt" || { echo "error: src/core is not in pub's file set ($N files); check .pubignore and .gitignore" >&2; exit 1; }
+  grep -q '^src/core/third_party/llama.cpp/src/llama.cpp$' "$TMP/files.txt" || { echo "error: llama.cpp sources are not in pub's file set" >&2; exit 1; }
+  ( cd "$PKG" && rsync -a --files-from="$TMP/files.txt" . "$TMP/kiln_flutter/" )
+  echo "pub file set: $N files, $(du -sh "$TMP/kiln_flutter" | cut -f1)"
+  ( cd "$TMP/kiln_flutter/example" && flutter pub get >/dev/null && flutter build apk --release --target-platform android-arm64 2>&1 | grep -E "✓|error|Error|FAILURE" )
   ls -la "$TMP/kiln_flutter/example/build/app/outputs/flutter-apk/app-release.apk"
   rm -rf "$TMP"
 fi

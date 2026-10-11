@@ -40,6 +40,19 @@ See the [release checklist](docs/RELEASE.md) for what gates a pub.dev release.
 
 ### Flutter
 
+Add it to `pubspec.yaml` straight from GitHub (nothing to clone), set `minSdk = 29`, and run on
+an arm64 Android phone. **[Getting started](docs/GETTING_STARTED.md)** walks through every
+step, from an empty project to a first chat and a first decision.
+
+```yaml
+dependencies:
+  kiln_flutter:
+    git:
+      url: https://github.com/RaihanulHaque/kiln.git
+      path: flutter/kiln_flutter
+      ref: v0.2.0
+```
+
 ```dart
 final kiln  = await Kiln.create();
 final model = await kiln.loadModel('/path/to/model.gguf');

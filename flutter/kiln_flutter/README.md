@@ -19,6 +19,24 @@ final stats = await gen.stats;  // tok/s, cached prefix, reasoning tokens, why i
 gen.cancel();                   // from anywhere, any time
 ```
 
+## Install
+
+Not on pub.dev yet. Add the tagged release from GitHub; nothing to clone:
+
+```yaml
+dependencies:
+  kiln_flutter:
+    git:
+      url: https://github.com/RaihanulHaque/kiln.git
+      path: flutter/kiln_flutter
+      ref: v0.2.0
+```
+
+Set `minSdk = 29` in `android/app/build.gradle.kts`, put a GGUF model on the device, and run
+on a real arm64 phone. The
+[getting-started guide](https://github.com/RaihanulHaque/kiln/blob/main/docs/GETTING_STARTED.md)
+walks through every step, from an empty project to a first chat and a first decision.
+
 Everything blocking runs on a background isolate; the UI thread only receives pieces. You may
 await `stats` without listening to `pieces`. Pass the full history to `chat` every turn and
 kiln reuses whatever prefix the KV cache already holds.

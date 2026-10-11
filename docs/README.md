@@ -1,6 +1,7 @@
 # kiln docs
 
-- [CONCEPTS.md](CONCEPTS.md): start here. Cores vs threads, pinning, the probe, heat, KV cache, reasoning and the thinking budget, decision models, templates, in plain language.
+- [GETTING_STARTED.md](GETTING_STARTED.md): using kiln in a Flutter app, from an empty project to a first chat and a first decision.
+- [CONCEPTS.md](CONCEPTS.md): start here for how it works. Cores vs threads, pinning, the probe, heat, KV cache, reasoning and the thinking budget, decision models, templates, in plain language.
 - [CODEBASE.md](CODEBASE.md): file-by-file map and what happens inside one chat call.
 - [ARCHITECTURE.md](ARCHITECTURE.md): layers, rules, threading model, roadmap.
 - [RELEASE.md](RELEASE.md): checklist before tagging the core or publishing to pub.dev.
