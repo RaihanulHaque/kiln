@@ -44,7 +44,7 @@ const char* kiln_status_string(kiln_status s) {
     return k_status_names[s];
 }
 
-const char* kiln_version(void) { return "0.1.0"; }
+const char* kiln_version(void) { return "0.2.0"; }
 
 void kiln_set_log_callback(kiln_log_cb cb, void* user) { g_log_cb = cb; g_log_user = user; }
 void kiln_set_log_level(kiln_log_level level) { g_log_level = level; }

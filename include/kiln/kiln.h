@@ -25,7 +25,7 @@ extern "C" {
 #endif
 
 #define KILN_VERSION_MAJOR 0
-#define KILN_VERSION_MINOR 1
+#define KILN_VERSION_MINOR 2
 #define KILN_VERSION_PATCH 0
 
 /* ------------------------------------------------------------------ */

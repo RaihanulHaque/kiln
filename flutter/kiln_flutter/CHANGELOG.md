@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.0
 
 - `chat(maxReasoningTokens:)`: thinking budget. After that many reasoning tokens kiln closes the
   think block and the model answers. `KilnGenStats.reasoningTruncated` reports when it was used.
