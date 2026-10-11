@@ -1,7 +1,7 @@
 # kiln_flutter
 
-Flutter bindings for [kiln](../../README.md), an on-device LLM runtime that is honest about
-what it runs on. Android today; iOS is in progress.
+Flutter bindings for [kiln](https://github.com/RaihanulHaque/kiln), an on-device LLM runtime that
+is honest about what it runs on. Android (arm64) today; iOS is in progress.
 
 ```dart
 final kiln  = await Kiln.create();
@@ -21,7 +21,17 @@ gen.cancel();                   // from anywhere, any time
 
 ## Install
 
-Not on pub.dev yet. Add the tagged release from GitHub; nothing to clone:
+```bash
+flutter pub add kiln_flutter
+```
+
+Then set `minSdk = 29` in `android/app/build.gradle.kts`, put a GGUF model on the device, and
+run on a real arm64 Android phone. The first build compiles the native library and takes two to
+three minutes. The
+[getting-started guide](https://github.com/RaihanulHaque/kiln/blob/main/docs/GETTING_STARTED.md)
+walks through every step, from an empty project to a first chat and a first decision.
+
+To track the repo instead of a release, depend on it from GitHub:
 
 ```yaml
 dependencies:
@@ -29,13 +39,7 @@ dependencies:
     git:
       url: https://github.com/RaihanulHaque/kiln.git
       path: flutter/kiln_flutter
-      ref: v0.2.0
 ```
-
-Set `minSdk = 29` in `android/app/build.gradle.kts`, put a GGUF model on the device, and run
-on a real arm64 phone. The
-[getting-started guide](https://github.com/RaihanulHaque/kiln/blob/main/docs/GETTING_STARTED.md)
-walks through every step, from an empty project to a first chat and a first decision.
 
 Everything blocking runs on a background isolate; the UI thread only receives pieces. You may
 await `stats` without listening to `pieces`. Pass the full history to `chat` every turn and
@@ -80,7 +84,7 @@ The example app has a Decide screen that uses this. `chat` on a decision model a
 | platform | native | verified |
 |---|---|---|
 | Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Pixel 8: 16 of 16 integration tests, speed run |
-| iOS 15+ | `kiln.xcframework` from `scripts/build_ios.sh`, vendored by the podspec, Metal | **In progress, not supported yet.** iPhone 16 Pro at v0.1.0: 7 of 9 integration tests; not re-run for v0.2.0 |
+| iOS 15+ | not in the pub.dev package; from a clone, `kiln.xcframework` via `scripts/build_ios.sh`, Metal | **In progress, not supported yet.** iPhone 16 Pro at v0.1.0: 7 of 9 integration tests; not re-run for v0.2.0 |
 
 Desktop (macOS/Linux) works for development by passing a host build:
 `Kiln.create(libraryPath: '<repo>/build/host/libkiln.dylib')`.
@@ -118,12 +122,14 @@ cd example && flutter test integration_test -d <device-id>
 Downloads a 229 MB model on first run. Covers probe, bad files, info, template, single turn,
 KV reuse on turn 2, cancel, busy-context guard, context overflow, Qwen3.5 thinking
 channels (fetches Qwen, 533 MB) and the d1-omni decision model (fetches it, 407 MB). `--dart-define=KILN_SPEED=true` adds a 3-run speed test per
-model. iOS needs Rosetta on Apple-silicon Macs for Flutter's device bridge.
+model.
 
 ## Building the native side
 
+- **From pub.dev**: nothing to do. The package carries the C core and the pinned llama.cpp, and
+  Gradle builds them.
 - **Inside this repo**: nothing to do. `src/CMakeLists.txt` points at the repo root.
-- **For pub.dev**: `scripts/vendor_flutter.sh` copies the core and the pinned llama.cpp into
+- **Publishing**: `scripts/vendor_flutter.sh` copies the core and the pinned llama.cpp into
   `src/core/` (35 MB) so the package builds alone; `--check` proves it by building the example
   APK with the repo root hidden.
 - **iOS**: `scripts/build_ios.sh` produces `ios/Frameworks/kiln.xcframework` (device + simulator;

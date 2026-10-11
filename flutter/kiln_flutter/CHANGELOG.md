@@ -1,5 +1,9 @@
 ## 0.2.0
 
+First version on pub.dev. Android arm64 only; iOS is in progress and not part of the package.
+Verified on a Pixel 8 (Tensor G3): 16 integration tests. Not yet tried on Snapdragon or
+MediaTek phones or on devices with 4 GB of RAM.
+
 - `chat(maxReasoningTokens:)`: thinking budget. After that many reasoning tokens kiln closes the
   think block and the model answers. `KilnGenStats.reasoningTruncated` reports when it was used.
 - `KilnContext.decide`: ask a decision model (LFM2 d1-omni) a yes / no, choice or score

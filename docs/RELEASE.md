@@ -51,18 +51,20 @@ Not yet done, and required:
 Publishing cannot be undone: a version on pub.dev stays there for good.
 
 ```bash
-git status                                  # clean, on the tagged commit
-scripts/build_ios.sh                        # rebuild the iOS framework from this commit (macOS)
-scripts/vendor_flutter.sh --check           # vendor the core, build from pub's file set
-cd flutter/kiln_flutter
-dart pub publish --dry-run                  # read the file list and the warnings
-dart pub publish                            # asks for confirmation and a Google sign-in
-cd ../.. && rm -rf flutter/kiln_flutter/src/core
+scripts/publish_flutter.sh --dry-run        # everything except the upload
+scripts/publish_flutter.sh                  # the same, then the upload; asks to confirm
 ```
 
-`ios/Frameworks/kiln.xcframework` is uploaded as it is on disk. It is a compiled copy of the
-core, so an old one silently ships an old core: always rebuild it first. If iOS has not been
-re-run for the version, remove `ios` from `platforms` in `pubspec.yaml` instead of shipping it.
+The script refuses to run with uncommitted changes, vendors the core into the package, builds
+the example from exactly the files pub would upload, shows the dry run, and removes the
+vendored copy when it ends. The first real publish opens a browser for a Google sign-in.
+
+The pub.dev package is Android only. `ios` is not declared in `pubspec.yaml`, and `.pubignore`
+leaves the `ios/` folders out, so no compiled iOS framework is uploaded. To bring iOS back:
+re-run it on a device at the version being published, add `ios: {ffiPlugin: true}` to the
+pubspec, remove the two `ios/` lines from `.pubignore`, and rebuild the framework with
+`scripts/build_ios.sh` right before publishing (it is a compiled copy of the core; an old one
+silently ships an old core).
 
 `scripts/pub_files.py flutter/kiln_flutter` prints the exact file set pub would upload.
 
