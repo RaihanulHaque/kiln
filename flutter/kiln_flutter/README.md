@@ -69,9 +69,16 @@ Desktop (macOS/Linux) works for development by passing a host build:
 
 ## Example app
 
-`example/` is a chat UI: device probe, model picker with in-app download, thinking toggle for
-models that support it, collapsible reasoning, per-reply stats, stop button. Get a model
-onto an Android device with the downloader or
+`example/` is a small chat app in one file, with a light and a dark theme that follow the system.
+
+- **Model library**: what the probe found on the device, the models already on it, and three
+  small models to download with one tap (progress, cancel, delete). Any other GGUF by link.
+- **Chat**: streaming replies with basic markdown, a Think switch on models that support it,
+  reasoning that folds away once the answer starts, speed and cache reuse under each reply,
+  stop, copy, and new chat.
+
+`--dart-define=KILN_THEME=light` or `dark` forces a theme. Besides the downloader, a model can
+be copied to an Android device with
 
 ```bash
 adb push model.gguf /sdcard/Android/data/dev.kiln.kiln_flutter_example/files/

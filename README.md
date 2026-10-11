@@ -59,7 +59,7 @@ background isolate. The example app in `flutter/kiln_flutter/example` is a full 
 a model downloader, thinking toggle, collapsible reasoning and per-reply stats.
 
 <p>
-<img src="docs/img/01_picker.png" width="180"> <img src="docs/img/03_reply.png" width="180"> <img src="docs/img/04_thinking_multiturn.png" width="180">
+<img src="docs/img/01_picker.png" width="180"> <img src="docs/img/04_thinking_multiturn.png" width="180"> <img src="docs/img/03_reply.png" width="180"> <img src="docs/img/05_light.png" width="180">
 </p>
 
 ### C
