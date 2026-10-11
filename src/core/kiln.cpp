@@ -137,4 +137,15 @@ kiln_status kiln_chat(kiln_context* c, const kiln_chat_message* msgs, int32_t n_
 
 void kiln_cancel(kiln_context* c) { if (c) c->impl->cancel(); }
 
+kiln_status kiln_decide(kiln_context* c, const char* state, const kiln_decision_question* q,
+                        float* probs, int32_t probs_cap, kiln_decision_answer* answer) {
+    if (!c || !q || !probs) return set_error(KILN_ERR_INVALID_ARG, "null handle/question/probs");
+    if (!q->instructions || !q->id) return set_error(KILN_ERR_INVALID_ARG, "question id/instructions is null");
+    if (q->n_options < 0 || (q->n_options > 0 && !q->options)) return set_error(KILN_ERR_INVALID_ARG, "bad options");
+    kiln_decision_answer a{};
+    kiln_status s = c->impl->decide(state, *q, probs, probs_cap, a);
+    if (answer) *answer = a;
+    return s;
+}
+
 }

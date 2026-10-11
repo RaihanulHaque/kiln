@@ -116,6 +116,18 @@ rewrites the reply that follows. Reported in `cached_tokens`.
 **Stats are per call.** Prompt and generation tok/s, cache hits, why it stopped. On a phone
 the number falls as the chip heats; kiln lets the app see that instead of hiding it.
 
+**Decision models answer without generating.** A model such as LFM2 d1-omni reads a state and
+a typed question (yes / no, pick one, rate on a scale) and returns a probability per option in
+one forward pass. `kiln_decide` runs it; `kiln_model_info.is_decision_model` says when to use
+it. Text state only for now, and C API only (not yet in the Flutter plugin).
+
+```c
+kiln_decision_option teams[] = {{"billing", "Payments and refunds"}, {"shipping", "Delivery problems"}};
+kiln_decision_question q = {"team", KILN_QUESTION_CHOICE, "Which team should handle this?", teams, 2};
+float probs[2]; kiln_decision_answer a;
+kiln_decide(ctx, "My parcel never arrived.", &q, probs, 2, &a);   // teams[a.best], probs[], a.confidence
+```
+
 ## Measured
 
 Generation tok/s, 3 to 8 runs back to back of the same job. "cold" is the first run,

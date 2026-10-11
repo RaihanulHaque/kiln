@@ -142,6 +142,28 @@ into the model as if the model had written it, and generation continues as the a
 256-token budget the same model finished 43 of 48 runs, and all 16 with the repeat penalty
 off. The stats report `reasoning_truncated` so a UI can say the thinking was cut short.
 
+## Decision models
+
+Most models here write text one token at a time. A decision model does not write at all. You
+give it a state (some text) and a typed question, and it scores every option in a single
+forward pass:
+
+- **noul**: yes or no. "Is the customer asking for a refund?"
+- **choice**: pick one of the options you list. "Which team should handle this?"
+- **score**: rate on a scale of 2 to 10 levels. "How urgent is this?"
+
+The model's own `systemone` template lays out the state, the question and the options. Each
+option ends in a mask token, and the model's output at that token is the option's score. kiln
+turns the scores into probabilities with the calibration temperature stored in the GGUF. There
+is no sampling, so the same question always gives the same numbers, and an answer costs one
+prompt-sized pass: about 150 ms for a 74-token question on a desktop CPU with d1-omni 600M Q8.
+
+`kiln_decide` is a port of the lfm2-d1-omni path of llama.cpp's server (`/v1/systemone`), which
+is the only place llama.cpp implements it; asked one question at a time, both give the same
+probabilities to six decimal places. Other decision families, images and audio are not ported.
+A decision model cannot chat: `kiln_chat` returns `KILN_ERR_NOT_SUPPORTED` on it, and
+`kiln_decide` returns the same on a chat model.
+
 ## Chat templates
 
 Each model was trained on conversations formatted a specific way: special tokens around

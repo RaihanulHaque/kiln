@@ -1,5 +1,6 @@
 // llama.cpp backend. This is the guaranteed tier: CPU everywhere, GPU where ggml has a device.
 #include "../../core/internal.h"
+#include "decision.h"
 #include "reasoning_splitter.h"
 #include "llama.h"
 #include "ggml-backend.h"
@@ -88,6 +89,7 @@ public:
     ggml_threadpool_t tp_  = nullptr;
     int               n_batch_ = 512;
     std::atomic<bool> cancel_{false};
+    const kiln::DecisionHead* decision_ = nullptr;   // owned by the model; set for decision models
 
     static bool abort_cb(void* user) { return static_cast<LlamaContext*>(user)->cancel_.load(); }
 
@@ -100,11 +102,20 @@ public:
 
     void cancel() override { cancel_.store(true); }
 
+    kiln_status decide(const char* state, const kiln_decision_question& q,
+                       float* probs, int32_t probs_cap, kiln_decision_answer& out) override {
+        if (!decision_ || !decision_->is_decision_model()) return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not a decision model");
+        cancel_.store(false);
+        return decision_->decide(ctx_, state, q, probs, probs_cap, out);
+    }
+
     kiln_status generate(const kiln::RenderedPrompt& in, const kiln_sampling_params& sp,
                          kiln_token_cb cb, void* user, kiln_gen_stats* stats) override {
         cancel_.store(false);
         kiln_gen_stats st{};
         auto done = [&](kiln_status s) { if (stats) *stats = st; return s; };
+        if (decision_ && decision_->is_decision_model())
+            return done(kiln::set_error(KILN_ERR_NOT_SUPPORTED, "decision models do not generate text; use kiln_decide"));
 
         // ---- tokenize
         const char* text = in.prompt.c_str();
@@ -305,6 +316,7 @@ public:
             kiln::log(KILN_LOG_WARN, "chat template probe failed: %s", e.what());
         }
         if (tags_.start.empty() && tags_.ends.empty()) { tags_.start = "<think>"; tags_.ends = {"</think>"}; }
+        decision_.init(model_);
     }
     ~LlamaModel() override { llama_model_free(model_); }
 
@@ -324,6 +336,7 @@ public:
         out.n_gpu_layers_used = gpu_layers_;
         out.model_bytes       = llama_model_size(model_);
         out.supports_thinking = tags_.supported;
+        out.is_decision_model = decision_.is_decision_model();
         return KILN_OK;
     }
 
@@ -385,6 +398,7 @@ public:
         // workers and indexes the pool's per-thread state, so a larger count reads past its end
         cp.n_threads       = n_threads;
         cp.n_threads_batch = n_threads;
+        if (decision_.is_decision_model()) kiln::DecisionHead::configure(cp);
         cp.flash_attn_type = p.flash_attn ? LLAMA_FLASH_ATTN_TYPE_AUTO : LLAMA_FLASH_ATTN_TYPE_DISABLED;
         cp.abort_callback      = LlamaContext::abort_cb;
         cp.abort_callback_data = c.get();
@@ -392,6 +406,7 @@ public:
         c->ctx_ = llama_init_from_model(model_, cp);
         if (!c->ctx_) return kiln::set_error(KILN_ERR_OUT_OF_MEMORY, "llama_init_from_model failed (n_ctx=" + std::to_string(cp.n_ctx) + ")");
         c->n_batch_ = (int)cp.n_batch;
+        c->decision_ = &decision_;
 
         if (mask && !(no_aff && *no_aff == '1')) {
             ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
@@ -417,6 +432,7 @@ private:
     uint64_t                  fast_mask_;
     common_chat_templates_ptr tmpls_;
     ThinkTags                 tags_;
+    kiln::DecisionHead        decision_;
 };
 
 // ------------------------------------------------------------------ Backend

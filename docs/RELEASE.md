@@ -48,4 +48,5 @@ Not yet done, and required:
 - Hybrid models re-read the last assistant reply each turn (the template rewrites it), and the
   whole prompt when history diverges before the previous turn's checkpoint
 - Tool calling not exposed
+- Decision models: LFM2 d1-omni with a text state only; no images or audio; not in the Flutter plugin
 - ISA baseline is dotprod+fp16; i8mm/SVE present on many phones are not used yet

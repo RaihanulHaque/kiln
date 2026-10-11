@@ -99,5 +99,8 @@ confuses you, it should be here. If it is not, add it.
   `reasoning_truncated` in the stats reports that it was used.
 - **enable_thinking**: template switch for reasoning models. `supports_thinking` in model info
   is true only when flipping it actually changes the rendered prompt.
+- **decision model**: a model that scores the options of a typed question (noul, choice, score)
+  in one forward pass instead of generating text. `kiln_decide`, `is_decision_model`. LFM2
+  d1-omni is the supported family.
 - **hybrid model**: mixes attention layers with recurrent / state-space layers (LFM2, Qwen3.5).
   Fast and memory-light per token, but their state cannot be partially rewound.
