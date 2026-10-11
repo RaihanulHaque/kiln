@@ -97,7 +97,7 @@ One source tree, three outputs, no copies.
 - [ ] Auto-tune: micro-benchmark candidate core sets on first run, cache per (soc, arch)
 - [ ] Validate the "highest core index = biggest core" assumption on Snapdragon and MediaTek
 - [ ] GPU utilisation in kiln-bench on Metal
-- [ ] KV state checkpoints (`llama_state_seq_*`) so hybrid models reuse cache across turns
+- [x] KV state checkpoints (`llama_state_seq_*`) so hybrid models reuse cache across turns
 - [ ] Tool calling: common already parses it; expose `kiln_tool` + a TOOL_CALL channel
 - [ ] Runtime ISA dispatch (i8mm / sve) instead of one baseline build
 - [ ] Context-length auto-cap from available RAM in the probe

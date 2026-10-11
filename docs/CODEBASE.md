@@ -100,9 +100,12 @@ sequenceDiagram
    think block (so the splitter starts in reasoning mode).
 5. **Prefix reuse** (`LlamaContext::generate`): tokenizes the prompt, compares with the token
    list currently in the KV cache, keeps the common prefix. Tries `llama_memory_seq_rm` to drop
-   the rest; if the model refuses (recurrent state), clears everything and starts from zero.
+   the rest. If the model refuses (recurrent state), restores the newest checkpoint inside
+   the common prefix, or clears everything and starts from zero if there is none.
 6. **Prompt eval**: decodes the non-cached tokens in batches of `n_batch` on the pinned
-   threadpool. The abort callback checks the cancel flag between graph nodes.
+   threadpool. Hybrid / recurrent models end one batch exactly where the history stops
+   (`RenderedPrompt::stable_prefix`) and save a checkpoint of their recurrent state there
+   (`llama_state_seq_get_data_ext`, `PARTIAL_ONLY`); the last two are kept. The abort callback checks the cancel flag between graph nodes.
 7. **Sampling loop**: sample a token (penalties, top-k, top-p, min-p, temperature, or greedy),
    stop on end-of-generation, otherwise turn the token into text and feed it to the
    `ReasoningSplitter`, which emits answer/reasoning pieces to the callback, holding back any

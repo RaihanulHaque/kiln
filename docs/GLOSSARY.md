@@ -37,7 +37,8 @@ confuses you, it should be here. If it is not, add it.
 - **prefix reuse**: `kiln_chat` compares the new prompt's tokens with what the KV cache holds
   and only evaluates the suffix that differs. Transformers (Gemma, Llama) reuse freely.
   Recurrent / hybrid models (LFM2, Qwen3.5, Mamba) cannot drop a partial tail of their state,
-  so a divergence before the end of the cache forces a full re-evaluation.
+  so on a divergence kiln rewinds to the newest **checkpoint** (a saved copy of that state at
+  the end of a turn's history) and re-evaluates from there.
 - **reset**: `kiln_context_reset` clears the KV cache. Next call starts from nothing.
 - **context full**: `KILN_ERR_CONTEXT_FULL`. Either the prompt alone does not fit, or
   generation ran out of room; `generated_tokens` tells you which.

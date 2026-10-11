@@ -75,7 +75,9 @@ struct ThinkTags {
 
 class LlamaContext final : public kiln::Context {
 public:
-    LlamaContext(llama_model* model, const ThinkTags& tags) : model_(model), vocab_(llama_model_get_vocab(model)), tags_(tags) {}
+    LlamaContext(llama_model* model, const ThinkTags& tags)
+        : model_(model), vocab_(llama_model_get_vocab(model)), tags_(tags),
+          partial_state_(llama_model_is_recurrent(model) || llama_model_is_hybrid(model)) {}
     ~LlamaContext() override {
         if (ctx_) { if (tp_) llama_detach_threadpool(ctx_); llama_free(ctx_); }
         if (tp_) ggml_threadpool_free(tp_);
@@ -92,6 +94,7 @@ public:
     kiln_status reset() override {
         llama_memory_clear(llama_get_memory(ctx_), true);
         cache_.clear();
+        ckpts_.clear();
         return KILN_OK;
     }
 
@@ -117,18 +120,26 @@ public:
         if (n >= n_ctx)
             return done(kiln::set_error(KILN_ERR_CONTEXT_FULL, "prompt (" + std::to_string(n) + " tok) does not fit in context (" + std::to_string(n_ctx) + ")"));
 
+        // ---- where to checkpoint (hybrid / recurrent models only): the end of the stable prefix
+        size_t ckpt_at = 0;
+        if (partial_state_ && !in.stable_prefix.empty()) {
+            std::vector<llama_token> pre(in.stable_prefix.size() + 8);
+            int np = llama_tokenize(vocab_, in.stable_prefix.c_str(), (int)in.stable_prefix.size(), pre.data(), (int)pre.size(), true, true);
+            while (np > 0 && ckpt_at < (size_t)np && ckpt_at + 1 < toks.size() && pre[ckpt_at] == toks[ckpt_at]) ++ckpt_at;
+        }
+
         // ---- prefix reuse: keep what the KV cache already has, drop the rest
         size_t common = 0;
         while (common < cache_.size() && common < toks.size() && cache_[common] == toks[common]) ++common;
         if (common == toks.size()) --common;            // identical prompt: re-decode last token to get logits
         if (common < cache_.size()) {
             // Recurrent / hybrid models (LFM2, Qwen3.5, Mamba) cannot drop a partial tail of their
-            // state. seq_rm tells us; fall back to a full re-eval rather than generate from stale state.
-            if (!llama_memory_seq_rm(llama_get_memory(ctx_), 0, (llama_pos)common, -1)) {
-                llama_memory_clear(llama_get_memory(ctx_), true);
-                common = 0;
-            }
+            // state; seq_rm tells us. Then go back to the newest checkpoint inside the shared prefix,
+            // or re-evaluate everything rather than generate from stale state.
+            if (!llama_memory_seq_rm(llama_get_memory(ctx_), 0, (llama_pos)common, -1))
+                common = restore_checkpoint(common);
         }
+        while (!ckpts_.empty() && ckpts_.back().n_tokens > common) ckpts_.pop_back();
         cache_.resize(common);
         st.cached_tokens = (int32_t)common;
         int n_past = (int)common;
@@ -151,14 +162,17 @@ public:
 
         // ---- prompt eval
         auto t0 = clock_t_::now();
-        for (int i = (int)common; i < n; i += n_batch_) {
+        for (int i = (int)common; i < n; ) {
             int cnt = std::min(n_batch_, n - i);
+            if (i < (int)ckpt_at) cnt = std::min(cnt, (int)ckpt_at - i);   // end a batch exactly at the checkpoint
             if (cancel_.load()) { st.stopped_by_user = true; return done(KILN_ERR_CANCELLED); }
             int rc = llama_decode(ctx_, llama_batch_get_one(toks.data() + i, cnt));
             if (rc == 2) { st.stopped_by_user = true; return done(KILN_ERR_CANCELLED); }
             if (rc != 0) return done(kiln::set_error(rc == 1 ? KILN_ERR_CONTEXT_FULL : KILN_ERR_BACKEND, "llama_decode failed in prompt eval, rc=" + std::to_string(rc)));
+            i += cnt;
             n_past += cnt;
-            cache_.insert(cache_.end(), toks.begin() + i, toks.begin() + i + cnt);
+            cache_.insert(cache_.end(), toks.begin() + i - cnt, toks.begin() + i);
+            if (i == (int)ckpt_at) save_checkpoint(ckpt_at);
         }
         st.prompt_ms = ms_since(t0);
 
@@ -209,10 +223,44 @@ public:
     }
 
 private:
+    // Saved recurrent state of a hybrid / recurrent model after its first n_tokens cache tokens.
+    // Only the part seq_rm cannot rewind is stored (PARTIAL_ONLY); attention KV is truncated instead.
+    struct Checkpoint { size_t n_tokens; std::vector<uint8_t> data; };
+    static constexpr size_t kMaxCheckpoints = 2;   // latest turn, plus one back for an edited last message
+
+    void save_checkpoint(size_t n_tokens) {
+        if (!ckpts_.empty() && ckpts_.back().n_tokens == n_tokens) return;
+        const size_t size = llama_state_seq_get_size_ext(ctx_, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        if (size == 0) return;
+        Checkpoint ck{n_tokens, std::vector<uint8_t>(size)};
+        if (llama_state_seq_get_data_ext(ctx_, ck.data.data(), size, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) != size) return;
+        if (ckpts_.size() >= kMaxCheckpoints) ckpts_.erase(ckpts_.begin());
+        ckpts_.push_back(std::move(ck));
+        kiln::log(KILN_LOG_DEBUG, "checkpoint at %zu tokens (%.1f MB)", n_tokens, size / 1048576.0);
+    }
+
+    // Rewind to the newest checkpoint at or before `common` tokens. Returns the tokens kept;
+    // 0 (memory cleared) when no checkpoint fits.
+    size_t restore_checkpoint(size_t common) {
+        llama_memory_t mem = llama_get_memory(ctx_);
+        for (auto it = ckpts_.rbegin(); it != ckpts_.rend(); ++it) {
+            if (it->n_tokens > common) continue;
+            if (llama_state_seq_set_data_ext(ctx_, it->data.data(), it->data.size(), 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == it->data.size()
+                && llama_memory_seq_rm(mem, 0, (llama_pos)it->n_tokens, -1))
+                return it->n_tokens;
+            break;
+        }
+        llama_memory_clear(mem, true);
+        ckpts_.clear();
+        return 0;
+    }
+
     llama_model*             model_;
     const llama_vocab*       vocab_;
     ThinkTags                tags_;
+    bool                     partial_state_;   // recurrent or hybrid: needs checkpoints to rewind
     std::vector<llama_token> cache_;   // tokens currently in the KV cache, in order
+    std::vector<Checkpoint>  ckpts_;   // ascending n_tokens
 };
 
 // ------------------------------------------------------------------ Model
@@ -283,6 +331,11 @@ public:
         try {
             auto p = common_chat_templates_apply(tmpls_.get(), in);
             out.prompt = p.prompt;
+            if (in.add_generation_prompt) {
+                in.add_generation_prompt = false;
+                auto h = common_chat_templates_apply(tmpls_.get(), in);
+                if (p.prompt.compare(0, h.prompt.size(), h.prompt) == 0) out.stable_prefix = h.prompt;
+            }
             out.starts_in_reasoning = in.enable_thinking && !tags_.start.empty()
                                    && rtrim(p.prompt).size() >= tags_.start.size()
                                    && rtrim(p.prompt).compare(rtrim(p.prompt).size() - tags_.start.size(), tags_.start.size(), tags_.start) == 0;
