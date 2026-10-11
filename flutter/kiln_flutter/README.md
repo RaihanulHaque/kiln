@@ -69,6 +69,10 @@ Desktop (macOS/Linux) works for development by passing a host build:
 
 ## Example app
 
+<p>
+<img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/01_picker.png" width="170" alt="Model library"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/04_thinking_multiturn.png" width="170" alt="Thinking, streamed"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/03_reply.png" width="170" alt="Chat reply with stats"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/06_decide.png" width="170" alt="Decide screen"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/05_light.png" width="170" alt="Light theme">
+</p>
+
 `example/` is a small chat app in one file, with a light and a dark theme that follow the system.
 
 - **Model library**: what the probe found on the device, the models already on it, and three
