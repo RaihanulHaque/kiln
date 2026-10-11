@@ -119,6 +119,7 @@ typedef struct kiln_model_info {
     int32_t  n_gpu_layers_used;
     uint64_t model_bytes;         /* resident weight memory */
     bool     supports_thinking;   /* chat template has a reasoning switch (Qwen3.x, Gemma 4, ...) */
+    bool     is_decision_model;   /* answers typed questions with kiln_decide; cannot generate text */
 } kiln_model_info;
 
 KILN_API kiln_status kiln_model_get_info(const kiln_model* m, kiln_model_info* out);
@@ -240,6 +241,50 @@ KILN_API kiln_status kiln_generate(kiln_context* c,
 
 /* Thread-safe. Requests the in-flight kiln_generate on this context to stop. */
 KILN_API void kiln_cancel(kiln_context* c);
+
+/* ------------------------------------------------------------------ */
+/* Decision models                                                     */
+/* ------------------------------------------------------------------ */
+
+/* A decision model (kiln_model_info.is_decision_model) does not write text. It reads a
+ * state and one typed question and returns a probability per option, in one forward pass.
+ * Supported today: LFM2 d1-omni, text state only (no images or audio). */
+
+typedef enum kiln_question_type {
+    KILN_QUESTION_NOUL   = 0,   /* yes / no */
+    KILN_QUESTION_CHOICE = 1,   /* pick one of the options */
+    KILN_QUESTION_SCORE  = 2    /* rate on a scale; options are the levels, lowest first (2 to 10) */
+} kiln_question_type;
+
+typedef struct kiln_decision_option {
+    const char* key;              /* choice: the label returned. noul: "true" or "false" (also "yes" / "no"). score: ignored */
+    const char* description;      /* what the option means; may be NULL */
+} kiln_decision_option;
+
+typedef struct kiln_decision_question {
+    const char* id;               /* short name of the question, e.g. "wants_refund" */
+    kiln_question_type type;
+    const char* instructions;     /* the question itself */
+    const kiln_decision_option* options;   /* noul: optional, only to describe what yes and no mean */
+    int32_t     n_options;
+} kiln_decision_question;
+
+typedef struct kiln_decision_answer {
+    int32_t n_probs;              /* probabilities written to probs. noul: 2, [0] = no, [1] = yes */
+    int32_t best;                 /* index of the most probable entry */
+    float   value;                /* noul: P(yes). score: expected level, 0 .. n-1. choice: P(best) */
+    float   confidence;           /* 0 .. 1 for choice and score; for noul how far P(yes) is from 0.5 */
+    int32_t prompt_tokens;
+    double  ms;
+} kiln_decision_answer;
+
+/* state: the text the question is about; may be NULL. probs receives one probability per
+ * option (2 for noul) and must hold at least that many. Blocking.
+ * Returns KILN_ERR_NOT_SUPPORTED on a model that is not a decision model. */
+KILN_API kiln_status kiln_decide(kiln_context* c, const char* state,
+                                 const kiln_decision_question* question,
+                                 float* probs, int32_t probs_cap,
+                                 kiln_decision_answer* answer);
 
 /* ------------------------------------------------------------------ */
 /* Logging                                                             */

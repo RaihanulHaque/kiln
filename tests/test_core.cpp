@@ -4,6 +4,7 @@
 #include "kiln/kiln.h"
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -196,6 +197,13 @@ static void test_model(const std::string& path, const char* label, bool expect_t
               st6b.reasoning_truncated, st6b.reasoning_tokens, st6b.generated_tokens);
     }
 
+    // a chat model is not a decision model
+    {
+        float p[2]; kiln_decision_answer a;
+        kiln_decision_question q = {"q", KILN_QUESTION_NOUL, "Is this a question?", nullptr, 0};
+        CHECK(!mi.is_decision_model && kiln_decide(c, "state", &q, p, 2, &a) == KILN_ERR_NOT_SUPPORTED, "kiln_decide on a chat model");
+    }
+
     kiln_context_free(c);
 
     // context overflow: tiny context, prompt does not fit
@@ -219,6 +227,73 @@ static void test_model(const std::string& path, const char* label, bool expect_t
     kiln_model_free(m);
 }
 
+// Decision model (LFM2 d1-omni): typed questions answered in one pass, no generated text.
+static void test_decision(const std::string& path) {
+    SECTION("d1-omni decision model");
+    { std::ifstream f(path); if (!f.good()) { fprintf(stderr, "  SKIP (missing %s)\n", path.c_str()); return; } }
+    kiln_model* m = nullptr;
+    kiln_model_params mp = kiln_model_params_default();
+    CHECK(kiln_model_load(path.c_str(), &mp, &m) == KILN_OK, "%s", kiln_last_error());
+    if (!m) return;
+    kiln_model_info mi; kiln_model_get_info(m, &mi);
+    CHECK(mi.is_decision_model, "arch=%s", mi.arch);
+    kiln_context_params cp = kiln_context_params_default(); cp.n_ctx = 4096;
+    kiln_context* c = nullptr;
+    CHECK(kiln_context_create(m, &cp, &c) == KILN_OK, "%s", kiln_last_error());
+    if (!c) { kiln_model_free(m); return; }
+
+    const char* state = "Hi, I ordered a blender two weeks ago and it arrived broken. I have emailed twice and nobody "
+                        "answered. I want my money back today or I will dispute the charge with my bank.";
+    float p[8]; kiln_decision_answer a;
+    auto sums_to_one = [&](int n) { float s = 0; for (int i = 0; i < n; ++i) s += p[i]; return fabsf(s - 1.0f) < 1e-3f; };
+
+    // yes / no
+    kiln_decision_question refund = {"wants_refund", KILN_QUESTION_NOUL, "Is the customer asking for a refund?", nullptr, 0};
+    kiln_status s = kiln_decide(c, state, &refund, p, 8, &a);
+    CHECK(s == KILN_OK, "%s", kiln_last_error());
+    CHECK(a.n_probs == 2 && sums_to_one(2), "n_probs=%d", a.n_probs);
+    CHECK(a.value > 0.5f && a.best == 1, "P(yes)=%.3f", a.value);
+    fprintf(stderr, "  refund? yes=%.3f (%d tok, %.0f ms)\n", a.value, a.prompt_tokens, a.ms);
+
+    kiln_decision_question weather = {"about_weather", KILN_QUESTION_NOUL, "Is the customer asking about the weather?", nullptr, 0};
+    s = kiln_decide(c, state, &weather, p, 8, &a);
+    CHECK(s == KILN_OK && a.value < 0.5f && a.best == 0, "P(yes)=%.3f", a.value);
+
+    // pick one
+    kiln_decision_option teams[] = {{"billing", "Payments, refunds and invoices"}, {"shipping", "Delivery status and lost parcels"},
+                                    {"technical", "The product does not work as expected"}};
+    kiln_decision_question team = {"team", KILN_QUESTION_CHOICE, "Which team should handle this?", teams, 3};
+    s = kiln_decide(c, state, &team, p, 8, &a);
+    CHECK(s == KILN_OK, "%s", kiln_last_error());
+    CHECK(a.n_probs == 3 && sums_to_one(3) && a.best >= 0 && a.best < 3, "n_probs=%d best=%d", a.n_probs, a.best);
+    CHECK(a.confidence >= 0.0f && a.confidence <= 1.0f, "confidence=%.3f", a.confidence);
+    fprintf(stderr, "  team: %s (billing %.3f, shipping %.3f, technical %.3f)\n", teams[a.best].key, p[0], p[1], p[2]);
+
+    // rate on a scale
+    kiln_decision_option levels[] = {{nullptr, "Can wait"}, {nullptr, "Today"}, {nullptr, "Blocking the customer now"}};
+    kiln_decision_question urgency = {"urgency", KILN_QUESTION_SCORE, "How urgent is this?", levels, 3};
+    s = kiln_decide(c, state, &urgency, p, 8, &a);
+    CHECK(s == KILN_OK, "%s", kiln_last_error());
+    CHECK(a.n_probs == 3 && sums_to_one(3) && a.value >= 0.0f && a.value <= 2.0f, "expected level=%.3f", a.value);
+    fprintf(stderr, "  urgency: expected level %.2f of 0..2\n", a.value);
+
+    // same question twice gives the same numbers
+    float p2[8]; kiln_decision_answer a2;
+    s = kiln_decide(c, state, &urgency, p2, 8, &a2);
+    CHECK(s == KILN_OK && p2[0] == p[0] && p2[1] == p[1] && p2[2] == p[2], "not deterministic");
+
+    // bad input and wrong model kind
+    CHECK(kiln_decide(c, state, &team, p, 2, &a) == KILN_ERR_INVALID_ARG, "probs too small accepted");
+    kiln_decision_question one_level = {"q", KILN_QUESTION_SCORE, "How urgent?", levels, 1};
+    CHECK(kiln_decide(c, state, &one_level, p, 8, &a) == KILN_ERR_INVALID_ARG, "1-level score accepted");
+    CHECK(kiln_decide(c, nullptr, &refund, p, 8, &a) == KILN_OK, "null state: %s", kiln_last_error());
+    kiln_chat_message msg[] = { {"user", "hi"} }; kiln_gen_stats st;
+    CHECK(kiln_chat(c, msg, 1, nullptr, nullptr, nullptr, nullptr, &st) == KILN_ERR_NOT_SUPPORTED, "chat on a decision model");
+
+    kiln_context_free(c);
+    kiln_model_free(m);
+}
+
 int main(int argc, char** argv) {
     std::string dir = argc > 1 ? argv[1] : "models";
     kiln_set_log_level(KILN_LOG_ERROR);
@@ -228,6 +303,7 @@ int main(int argc, char** argv) {
     test_model(dir + "/LiquidAI_LFM2.5-350M_Q4_K_M.gguf", "LFM2.5-350M",  false);
     test_model(dir + "/Qwen3.5-0.8B-Q4_K_M.gguf",         "Qwen3.5-0.8B", true);
     test_model(dir + "/gemma-3-270m-it-Q8_0.gguf",         "Gemma3-270M",  false);
+    test_decision(dir + "/d1-omni-600M-Q8_0.gguf");
     fprintf(stderr, "\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

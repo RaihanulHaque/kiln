@@ -13,7 +13,11 @@ static void usage() {
         "       kiln-cli -m model.gguf [-p \"prompt\"] [-n max_tokens] [--cpu|--gpu] [-t threads] [-c n_ctx] [--think] [--think-budget N] [--raw] [--chat] [-v]\n"
         "  --chat   interactive multi-turn REPL (shows KV prefix reuse per turn)\n"
         "  --think  enable reasoning on models that support it; reasoning is printed dimmed\n"
-        "  --think-budget N  like --think, but close the reasoning block after N tokens so the model answers\n");
+        "  --think-budget N  like --think, but close the reasoning block after N tokens so the model answers\n"
+        "decision models:\n"
+        "       kiln-cli -m model.gguf --state \"text\" --ask noul|choice|score \"question\" [-o \"key=description\"]...\n"
+        "  -o       one option: a choice (key=description), a score level (description, lowest first),\n"
+        "           or for noul what yes / no mean (yes=..., no=...)\n");
 }
 
 static bool on_piece(kiln_channel ch, const char* piece, int32_t, void*) {
@@ -45,6 +49,8 @@ int main(int argc, char** argv) {
     int max_tokens = 128, threads = 0, n_ctx = 0;
     bool probe = false, raw = false, think = false, chat = false;
     int think_budget = 0;
+    std::string state, ask_type, ask;
+    std::vector<std::string> opt_keys, opt_descs;
     kiln_backend_kind backend = KILN_BACKEND_AUTO;
 
     for (int i = 1; i < argc; ++i) {
@@ -62,6 +68,13 @@ int main(int argc, char** argv) {
         else if (a == "--think") think = true;
         else if (a == "--think-budget") { think = true; think_budget = atoi(next()); }
         else if (a == "--chat")  chat = true;
+        else if (a == "--state") state = next();
+        else if (a == "--ask")   { ask_type = next(); ask = next(); }
+        else if (a == "-o") {
+            std::string o = next(); size_t eq = o.find('=');
+            opt_keys.push_back(eq == std::string::npos ? "" : o.substr(0, eq));
+            opt_descs.push_back(eq == std::string::npos ? o : o.substr(eq + 1));
+        }
         else if (a == "-v")      kiln_set_log_level(KILN_LOG_INFO);
         else if (a == "-vv")     kiln_set_log_level(KILN_LOG_DEBUG);
         else { usage(); return 2; }
@@ -87,7 +100,29 @@ int main(int argc, char** argv) {
     fprintf(stderr, "device:   %s | %s | %d cores | %.1f GB RAM\n", dev.soc, dev.abi, dev.cpu_cores, dev.ram_total_bytes / 1e9);
     fprintf(stderr, "backend:  %s (gpu layers: %d)\n", mi.backend_name, mi.n_gpu_layers_used);
     fprintf(stderr, "model:    %s %s, %.2fB params, %.2f GB resident, ctx_train=%d, thinking=%s\n",
-            mi.arch, mi.quant, mi.n_params / 1e9, mi.model_bytes / 1e9, mi.n_ctx_train, mi.supports_thinking ? "yes" : "no");
+            mi.arch, mi.quant, mi.n_params / 1e9, mi.model_bytes / 1e9, mi.n_ctx_train, mi.is_decision_model ? "n/a (decision model)" : mi.supports_thinking ? "yes" : "no");
+
+    if (!ask.empty()) {
+        kiln_question_type qt = ask_type == "noul" ? KILN_QUESTION_NOUL : ask_type == "choice" ? KILN_QUESTION_CHOICE : KILN_QUESTION_SCORE;
+        if (ask_type != "noul" && ask_type != "choice" && ask_type != "score") { usage(); return 2; }
+        std::vector<kiln_decision_option> opts;
+        for (size_t i = 0; i < opt_keys.size(); ++i)
+            opts.push_back({opt_keys[i].empty() ? nullptr : opt_keys[i].c_str(), opt_descs[i].c_str()});
+        kiln_decision_question q = {"question", qt, ask.c_str(), opts.data(), (int32_t)opts.size()};
+        std::vector<float> probs(opts.size() + 2);
+        kiln_decision_answer ans;
+        if (kiln_decide(c, state.empty() ? nullptr : state.c_str(), &q, probs.data(), (int32_t)probs.size(), &ans) != KILN_OK) {
+            fprintf(stderr, "decide failed: %s\n", kiln_last_error()); return 1;
+        }
+        for (int32_t i = 0; i < ans.n_probs; ++i) {
+            std::string label = qt == KILN_QUESTION_NOUL ? (i ? "yes" : "no") : qt == KILN_QUESTION_SCORE ? std::to_string(i) + " " + opt_descs[i] : opt_keys[i];
+            printf("%s %6.2f%%  %s\n", i == ans.best ? "*" : " ", probs[i] * 100, label.c_str());
+        }
+        if (qt == KILN_QUESTION_SCORE) printf("expected level: %.2f\n", ans.value);
+        fprintf(stderr, "confidence %.2f, %d tok in %.0f ms\n", ans.confidence, ans.prompt_tokens, ans.ms);
+        kiln_context_free(c); kiln_model_free(m);
+        return 0;
+    }
 
     kiln_sampling_params sp = kiln_sampling_params_default();
     sp.max_tokens = max_tokens;

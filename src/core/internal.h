@@ -29,6 +29,8 @@ public:
     virtual kiln_status generate(const RenderedPrompt& in, const kiln_sampling_params& sp,
                                  kiln_token_cb cb, void* user, kiln_gen_stats* stats) = 0;
     virtual void cancel() = 0;
+    virtual kiln_status decide(const char* state, const kiln_decision_question& q,
+                               float* probs, int32_t probs_cap, kiln_decision_answer& out) = 0;
 };
 
 class Model {

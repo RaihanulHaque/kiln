@@ -98,6 +98,8 @@ One source tree, three outputs, no copies.
 - [ ] Validate the "highest core index = biggest core" assumption on Snapdragon and MediaTek
 - [ ] GPU utilisation in kiln-bench on Metal
 - [x] KV state checkpoints (`llama_state_seq_*`) so hybrid models reuse cache across turns
+- [x] Decision models (LFM2 d1-omni, text state): `kiln_decide`, ported from llama.cpp's server
+- [ ] Decision models: images and audio (mtmd + mmproj), other families, Flutter binding
 - [ ] Tool calling: common already parses it; expose `kiln_tool` + a TOOL_CALL channel
 - [ ] Runtime ISA dispatch (i8mm / sve) instead of one baseline build
 - [ ] Context-length auto-cap from available RAM in the probe
