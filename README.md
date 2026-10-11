@@ -85,6 +85,9 @@ scripts/android-run.sh model.gguf -n 64                      # push to a phone o
 scripts/build_ios.sh                                         # xcframework for the Flutter plugin
 ```
 
+Already cloned without `--recursive`? Run `git submodule update --init --recursive` (the CMake
+configure step also tries this automatically when `third_party/llama.cpp` is empty).
+
 ## What makes it honest
 
 **Threads are pinned to the fast cores.** The probe groups cores by clock, drops the slowest

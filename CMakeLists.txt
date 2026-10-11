@@ -12,6 +12,24 @@ option(KILN_BUILD_CLI    "Build kiln-cli test harness"      ON)
 option(KILN_GPU          "Enable ggml GPU backend (Metal on Apple, Vulkan/OpenCL on Android if set)" ON)
 
 # ---- llama.cpp (pinned submodule) ----
+# A plain `git clone` (without --recursive) leaves the submodule empty; fetch it here.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/CMakeLists.txt")
+    find_package(Git QUIET)
+    if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+        message(STATUS "llama.cpp submodule missing, running: git submodule update --init --recursive")
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            RESULT_VARIABLE KILN_SUBMODULE_RESULT)
+    endif()
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/CMakeLists.txt")
+        message(FATAL_ERROR
+            "third_party/llama.cpp is empty. Run:\n"
+            "  git submodule update --init --recursive\n"
+            "or clone with: git clone --recursive https://github.com/RaihanulHaque/kiln")
+    endif()
+endif()
+
 set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
