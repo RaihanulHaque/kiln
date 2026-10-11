@@ -295,19 +295,6 @@ public:
     kiln_status create_context(const kiln_context_params& p, std::unique_ptr<kiln::Context>& out) override {
         auto c = std::make_unique<LlamaContext>(model_, tags_);
 
-        llama_context_params cp = llama_context_default_params();
-        cp.n_ctx           = p.n_ctx > 0 ? (uint32_t)p.n_ctx : 4096;
-        cp.n_batch         = p.n_batch > 0 ? (uint32_t)p.n_batch : 512;
-        cp.n_threads       = threads_;
-        cp.n_threads_batch = threads_;
-        cp.flash_attn_type = p.flash_attn ? LLAMA_FLASH_ATTN_TYPE_AUTO : LLAMA_FLASH_ATTN_TYPE_DISABLED;
-        cp.abort_callback      = LlamaContext::abort_cb;
-        cp.abort_callback_data = c.get();
-
-        c->ctx_ = llama_init_from_model(model_, cp);
-        if (!c->ctx_) return kiln::set_error(KILN_ERR_OUT_OF_MEMORY, "llama_init_from_model failed (n_ctx=" + std::to_string(cp.n_ctx) + ")");
-        c->n_batch_ = (int)cp.n_batch;
-
         // Pin worker threads to the fast cores. Without this, Android schedules ggml workers onto
         // little cores and every barrier waits for the slowest one: measured 1 thread > 5 threads on Pixel 8.
         // Benchmarking escape hatches: KILN_NO_AFFINITY=1 disables pinning,
@@ -316,7 +303,26 @@ public:
         const char* mask_s = getenv("KILN_CPU_MASK");
         uint64_t mask = fast_mask_;
         int n_threads = threads_;
-        if (mask_s && *mask_s) { mask = strtoull(mask_s, nullptr, 16); n_threads = __builtin_popcountll(mask); }
+        if (mask_s && *mask_s) {
+            mask = strtoull(mask_s, nullptr, 16);
+            if (mask) n_threads = __builtin_popcountll(mask);
+        }
+
+        llama_context_params cp = llama_context_default_params();
+        cp.n_ctx           = p.n_ctx > 0 ? (uint32_t)p.n_ctx : 4096;
+        cp.n_batch         = p.n_batch > 0 ? (uint32_t)p.n_batch : 512;
+        // must match the threadpool size below: with OpenMP (Linux builds) ggml starts cp.n_threads
+        // workers and indexes the pool's per-thread state, so a larger count reads past its end
+        cp.n_threads       = n_threads;
+        cp.n_threads_batch = n_threads;
+        cp.flash_attn_type = p.flash_attn ? LLAMA_FLASH_ATTN_TYPE_AUTO : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        cp.abort_callback      = LlamaContext::abort_cb;
+        cp.abort_callback_data = c.get();
+
+        c->ctx_ = llama_init_from_model(model_, cp);
+        if (!c->ctx_) return kiln::set_error(KILN_ERR_OUT_OF_MEMORY, "llama_init_from_model failed (n_ctx=" + std::to_string(cp.n_ctx) + ")");
+        c->n_batch_ = (int)cp.n_batch;
+
         if (mask && !(no_aff && *no_aff == '1')) {
             ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
             int set = 0;
