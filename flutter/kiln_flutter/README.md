@@ -54,7 +54,7 @@ final urgency = await ctx.decide(
 print(urgency.value);     // expected level, 0 to 2
 ```
 
-`chat` on a decision model and `decide` on a chat model both throw a `KilnException` with
+The example app has a Decide screen that uses this. `chat` on a decision model and `decide` on a chat model both throw a `KilnException` with
 `KILN_ERR_NOT_SUPPORTED`. The d1-omni weights are under Liquid AI's `lfm1.0` license, not MIT.
 
 ## Status
@@ -76,6 +76,9 @@ Desktop (macOS/Linux) works for development by passing a host build:
 - **Chat**: streaming replies with basic markdown, a Think switch on models that support it,
   reasoning that folds away once the answer starts, speed and cache reuse under each reply,
   stop, copy, and new chat.
+- **Decide**: opens instead of the chat when the loaded model is a decision model (LFM2
+  d1-omni is in the download list). Type a text and a yes / no, choice or score question, or
+  use one of three presets, and see the answer with a probability bar per option.
 
 `--dart-define=KILN_THEME=light` or `dark` forces a theme. Besides the downloader, a model can
 be copied to an Android device with

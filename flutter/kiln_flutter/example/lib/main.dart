@@ -69,7 +69,10 @@ class KilnApp extends StatelessWidget {
 
 /// A model the app offers to download. All three are small enough for a mid-range phone.
 class _CatalogModel {
-  const _CatalogModel(this.name, this.blurb, this.megabytes, this.url, [this.alias]);
+  const _CatalogModel(this.name, this.blurb, this.megabytes, this.url, [this.alias, this.decision = false]);
+
+  /// Opens the Decide screen instead of the chat.
+  final bool decision;
   final String name, blurb, url;
   final int megabytes;
 
@@ -85,8 +88,31 @@ const _catalog = [
       'LiquidAI_LFM2.5-350M_Q4_K_M.gguf'),
   _CatalogModel('Gemma 3 270M', 'Tiny and quick.', 292,
       'https://huggingface.co/unsloth/gemma-3-270m-it-GGUF/resolve/main/gemma-3-270m-it-Q8_0.gguf'),
-  _CatalogModel('Qwen3.5 0.8B', 'Smartest of the three. Can think before answering.', 533,
+  _CatalogModel('Qwen3.5 0.8B', 'Smartest of the chat models. Can think before answering.', 533,
       'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf'),
+  // Not a chat model: it opens the Decide screen. Weights are under Liquid AI's lfm1.0 license.
+  _CatalogModel('LFM2 d1-omni 600M', 'Decision model. Judges a text instead of chatting.', 407,
+      'https://huggingface.co/LiquidAI/d1-omni-600M-GGUF/resolve/main/d1-omni-600M-Q8_0.gguf', null, true),
+];
+
+/// Ready-made questions for the Decide screen, one of each kind.
+class _Preset {
+  const _Preset(this.label, this.type, this.question, [this.options = '']);
+  final String label, question, options;
+  final KilnQuestionType type;
+}
+
+const _sampleState =
+    'Hi, I ordered a blender two weeks ago and it arrived broken. I have emailed twice and nobody '
+    'answered. I want my money back today or I will dispute the charge with my bank.';
+
+const _presets = [
+  _Preset('Refund?', KilnQuestionType.yesNo, 'Is the customer asking for a refund?'),
+  _Preset('Which team?', KilnQuestionType.choice, 'Which team should handle this?',
+      'billing: Payments, refunds and invoices\nshipping: Delivery status and lost parcels\n'
+      'technical: The product does not work as expected'),
+  _Preset('How urgent?', KilnQuestionType.score, 'How urgent is this?',
+      'Can wait\nToday\nBlocking the customer now'),
 ];
 
 const _suggestions = [
@@ -147,6 +173,17 @@ class _HomePageState extends State<HomePage> {
   final _url = TextEditingController();
   final _scroll = ScrollController();
 
+  // Decide screen (shown instead of the chat when the loaded model is a decision model)
+  final _stateText = TextEditingController(text: _sampleState);
+  final _question = TextEditingController(text: _presets[0].question);
+  final _options = TextEditingController(text: _presets[0].options);
+  KilnQuestionType _qType = _presets[0].type;
+  KilnDecision? _decision;
+  bool _deciding = false;
+  final _decideScroll = ScrollController();
+
+  bool get _isDecision => _model?.info.isDecisionModel ?? false;
+
   bool get _inChat => _ctx != null && !_showLibrary;
 
   @override
@@ -162,6 +199,10 @@ class _HomePageState extends State<HomePage> {
     _input.dispose();
     _url.dispose();
     _scroll.dispose();
+    _stateText.dispose();
+    _question.dispose();
+    _options.dispose();
+    _decideScroll.dispose();
     super.dispose();
   }
 
@@ -184,7 +225,7 @@ class _HomePageState extends State<HomePage> {
     final dir = _modelDir;
     if (dir == null) return;
     final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.gguf')).toList()
-      ..sort((a, b) => a.path.compareTo(b.path));
+      ..sort((a, b) => _prettyName(_fileName(a)).toLowerCase().compareTo(_prettyName(_fileName(b)).toLowerCase()));
     if (mounted) setState(() => _models = files);
   }
 
@@ -259,13 +300,11 @@ class _HomePageState extends State<HomePage> {
     try {
       await _unload();
       final model = await _kiln!.loadModel(f.path);
-      if (model.info.isDecisionModel) {
-        await model.dispose();
-        _toast('This is a decision model. It answers typed questions with decide() and cannot chat.');
-        return;
-      }
       _model = model;
-      _ctx = await model.createContext(params: const KilnContextParams(nCtx: 4096));
+      // A decision model reads one short prompt per question, so the default context is enough.
+      _ctx = await model.createContext(
+          params: model.info.isDecisionModel ? const KilnContextParams() : const KilnContextParams(nCtx: 4096));
+      _decision = null;
       _loadedPath = f.path;
       _thinking = false;
       _showLibrary = false;
@@ -388,7 +427,8 @@ class _HomePageState extends State<HomePage> {
       },
       child: Scaffold(
         appBar: _inChat ? _chatBar(scheme) : _libraryBar(scheme),
-        body: SafeArea(child: _inChat ? _chatView(scheme) : _libraryView(scheme)),
+        body: SafeArea(
+            child: !_inChat ? _libraryView(scheme) : _isDecision ? _decideView(scheme) : _chatView(scheme)),
       ),
     );
   }
@@ -409,7 +449,7 @@ class _HomePageState extends State<HomePage> {
               child: FilledButton.tonalIcon(
                 onPressed: _openChat,
                 icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
-                label: const Text('Back to chat'),
+                label: Text(_isDecision ? 'Back to model' : 'Back to chat'),
               ),
             ),
         ],
@@ -508,7 +548,13 @@ class _HomePageState extends State<HomePage> {
       title: Text(_prettyName(_fileName(f)), maxLines: 1, overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontWeight: FontWeight.w600)),
       subtitle: Text(
-        loading ? 'Loading…' : loaded ? '${_size(f.lengthSync())}  ·  loaded' : _size(f.lengthSync()),
+        loading
+            ? 'Loading…'
+            : [
+                _size(f.lengthSync()),
+                if (_catalog.any((m) => m.decision && m.matches(_fileName(f)))) 'decision model',
+                if (loaded) 'loaded',
+              ].join('  ·  '),
         style: TextStyle(color: loaded || loading ? scheme.primary : scheme.onSurfaceVariant),
       ),
       trailing: loading
@@ -604,6 +650,224 @@ class _HomePageState extends State<HomePage> {
     ]);
   }
 
+  // ---- decide view
+
+  void _usePreset(_Preset p) => setState(() {
+        _qType = p.type;
+        _question.text = p.question;
+        _options.text = p.options;
+        _decision = null;
+      });
+
+  /// Options are typed one per line. For a choice, "key: what it means"; for a score, the
+  /// levels from lowest to highest.
+  KilnQuestion? _buildQuestion() {
+    final q = _question.text.trim();
+    if (q.isEmpty) {
+      _toast('Type a question first.');
+      return null;
+    }
+    final lines = [for (final l in _options.text.split('\n')) if (l.trim().isNotEmpty) l.trim()];
+    switch (_qType) {
+      case KilnQuestionType.yesNo:
+        return KilnQuestion.yesNo(q);
+      case KilnQuestionType.choice:
+        if (lines.length < 2) {
+          _toast('A choice needs at least two options, one per line.');
+          return null;
+        }
+        return KilnQuestion.choice(q, [
+          for (final l in lines)
+            l.contains(':')
+                ? KilnOption(l.substring(0, l.indexOf(':')).trim(), l.substring(l.indexOf(':') + 1).trim())
+                : KilnOption(l),
+        ]);
+      case KilnQuestionType.score:
+        if (lines.length < 2 || lines.length > 10) {
+          _toast('A score needs 2 to 10 levels, one per line, lowest first.');
+          return null;
+        }
+        return KilnQuestion.score(q, lines);
+    }
+  }
+
+  Future<void> _decide() async {
+    final q = _buildQuestion();
+    final ctx = _ctx;
+    if (q == null || ctx == null || _deciding) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _deciding = true);
+    try {
+      final text = _stateText.text.trim();
+      final d = await ctx.decide(q, state: text.isEmpty ? null : text);
+      if (!mounted) return;
+      setState(() => _decision = d);
+      // bring the answer card into view
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_decideScroll.hasClients) {
+          _decideScroll.animateTo(_decideScroll.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+        }
+      });
+    } catch (e) {
+      _toast(e is KilnException ? e.message : '$e');
+    } finally {
+      if (mounted) setState(() => _deciding = false);
+    }
+  }
+
+  InputDecoration _fieldStyle(ColorScheme scheme, String hint) => InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(color: scheme.onSurfaceVariant),
+        isDense: true,
+        filled: true,
+        fillColor: scheme.surfaceContainerLow,
+        contentPadding: const EdgeInsets.all(16),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+      );
+
+  Widget _decideView(ColorScheme scheme) {
+    void edited(String _) {
+      if (_decision != null) setState(() => _decision = null); // the answer no longer matches the inputs
+    }
+
+    return ListView(controller: _decideScroll, padding: const EdgeInsets.fromLTRB(20, 4, 20, 32), children: [
+      _hint('A decision model does not write text. It reads the text below and scores every '
+          'answer to your question in one pass.', scheme),
+      _sectionTitle('Text to judge', scheme),
+      TextField(
+        controller: _stateText,
+        minLines: 3,
+        maxLines: 8,
+        onChanged: edited,
+        style: const TextStyle(fontSize: 15, height: 1.4),
+        decoration: _fieldStyle(scheme, 'A message, a review, a note…'),
+      ),
+      _sectionTitle('Question', scheme),
+      Wrap(spacing: 8, runSpacing: 4, children: [
+        for (final p in _presets)
+          ActionChip(
+            label: Text(p.label),
+            side: BorderSide(color: scheme.outlineVariant),
+            shape: const StadiumBorder(),
+            onPressed: () => _usePreset(p),
+          ),
+      ]),
+      const SizedBox(height: 12),
+      SizedBox(
+        width: double.infinity,
+        child: SegmentedButton<KilnQuestionType>(
+          showSelectedIcon: false,
+          segments: const [
+            ButtonSegment(value: KilnQuestionType.yesNo, label: Text('Yes / no')),
+            ButtonSegment(value: KilnQuestionType.choice, label: Text('Choice')),
+            ButtonSegment(value: KilnQuestionType.score, label: Text('Score')),
+          ],
+          selected: {_qType},
+          onSelectionChanged: (v) => setState(() {
+            _qType = v.first;
+            _decision = null;
+          }),
+        ),
+      ),
+      const SizedBox(height: 12),
+      TextField(
+        controller: _question,
+        minLines: 1,
+        maxLines: 3,
+        onChanged: edited,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: _fieldStyle(scheme, 'Ask something about the text'),
+      ),
+      if (_qType != KilnQuestionType.yesNo) ...[
+        const SizedBox(height: 12),
+        TextField(
+          controller: _options,
+          minLines: 3,
+          maxLines: 10,
+          onChanged: edited,
+          style: const TextStyle(fontSize: 14.5, height: 1.5),
+          decoration: _fieldStyle(scheme, ''),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+          child: Text(
+              _qType == KilnQuestionType.choice
+                  ? 'One option per line. Add what it means after a colon.'
+                  : 'One level per line, from lowest to highest (2 to 10).',
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+        ),
+      ],
+      const SizedBox(height: 20),
+      FilledButton(
+        onPressed: _deciding ? null : _decide,
+        style: FilledButton.styleFrom(
+            minimumSize: const Size.fromHeight(52), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+        child: _deciding
+            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4))
+            : const Text('Decide', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+      ),
+      if (_decision != null) _decisionCard(_decision!, scheme),
+    ]);
+  }
+
+  Widget _decisionCard(KilnDecision d, ColorScheme scheme) {
+    final headline = switch (d.type) {
+      KilnQuestionType.yesNo => d.yes ? 'Yes' : 'No',
+      KilnQuestionType.choice => d.bestKey,
+      KilnQuestionType.score => d.bestKey,
+    };
+    final detail = switch (d.type) {
+      KilnQuestionType.score =>
+        'level ${d.best + 1} of ${d.keys.length}  ·  average ${(d.value + 1).toStringAsFixed(1)}',
+      _ => '${(d.probabilities[d.best] * 100).toStringAsFixed(1)}% sure',
+    };
+    return Container(
+      margin: const EdgeInsets.only(top: 24),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('ANSWER',
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 1.1, color: scheme.onSurfaceVariant)),
+        const SizedBox(height: 6),
+        Text(headline, style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: scheme.primary)),
+        const SizedBox(height: 2),
+        Text(detail, style: TextStyle(color: scheme.onSurfaceVariant)),
+        const SizedBox(height: 16),
+        for (var i = 0; i < d.keys.length; i++)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(
+                  child: Text(d.type == KilnQuestionType.yesNo ? (i == 1 ? 'Yes' : 'No') : d.keys[i],
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontWeight: i == d.best ? FontWeight.w600 : FontWeight.w400)),
+                ),
+                Text('${(d.probabilities[i] * 100).toStringAsFixed(1)}%',
+                    style: TextStyle(fontFamily: 'monospace', fontSize: 13, color: scheme.onSurfaceVariant)),
+              ]),
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: d.probabilities[i].clamp(0.0, 1.0),
+                  minHeight: 8,
+                  backgroundColor: scheme.surfaceContainerHigh,
+                  color: i == d.best ? scheme.primary : scheme.onSurfaceVariant.withValues(alpha: 0.45),
+                ),
+              ),
+            ]),
+          ),
+        Text('${d.promptTokens} tokens read  ·  ${d.ms.round()} ms',
+            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+      ]),
+    );
+  }
+
   // ---- chat view
 
   PreferredSizeWidget _chatBar(ColorScheme scheme) {
@@ -636,11 +900,12 @@ class _HomePageState extends State<HomePage> {
               onSelected: (v) => setState(() => _thinking = v),
             ),
           ),
-        IconButton(
-          tooltip: 'New chat',
-          icon: const Icon(Icons.edit_square),
-          onPressed: _turns.isEmpty ? null : _newChat,
-        ),
+        if (!info.isDecisionModel)
+          IconButton(
+            tooltip: 'New chat',
+            icon: const Icon(Icons.edit_square),
+            onPressed: _turns.isEmpty ? null : _newChat,
+          ),
         const SizedBox(width: 4),
       ],
     );

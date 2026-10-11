@@ -56,10 +56,11 @@ gen.cancel();                            // from anywhere, any time
 
 Package: [flutter/kiln_flutter](flutter/kiln_flutter/README.md). Everything blocking runs on a
 background isolate. The example app in `flutter/kiln_flutter/example` is a full chat UI with
-a model downloader, thinking toggle, collapsible reasoning and per-reply stats.
+a model downloader, thinking toggle, collapsible reasoning and per-reply stats, plus a Decide
+screen for decision models.
 
 <p>
-<img src="docs/img/01_picker.png" width="180"> <img src="docs/img/04_thinking_multiturn.png" width="180"> <img src="docs/img/03_reply.png" width="180"> <img src="docs/img/05_light.png" width="180">
+<img src="docs/img/01_picker.png" width="180"> <img src="docs/img/04_thinking_multiturn.png" width="180"> <img src="docs/img/03_reply.png" width="180"> <img src="docs/img/06_decide.png" width="180"> <img src="docs/img/05_light.png" width="180">
 </p>
 
 ### C
