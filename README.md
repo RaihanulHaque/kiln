@@ -107,8 +107,9 @@ reasoning, with `reasoning_tokens` in the stats, so a UI can show a collapsible 
 block and count tokens truthfully.
 
 **Multi-turn reuses the KV cache.** Pass the whole history; kiln evaluates only the suffix
-that changed. Hybrid models (LFM2, Qwen3.5) cannot rewind partial state, so they fall back
-to a full re-read when history diverges. Correct, slower, reported in `cached_tokens`.
+that changed. Hybrid models (LFM2, Qwen3.5) cannot rewind partial state, so kiln saves a
+checkpoint of it at the end of each turn's history and rewinds to that when the template
+rewrites the reply that follows. Reported in `cached_tokens`.
 
 **Stats are per call.** Prompt and generation tok/s, cache hits, why it stopped. On a phone
 the number falls as the chip heats; kiln lets the app see that instead of hiding it.

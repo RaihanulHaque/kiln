@@ -58,7 +58,7 @@ static void test_bad_loads(const std::string& dir) {
     CHECK(strlen(kiln_last_error()) > 0, "");
 }
 
-static void test_model(const std::string& path, const char* label, bool expect_thinking, bool expect_reuse) {
+static void test_model(const std::string& path, const char* label, bool expect_thinking) {
     SECTION(label);
     if (!exists(path)) { fprintf(stderr, "  SKIP (missing %s)\n", path.c_str()); return; }
 
@@ -124,8 +124,7 @@ static void test_model(const std::string& path, const char* label, bool expect_t
     kiln_chat_message t2[] = { t1[0], {"assistant", a1.c_str()}, {"user", "What is the capital of Germany? Answer in one word."} };
     s = kiln_chat(c, t2, 3, &co, &sp, Capture::cb, &cap2, &st2);
     CHECK(s == KILN_OK, "%s", kiln_last_error());
-    if (expect_reuse) CHECK(st2.cached_tokens > 0, "no prefix reuse on turn 2");
-    else if (st2.cached_tokens == 0) fprintf(stderr, "  (no prefix reuse: hybrid model + template rewrites history; known limitation)\n");
+    CHECK(st2.cached_tokens > 0, "no prefix reuse on turn 2");
     CHECK(st2.cached_tokens < st2.prompt_tokens, "");
     CHECK(st2.prompt_tokens > st1.prompt_tokens, "");
     fprintf(stderr, "  t2: '%s' (prompt %d, cached %d)\n", cap2.answer.c_str(), st2.prompt_tokens, st2.cached_tokens);
@@ -136,6 +135,7 @@ static void test_model(const std::string& path, const char* label, bool expect_t
     s = kiln_chat(c, t2, 3, &co, &sp, Capture::cb, &cap2b, &st2b);
     CHECK(s == KILN_OK, "%s", kiln_last_error());
     CHECK(!cap2b.answer.empty(), "");
+    CHECK(st2b.cached_tokens > 0, "no prefix reuse on regenerate");
 
     // stop from callback
     Capture cap3; cap3.stop_after = 3; kiln_gen_stats st3;
@@ -210,10 +210,10 @@ int main(int argc, char** argv) {
     kiln_set_log_level(KILN_LOG_ERROR);
     test_probe();
     test_bad_loads(dir);
-    //                                                       label           thinking  reuse
-    test_model(dir + "/LiquidAI_LFM2.5-350M_Q4_K_M.gguf", "LFM2.5-350M",  false,    true);
-    test_model(dir + "/Qwen3.5-0.8B-Q4_K_M.gguf",         "Qwen3.5-0.8B", true,     false);
-    test_model(dir + "/gemma-3-270m-it-Q8_0.gguf",         "Gemma3-270M",  false,    true);
+    //                                                       label           thinking
+    test_model(dir + "/LiquidAI_LFM2.5-350M_Q4_K_M.gguf", "LFM2.5-350M",  false);
+    test_model(dir + "/Qwen3.5-0.8B-Q4_K_M.gguf",         "Qwen3.5-0.8B", true);
+    test_model(dir + "/gemma-3-270m-it-Q8_0.gguf",         "Gemma3-270M",  false);
     fprintf(stderr, "\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

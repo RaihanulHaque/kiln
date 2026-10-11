@@ -15,6 +15,10 @@ void        log(kiln_log_level lvl, const char* fmt, ...);
 struct RenderedPrompt {
     std::string prompt;
     bool        starts_in_reasoning = false;   // template already opened the think block
+    // Leading part of `prompt` that the next turn's prompt will also start with: the history
+    // without the assistant prefix. Empty if unknown (raw kiln_generate). Hybrid models save
+    // their state here, because templates often rewrite the assistant reply that follows.
+    std::string stable_prefix;
 };
 
 class Context {

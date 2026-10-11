@@ -119,9 +119,12 @@ hundredth.
 For a chat, every turn's prompt is the whole history plus the new message. kiln compares the
 new prompt's tokens with what the cache already holds and evaluates only the part that
 changed, usually just the new user message. That is `cached_tokens` in the stats. Some model
-families (LFM2, Qwen3.5, Mamba) keep recurrent state that cannot be partially rewound; when
-the history diverges before the end of the cache, kiln clears it and re-reads the whole
-prompt. Slower, still correct.
+families (LFM2, Qwen3.5, Mamba) keep recurrent state that cannot be partially rewound. For
+those, kiln saves a copy of that state (a checkpoint) at the end of each turn's history,
+just before the assistant's reply. Templates often rewrite the previous reply on the next turn
+(Qwen3.5 drops its think block), so the next turn rewinds to the checkpoint and re-reads only
+the last reply and the new message. Without a usable checkpoint it re-reads the whole prompt:
+slower, still correct.
 
 ## Reasoning models and channels
 

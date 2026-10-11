@@ -45,6 +45,7 @@ Not yet done, and required:
 
 - Android arm64 only; no x86_64 emulator build; no iOS
 - CPU backend only on Android (Vulkan preset is experimental and unmeasured)
-- Hybrid models re-evaluate the full prompt when history diverges before the cache end
+- Hybrid models re-read the last assistant reply each turn (the template rewrites it), and the
+  whole prompt when history diverges before the previous turn's checkpoint
 - Tool calling not exposed
 - ISA baseline is dotprod+fp16; i8mm/SVE present on many phones are not used yet
