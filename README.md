@@ -29,9 +29,11 @@ verified on Linux x86 (Ryzen 5 8500G, CPU) only. The hardware below was verified
 | Pixel 8 (Tensor G3, Android 16) | llama.cpp CPU, 5 threads pinned | 127 C checks, 10 Flutter integration tests, benchmarks |
 | iPhone 16 Pro (A18 Pro, iOS 26.6) | llama.cpp Metal | 7 of 9 Flutter integration tests; remaining 2 hit a Dart bug fixed since, not yet re-run |
 | MacBook Pro M4 Pro | llama.cpp Metal / CPU | 125 C checks, benchmarks |
+| Ryzen 5 8500G desktop (Linux x86_64), v0.2.0 | llama.cpp CPU | 154 C checks |
 
-Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M.
-Not yet: Snapdragon or MediaTek phones, 4 GB RAM devices, x86 emulators, Linux desktop.
+Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M;
+on Linux only, the decision model LFM2 d1-omni 600M.
+Not yet: Snapdragon or MediaTek phones, 4 GB RAM devices, x86 emulators.
 See the [release checklist](docs/RELEASE.md) for what gates a pub.dev release.
 
 ## Quick start
@@ -155,6 +157,7 @@ src/core/                    C API implementation, backend registry, error plumb
 src/probe/                   device probe: SoC, cores, clocks, RAM, ISA features
 src/backends/llamacpp/       the guaranteed-tier backend
 tools/kiln-cli, kiln-bench   test harness and resource benchmark
+tools/barrier-lab            standalone experiment: how ggml's per-op barrier reacts to slow cores
 tests/                       C test suite (host and device)
 flutter/kiln_flutter/        Flutter plugin, example app, integration test
 scripts/                     model download, adb runners, benchmarks, vendoring, iOS build, brand assets
@@ -165,13 +168,13 @@ third_party/llama.cpp        pinned submodule
 ## Tests
 
 ```bash
-scripts/fetch_models.sh                                      # the three test GGUFs into models/ (~1 GB)
+scripts/fetch_models.sh                                      # the four test GGUFs into models/ (~1.4 GB)
 ./build/host/kiln-tests models                               # C suite on the host
 scripts/android-test.sh                                      # C suite on a phone over adb
 cd flutter/kiln_flutter/example && flutter test integration_test -d <device>
 ```
 
-The C suite needs the three test GGUFs in `models/` (`scripts/fetch_models.sh`); missing ones are skipped. The Flutter
+The C suite needs the four test GGUFs in `models/` (`scripts/fetch_models.sh`); missing ones are skipped. The Flutter
 integration test downloads what it needs. Add `--dart-define=KILN_SPEED=true` for a
 per-model speed run through the plugin.
 

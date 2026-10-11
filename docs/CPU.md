@@ -110,6 +110,8 @@ highest-numbered of those cores. Correct on 1+4+4 and 4+4 layouts. Wrong on:
   only mix tiers whose frequencies are within ~10% of each other.
 - 2+6 budget layouts: 2 fast threads may lose to 6 slow ones on bandwidth. Unknown without
   measuring.
+- x86 with SMT, and chips whose cores differ but report one max frequency (§8): the probe sees
+  identical cores, builds no mask, does not pin, and counts hyperthreads as cores.
 
 **Direction**: measure, don't assume. The probe gives candidate core sets (fastest cluster
 only, fastest two clusters, all-but-little, everything). On first run with a model, kiln can
@@ -141,3 +143,58 @@ back-to-back runs. Look for:
 - **MHz**: if two configs reach the same clock floor, the one with more useful threads wins.
   If a config with fewer threads keeps a higher clock, it is converting heat headroom into
   speed.
+
+## 8. A desktop case: Ryzen 5 8500G (x86, SMT, two kinds of core)
+
+Measured on Linux, 2026-10-11, with `tools/barrier-lab` and `kiln-bench`. The chip has 2 Zen 4
+cores and 4 smaller Zen 4c cores, each with two hardware threads: 12 logical CPUs, where CPU
+*n* and CPU *n+6* share a core.
+
+**The frequency label does not show the difference.** `cpuinfo_max_freq` (and `lscpu`) report
+5076 MHz for all 12 CPUs. The same work on one core at a time:
+
+| core | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| ms per op (barrier-lab, compute) | 19.9 | 27.7 | 27.7 | 27.9 | 20.0 | 27.6 |
+
+Cores 0 and 4 are about 40% faster alone, and about 25% faster with all six busy: with a fixed
+1/N split, their threads spend 20% of every op waiting at the barrier. The probe groups by max
+frequency, so it sees six equal cores. `acpi_cppc/highest_perf` may rank them correctly; that
+was not checked.
+
+**ggml softens the slowest-worker rule for big matmuls only.** `ggml_compute_forward_mul_mat`
+hands out 16- or 64-row chunks from an atomic counter when there are at least 4 chunks per
+thread, so a fast thread takes more. Below that, and for every non-matmul op, each thread gets
+a fixed share and the barrier after the op waits for the slowest. In the lab (this one run on
+a 4-core cloud VM, not the 8500G), one thread with 2x the work cost 15.9 ms per op with a
+fixed split and 9.3 ms with chunks, against 8.9 ms with equal threads.
+
+**Decode on this machine, Qwen3.5 0.8B Q4_K_M** (`KILN_CPU_MASK`, 3 runs of 256 tokens, quiet
+machine):
+
+| threads | gen tok/s | prompt ms (65 tok) |
+|---|---|---|
+| default: 8, unpinned | 44.6 | 153 |
+| `11`: the 2 Zen 4 cores | 43.8 | 263 |
+| `41`: one Zen 4 core, both hardware threads | 36.6 | 425 |
+| `3f`: 6 cores, one thread each | 44.5 | 156 |
+| `fff`: all 12 hardware threads | 32.5 | 198 |
+
+What this shows:
+
+- Decode hits the memory wall with two cores: 2, 6 and 8 threads all give about 44 tok/s.
+- Prompt eval is compute bound, so six cores beat two (156 ms against 263 ms), slow cores included.
+- Two threads on one core hurt real kernels: 16% slower than two cores, and 12 threads are 27%
+  slower than 6. The lab's compute mode shows the opposite (6 to 8 threads gave 1.31x), because
+  its dependent multiply chain leaves most of a core idle. ggml's kernels do not.
+- Pinning made no difference on an idle desktop (44.6 unpinned, 44.5 pinned). On a busy one it
+  matters a lot: with Zoom and a browser running, `fff` fell to about 6 tok/s while `3f` held 32.
+
+So on this chip the best set is one thread per physical core, and kiln's default of 8 unpinned
+threads only matches it because of the 8-thread cap. A 4-core / 8-thread laptop would get two
+workers per core. The probe change: count physical cores from
+`/sys/devices/system/cpu/cpu*/topology/core_id`, and do not trust max frequency to tell cores
+apart. Not implemented yet.
+
+Benchmark on a quiet machine: the default configuration dropped by a third (44 to 30 tok/s)
+while Zoom and a browser were running, on unchanged code.
