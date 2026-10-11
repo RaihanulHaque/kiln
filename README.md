@@ -60,7 +60,7 @@ a model downloader, thinking toggle, collapsible reasoning and per-reply stats, 
 screen for decision models.
 
 <p>
-<img src="docs/img/01_picker.png" width="180"> <img src="docs/img/04_thinking_multiturn.png" width="180"> <img src="docs/img/03_reply.png" width="180"> <img src="docs/img/06_decide.png" width="180"> <img src="docs/img/05_light.png" width="180">
+<img src="docs/img/app_library.png" width="180"> <img src="docs/img/app_chat_thinking.png" width="180"> <img src="docs/img/app_chat_reply.png" width="180"> <img src="docs/img/app_decide.png" width="180"> <img src="docs/img/app_library_light.png" width="180">
 </p>
 
 ### C
