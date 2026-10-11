@@ -2,6 +2,11 @@
 
 What has to be true before a version is tagged, and before `kiln_flutter` goes to pub.dev.
 
+**Published:** `kiln_flutter` 0.2.0 on 2026-10-12, Android only, from commit c485fcb. Afterwards
+a fresh `flutter create` app installed it with `flutter pub add kiln_flutter`, built, and
+replied at 94 tok/s on the Pixel 8. The unchecked items below were accepted as known gaps for
+that release and still apply to the next one.
+
 ## Before tagging the core
 
 - [ ] `cmake --build --preset host && ./build/host/kiln-tests models` green on macOS

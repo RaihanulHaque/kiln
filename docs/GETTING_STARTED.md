@@ -14,7 +14,15 @@ iOS is in progress and not supported yet; see [iOS](#ios).
 
 ## 1. Add the dependency
 
-kiln is not on pub.dev yet. Point `pubspec.yaml` at the tagged release on GitHub:
+```bash
+flutter pub add kiln_flutter
+flutter pub add path_provider http    # to find a folder for the model file, and to download it
+```
+
+That is all: nothing to clone. The package carries the native code, and the first build
+compiles it.
+
+To follow the repo instead of a release, depend on it from GitHub:
 
 ```yaml
 dependencies:
@@ -22,17 +30,7 @@ dependencies:
     git:
       url: https://github.com/RaihanulHaque/kiln.git
       path: flutter/kiln_flutter
-      ref: v0.2.0
-  path_provider: ^2.1.0   # to find a folder for the model file
-  http: ^1.2.0            # to download the model
 ```
-
-```bash
-flutter pub get
-```
-
-You do not clone anything yourself. Flutter fetches the repo, and the first build fetches
-llama.cpp and compiles the native library.
 
 ## 2. Two Android settings
 
@@ -219,7 +217,7 @@ flutter build apk --release --target-platform android-arm64
 flutter build appbundle --release --target-platform android-arm64
 ```
 
-The first build compiles llama.cpp and takes two to three minutes; later builds are quick.
+The first build compiles the native code and takes two to three minutes; later builds are quick.
 Measure speed with a release build on a cool phone: a phone that has been working hard for a
 few minutes slows its processor down and can run at half speed.
 
@@ -239,8 +237,7 @@ flutter run --release
 **In progress. Not supported yet.**
 
 kiln built and ran on an iPhone 16 Pro at v0.1.0, using the phone's GPU. For v0.2.0 it has not
-been run again, and the GitHub dependency above does not work for iOS, because iOS needs a
-native framework that is built by a script and is not stored in the repo.
+been run again, so the pub.dev package is Android only.
 
 If you want to try it anyway, on a Mac with Xcode and a clone of this repo:
 
@@ -248,7 +245,8 @@ If you want to try it anyway, on a Mac with Xcode and a clone of this repo:
 scripts/build_ios.sh          # builds flutter/kiln_flutter/ios/Frameworks/kiln.xcframework
 ```
 
-Then depend on the plugin by path (`kiln_flutter: {path: <clone>/flutter/kiln_flutter}`).
+Add `ios: {ffiPlugin: true}` back under `platforms` in the plugin's `pubspec.yaml`, then depend
+on the plugin by path (`kiln_flutter: {path: <clone>/flutter/kiln_flutter}`).
 Expect rough edges, and please open an issue with what you find.
 
 ## When something goes wrong

@@ -34,27 +34,24 @@ from v0.1.0 (2026-10-10), and the benchmarks were not repeated for v0.2.0:
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
 and the decision model LFM2 d1-omni 600M (C API, and `decide` in the Flutter plugin on the Pixel 8).
 **iOS is in progress.** It built and ran on an iPhone at v0.1.0, but it has not been re-run for
-v0.2.0 and cannot be installed from the GitHub dependency yet. Use Android for now.
+v0.2.0 and is not part of the pub.dev package. Use Android for now.
 
 Not yet: Snapdragon or MediaTek phones, 4 GB RAM devices, x86 emulators.
-See the [release checklist](docs/RELEASE.md) for what gates a pub.dev release.
+`kiln_flutter` 0.2.0 is on pub.dev as an Android-only package. The
+[release checklist](docs/RELEASE.md) lists what is still open.
 
 ## Quick start
 
 ### Flutter
 
-Add it to `pubspec.yaml` straight from GitHub (nothing to clone), set `minSdk = 29`, and run on
-an arm64 Android phone. **[Getting started](docs/GETTING_STARTED.md)** walks through every
-step, from an empty project to a first chat and a first decision.
+[`kiln_flutter`](https://pub.dev/packages/kiln_flutter) is on pub.dev:
 
-```yaml
-dependencies:
-  kiln_flutter:
-    git:
-      url: https://github.com/RaihanulHaque/kiln.git
-      path: flutter/kiln_flutter
-      ref: v0.2.0
+```bash
+flutter pub add kiln_flutter
 ```
+
+Set `minSdk = 29` and run on an arm64 Android phone. **[Getting started](docs/GETTING_STARTED.md)**
+walks through every step, from an empty project to a first chat and a first decision.
 
 ```dart
 final kiln  = await Kiln.create();
