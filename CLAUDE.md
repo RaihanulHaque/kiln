@@ -73,7 +73,7 @@ macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes
 - iOS: the items already listed in `docs/RELEASE.md`.
 - Benchmarks on 0.2.0. Run them on a cool phone: after the test suites the Pixel 8 capped its
   fast cores at 1.07 of 2.37 GHz and LFM2.5 ran at 55 tok/s instead of about 105.
-- pub.dev: not published. `docs/RELEASE.md` has the steps and what is still open.
+- pub.dev: `scripts/publish_flutter.sh` publishes; the package is Android only (no `ios` in the pubspec).
 
 Known gaps: decision models take a text state only (no images or audio,
 only the lfm2-d1-omni family); the probe counts hyperthreads as cores and trusts max frequency

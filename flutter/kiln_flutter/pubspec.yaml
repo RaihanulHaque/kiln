@@ -1,10 +1,10 @@
 name: kiln_flutter
-description: "On-device LLM runtime for Flutter. Honest about what it runs on."
+description: "On-device LLM runtime for Flutter on Android: chat, thinking and decision models from GGUF files, with honest stats about what actually ran."
 version: 0.2.0
 repository: https://github.com/RaihanulHaque/kiln
 issue_tracker: https://github.com/RaihanulHaque/kiln/issues
 topics: [llm, on-device, llama-cpp, ffi, android]
-homepage:
+homepage: https://github.com/RaihanulHaque/kiln
 
 environment:
   sdk: ^3.12.2
@@ -30,6 +30,6 @@ flutter:
     platforms:
       android:
         ffiPlugin: true
-      ios:
-        ffiPlugin: true
+      # iOS is in progress and deliberately not declared: it has not been re-run since v0.1.0.
+      # To work on it from a clone, add back `ios: {ffiPlugin: true}` and run scripts/build_ios.sh.
 
