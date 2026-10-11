@@ -213,6 +213,7 @@ class KilnGenStats {
     required this.genTps,
     required this.stoppedByEos,
     required this.stoppedByUser,
+    this.reasoningTruncated = false,
   });
   factory KilnGenStats.fromNative(b.kiln_gen_stats s) => KilnGenStats(
         promptTokens: s.prompt_tokens,
@@ -225,26 +226,32 @@ class KilnGenStats {
         genTps: s.gen_tps,
         stoppedByEos: s.stopped_by_eos,
         stoppedByUser: s.stopped_by_user,
+        reasoningTruncated: s.reasoning_truncated,
       );
   final int promptTokens, cachedTokens, generatedTokens, reasoningTokens;
   final double promptMs, genMs, promptTps, genTps;
   final bool stoppedByEos, stoppedByUser;
 
+  /// The thinking budget (`maxReasoningTokens`) was reached and kiln closed the think block.
+  final bool reasoningTruncated;
+
   Map<String, Object> toMap() => {
         'promptTokens': promptTokens, 'cachedTokens': cachedTokens, 'generatedTokens': generatedTokens,
         'reasoningTokens': reasoningTokens, 'promptMs': promptMs, 'genMs': genMs,
         'promptTps': promptTps, 'genTps': genTps, 'stoppedByEos': stoppedByEos, 'stoppedByUser': stoppedByUser,
+        'reasoningTruncated': reasoningTruncated,
       };
   factory KilnGenStats.fromMap(Map m) => KilnGenStats(
         promptTokens: m['promptTokens'], cachedTokens: m['cachedTokens'], generatedTokens: m['generatedTokens'],
         reasoningTokens: m['reasoningTokens'], promptMs: m['promptMs'], genMs: m['genMs'],
         promptTps: m['promptTps'], genTps: m['genTps'], stoppedByEos: m['stoppedByEos'], stoppedByUser: m['stoppedByUser'],
+        reasoningTruncated: m['reasoningTruncated'] ?? false,
       );
 
   @override
   String toString() =>
       'prompt $promptTokens tok ($cachedTokens cached) ${promptMs.round()} ms, '
-      'gen $generatedTokens tok ($reasoningTokens reasoning) ${genMs.round()} ms, '
+      'gen $generatedTokens tok ($reasoningTokens reasoning${reasoningTruncated ? ', cut at budget' : ''}) ${genMs.round()} ms, '
       '${genTps.toStringAsFixed(1)} tok/s'
       '${stoppedByEos ? ' [eos]' : stoppedByUser ? ' [stopped]' : ''}';
 }

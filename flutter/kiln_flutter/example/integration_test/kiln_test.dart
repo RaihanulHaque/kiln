@@ -241,13 +241,17 @@ void main() {
       final ctx = await m.createContext(params: const KilnContextParams(nCtx: 4096));
       try {
         final gen = ctx.chat([const KilnChatMessage.user('What is 17 * 23? Think briefly, then answer.')],
-            enableThinking: true, sampling: const KilnSamplingParams(maxTokens: 1500, seed: 7));
+            enableThinking: true, maxReasoningTokens: 256,
+            sampling: const KilnSamplingParams(maxTokens: 1500, seed: 7, repeatPenalty: 1.0));
         final reasoning = StringBuffer(), answer = StringBuffer();
         await for (final p in gen.pieces) {
           (p.isReasoning ? reasoning : answer).write(p.text);
         }
         final st = await gen.stats;
         expect(st.reasoningTokens, greaterThan(0));
+        expect(st.reasoningTokens, lessThanOrEqualTo(256));
+        expect(st.reasoningTruncated, st.reasoningTokens == 256);
+        expect(answer.toString().trim(), isNotEmpty);
         expect(answer.toString(), isNot(contains('<think>')));
         expect(reasoning.toString(), isNot(contains('</think>')));
         if (st.stoppedByEos) expect(answer.toString(), contains('391'));

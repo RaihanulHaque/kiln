@@ -124,7 +124,8 @@ class _HomePageState extends State<HomePage> {
       for (final t in _turns)
         if (!identical(t, reply)) KilnChatMessage(t.role, t.text),
     ];
-    final gen = _ctx!.chat(history, enableThinking: _thinking && _model!.info.supportsThinking);
+    // 512-token thinking budget: small models such as Qwen3.5 0.8B rarely stop thinking on their own
+    final gen = _ctx!.chat(history, enableThinking: _thinking && _model!.info.supportsThinking, maxReasoningTokens: 512);
     _gen = gen;
     gen.pieces.listen((p) {
       setState(() {

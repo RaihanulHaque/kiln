@@ -163,6 +163,9 @@ typedef struct kiln_chat_message {
 typedef struct kiln_chat_options {
     bool add_assistant_prefix;    /* append the "assistant:" turn opener (true for generation) */
     bool enable_thinking;         /* reasoning models only. false = answer directly. Ignored if unsupported. */
+    int32_t max_reasoning_tokens; /* thinking budget, kiln_chat only: after this many reasoning tokens kiln closes
+                                     the think block itself and the model goes on to answer. <= 0 = unlimited.
+                                     Small models often never stop thinking on their own. */
 } kiln_chat_options;
 
 KILN_API kiln_chat_options kiln_chat_options_default(void);
@@ -214,6 +217,7 @@ typedef struct kiln_gen_stats {
     double   gen_tps;
     bool     stopped_by_eos;
     bool     stopped_by_user;
+    bool     reasoning_truncated; /* max_reasoning_tokens was reached and kiln closed the think block */
 } kiln_gen_stats;
 
 /* High-level, recommended. Renders msgs with the model's template, reuses whatever

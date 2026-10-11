@@ -168,18 +168,32 @@ static void test_model(const std::string& path, const char* label, bool expect_t
         Capture cap6; kiln_gen_stats st6;
         kiln_chat_options think = kiln_chat_options_default(); think.enable_thinking = true;
         kiln_chat_message t6[] = { {"user", "What is 17 * 23? Think step by step, then give the number."} };
-        auto sp6 = kiln_sampling_params_default(); sp6.max_tokens = 3000; sp6.seed = 7;   // greedy loops forever in think mode on 0.8B
+        // Qwen3.5 0.8B rarely closes its think block on its own (any sampling), so give it a budget:
+        // kiln closes the block after 256 reasoning tokens and the model goes on to answer.
+        // Repeat penalty off: it made the answer loop more often (13 vs 16 of 16 runs finished).
+        think.max_reasoning_tokens = 256;
+        auto sp6 = kiln_sampling_params_default(); sp6.max_tokens = 1500; sp6.seed = 7; sp6.repeat_penalty = 1.0f;
         s = kiln_chat(c, t6, 1, &think, &sp6, Capture::cb, &cap6, &st6);
         CHECK(s == KILN_OK, "%s", kiln_last_error());
         CHECK(st6.reasoning_tokens > 0, "thinking on but no reasoning tokens");
+        CHECK(st6.reasoning_tokens <= 256, "budget 256 but %d reasoning tokens", st6.reasoning_tokens);
+        CHECK(st6.reasoning_truncated == (st6.reasoning_tokens == 256), "truncated=%d at %d reasoning tokens", st6.reasoning_truncated, st6.reasoning_tokens);
         CHECK(cap6.answer.find("<think>") == std::string::npos && cap6.answer.find("</think>") == std::string::npos, "tags leaked into answer: %s", cap6.answer.c_str());
         CHECK(cap6.reasoning.find("<think>") == std::string::npos && cap6.reasoning.find("</think>") == std::string::npos, "tags leaked into reasoning");
         CHECK(st6.reasoning_tokens == 0 || !cap6.reasoning.empty(), "reasoning tokens counted but nothing emitted");
-        fprintf(stderr, "  think: reasoning=%d tok, answer='%.60s'\n", st6.reasoning_tokens, cap6.answer.c_str());
-        if (st6.stopped_by_eos) {
-            CHECK(!cap6.answer.empty(), "finished but empty answer channel");
-            CHECK(cap6.answer.find("391") != std::string::npos, "answer='%s'", cap6.answer.c_str());
-        } else fprintf(stderr, "  (did not finish thinking within budget; answer checks skipped)\n");
+        fprintf(stderr, "  think: reasoning=%d tok%s, answer='%.60s'\n", st6.reasoning_tokens, st6.reasoning_truncated ? " (cut at budget)" : "", cap6.answer.c_str());
+        CHECK(!cap6.answer.empty(), "empty answer channel");
+        // sampling is not bit-identical across backends, so the final number is only checked on a clean finish
+        if (st6.stopped_by_eos) CHECK(cap6.answer.find("391") != std::string::npos, "answer='%s'", cap6.answer.c_str());
+        else fprintf(stderr, "  (answer did not finish within %d tokens; number check skipped)\n", sp6.max_tokens);
+
+        // without a budget nothing is cut, and the flag stays off
+        Capture cap6b; kiln_gen_stats st6b;
+        think.max_reasoning_tokens = 0; sp6.max_tokens = 40;
+        kiln_context_reset(c);
+        s = kiln_chat(c, t6, 1, &think, &sp6, Capture::cb, &cap6b, &st6b);
+        CHECK(s == KILN_OK && !st6b.reasoning_truncated && st6b.reasoning_tokens == st6b.generated_tokens, "no budget: truncated=%d reasoning=%d of %d",
+              st6b.reasoning_truncated, st6b.reasoning_tokens, st6b.generated_tokens);
     }
 
     kiln_context_free(c);

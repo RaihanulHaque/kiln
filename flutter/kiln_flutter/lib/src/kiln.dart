@@ -89,9 +89,15 @@ class KilnContext {
 
   /// Pass the full conversation every turn; kiln reuses whatever prefix is already
   /// in the KV cache. Only one chat may run on a context at a time.
+  ///
+  /// [maxReasoningTokens] is a thinking budget: after that many reasoning tokens kiln
+  /// closes the think block itself and the model goes on to answer (0 = unlimited).
+  /// Small reasoning models often never stop thinking on their own, so set it when
+  /// [enableThinking] is on. [KilnGenStats.reasoningTruncated] reports when it was used.
   KilnGeneration chat(
     List<KilnChatMessage> messages, {
     bool enableThinking = false,
+    int maxReasoningTokens = 0,
     KilnSamplingParams sampling = const KilnSamplingParams(),
   }) {
     if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
@@ -108,6 +114,7 @@ class KilnContext {
           'context': _handle,
           'messages': messages.map((m) => m.toMap()).toList(),
           'enableThinking': enableThinking,
+          'maxReasoningTokens': maxReasoningTokens,
           'sampling': sampling.toMap(),
         }, stream: port.sendPort)
         .then((r) => KilnGenStats.fromMap(r['stats'] as Map))

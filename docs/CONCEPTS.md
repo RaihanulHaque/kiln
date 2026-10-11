@@ -134,6 +134,14 @@ tags and delivers each piece of text on one of two channels, reasoning or answer
 can show a collapsible thinking box and count the tokens separately. With thinking off,
 kiln renders the template in a way that tells the model to answer directly.
 
+Small reasoning models often do not know when to stop. Qwen3.5 0.8B reaches a good answer
+early in its thinking, then keeps second-guessing it and never writes `</think>`: without a
+limit it finished 1 of 20 test runs within 1500 tokens. So `kiln_chat` takes a thinking
+budget, `max_reasoning_tokens`. When the reasoning channel reaches it, kiln feeds the end tag
+into the model as if the model had written it, and generation continues as the answer. With a
+256-token budget the same model finished 43 of 48 runs, and all 16 with the repeat penalty
+off. The stats report `reasoning_truncated` so a UI can say the thinking was cut short.
+
 ## Chat templates
 
 Each model was trained on conversations formatted a specific way: special tokens around

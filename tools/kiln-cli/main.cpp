@@ -10,14 +10,15 @@
 static void usage() {
     fprintf(stderr,
         "usage: kiln-cli --probe\n"
-        "       kiln-cli -m model.gguf [-p \"prompt\"] [-n max_tokens] [--cpu|--gpu] [-t threads] [-c n_ctx] [--think] [--raw] [--chat] [-v]\n"
+        "       kiln-cli -m model.gguf [-p \"prompt\"] [-n max_tokens] [--cpu|--gpu] [-t threads] [-c n_ctx] [--think] [--think-budget N] [--raw] [--chat] [-v]\n"
         "  --chat   interactive multi-turn REPL (shows KV prefix reuse per turn)\n"
-        "  --think  enable reasoning on models that support it; reasoning is printed dimmed\n");
+        "  --think  enable reasoning on models that support it; reasoning is printed dimmed\n"
+        "  --think-budget N  like --think, but close the reasoning block after N tokens so the model answers\n");
 }
 
 static bool on_piece(kiln_channel ch, const char* piece, int32_t, void*) {
     static kiln_channel last = KILN_CHANNEL_ANSWER;
-    if (ch != last) { fputs(ch == KILN_CHANNEL_REASONING ? "\033[2m" : "\033[0m", stdout); last = ch; }
+    if (ch != last) { fputs(ch == KILN_CHANNEL_REASONING ? "\033[2m" : "\033[0m\n\n", stdout); last = ch; }
     fputs(piece, stdout); fflush(stdout);
     return true;
 }
@@ -34,7 +35,8 @@ static void print_probe(const kiln_device_info& d) {
 
 static void print_stats(const kiln_gen_stats& st) {
     fprintf(stderr, "\033[0m\nprompt:   %d tok (%d cached) in %.0f ms (%.1f tok/s)\n", st.prompt_tokens, st.cached_tokens, st.prompt_ms, st.prompt_tps);
-    fprintf(stderr, "generate: %d tok (%d reasoning) in %.0f ms (%.1f tok/s)%s\n", st.generated_tokens, st.reasoning_tokens, st.gen_ms, st.gen_tps,
+    fprintf(stderr, "generate: %d tok (%d reasoning%s) in %.0f ms (%.1f tok/s)%s\n", st.generated_tokens, st.reasoning_tokens,
+            st.reasoning_truncated ? ", cut at budget" : "", st.gen_ms, st.gen_tps,
             st.stopped_by_eos ? " [eos]" : st.stopped_by_user ? " [stopped]" : "");
 }
 
@@ -42,6 +44,7 @@ int main(int argc, char** argv) {
     std::string model, prompt = "Explain in one sentence why the sky is blue.";
     int max_tokens = 128, threads = 0, n_ctx = 0;
     bool probe = false, raw = false, think = false, chat = false;
+    int think_budget = 0;
     kiln_backend_kind backend = KILN_BACKEND_AUTO;
 
     for (int i = 1; i < argc; ++i) {
@@ -57,6 +60,7 @@ int main(int argc, char** argv) {
         else if (a == "--gpu")   backend = KILN_BACKEND_GPU;
         else if (a == "--raw")   raw = true;
         else if (a == "--think") think = true;
+        else if (a == "--think-budget") { think = true; think_budget = atoi(next()); }
         else if (a == "--chat")  chat = true;
         else if (a == "-v")      kiln_set_log_level(KILN_LOG_INFO);
         else if (a == "-vv")     kiln_set_log_level(KILN_LOG_DEBUG);
@@ -89,6 +93,7 @@ int main(int argc, char** argv) {
     sp.max_tokens = max_tokens;
     kiln_chat_options co = kiln_chat_options_default();
     co.enable_thinking = think;
+    co.max_reasoning_tokens = think_budget;
     kiln_gen_stats st;
     kiln_status s = KILN_OK;
 

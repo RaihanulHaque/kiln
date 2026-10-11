@@ -9,7 +9,8 @@ final model = await kiln.loadModel('/path/to/model.gguf');
 print(model.info);          // qwen35 Q4_K_M, 0.75B, via llama.cpp/cpu, thinking
 
 final ctx = await model.createContext();
-final gen = ctx.chat([KilnChatMessage.user('Why is the sky blue?')], enableThinking: true);
+final gen = ctx.chat([KilnChatMessage.user('Why is the sky blue?')],
+    enableThinking: true, maxReasoningTokens: 512);   // budget: small models rarely stop thinking
 
 await for (final piece in gen.pieces) {
   if (piece.isReasoning) showThinking(piece.text); else showAnswer(piece.text);

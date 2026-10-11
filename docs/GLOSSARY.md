@@ -94,6 +94,9 @@ confuses you, it should be here. If it is not, add it.
   compute graph and whether the model is recurrent / hybrid.
 - **chat template**: the jinja program inside the GGUF that turns a message list into the
   exact text the model was trained on. kiln executes it faithfully via llama.cpp/minja.
+- **thinking budget**: `max_reasoning_tokens` in `kiln_chat_options`. After that many reasoning
+  tokens kiln closes the think block itself and the model goes on to answer. 0 = unlimited.
+  `reasoning_truncated` in the stats reports that it was used.
 - **enable_thinking**: template switch for reasoning models. `supports_thinking` in model info
   is true only when flipping it actually changes the rendered prompt.
 - **hybrid model**: mixes attention layers with recurrent / state-space layers (LFM2, Qwen3.5).
