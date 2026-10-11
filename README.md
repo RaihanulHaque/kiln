@@ -104,7 +104,9 @@ as the model authors intended. No per-model code in kiln.
 
 **Reasoning is a channel.** Think tags are stripped and each piece is tagged answer or
 reasoning, with `reasoning_tokens` in the stats, so a UI can show a collapsible thinking
-block and count tokens truthfully.
+block and count tokens truthfully. Small reasoning models often never stop thinking, so
+`max_reasoning_tokens` sets a budget: when it is reached kiln closes the think block and the
+model answers. `reasoning_truncated` in the stats says when that happened.
 
 **Multi-turn reuses the KV cache.** Pass the whole history; kiln evaluates only the suffix
 that changed. Hybrid models (LFM2, Qwen3.5) cannot rewind partial state, so kiln saves a

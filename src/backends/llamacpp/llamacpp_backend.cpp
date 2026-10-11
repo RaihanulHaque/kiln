@@ -214,6 +214,23 @@ public:
             if (rc != 0) { result = kiln::set_error(rc == 1 ? KILN_ERR_CONTEXT_FULL : KILN_ERR_BACKEND, "llama_decode failed, rc=" + std::to_string(rc)); break; }
             n_past++;
             cache_.push_back(tok);
+
+            // Thinking budget: small models often never close the think block themselves. Close it
+            // for them by feeding the end tag as if the model had written it, then keep generating.
+            if (in.max_reasoning_tokens > 0 && split.in_reasoning() && st.reasoning_tokens >= in.max_reasoning_tokens && !tags_.ends.empty()) {
+                const std::string close = "\n" + tags_.ends[0] + "\n\n";
+                std::vector<llama_token> ct(close.size() + 8);
+                int nc = llama_tokenize(vocab_, close.c_str(), (int)close.size(), ct.data(), (int)ct.size(), false, true);
+                if (nc <= 0) { result = kiln::set_error(KILN_ERR_INTERNAL, "could not tokenize the reasoning end tag"); break; }
+                if (n_past + nc >= n_ctx) { result = kiln::set_error(KILN_ERR_CONTEXT_FULL, "context full while closing the reasoning block"); break; }
+                int rc2 = llama_decode(ctx_, llama_batch_get_one(ct.data(), nc));
+                if (rc2 == 2) { st.stopped_by_user = true; result = KILN_ERR_CANCELLED; break; }
+                if (rc2 != 0) { result = kiln::set_error(KILN_ERR_BACKEND, "llama_decode failed closing the reasoning block, rc=" + std::to_string(rc2)); break; }
+                n_past += nc;
+                for (int i = 0; i < nc; ++i) { cache_.push_back(ct[i]); llama_sampler_accept(smpl, ct[i]); }
+                st.reasoning_truncated = true;
+                if (!split.feed(tags_.ends[0], emit)) { st.stopped_by_user = true; break; }
+            }
         }
         if (!user_stopped && result != KILN_ERR_CANCELLED) split.finish(emit);
         st.gen_ms = ms_since(t1);

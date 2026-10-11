@@ -91,7 +91,7 @@ int32_t kiln_detokenize(const kiln_model* m, const int32_t* toks, int32_t n, cha
     return m->impl->detokenize(toks, n, out, cap);
 }
 kiln_chat_options kiln_chat_options_default(void) {
-    kiln_chat_options o{}; o.add_assistant_prefix = true; o.enable_thinking = false; return o;
+    kiln_chat_options o{}; o.add_assistant_prefix = true; o.enable_thinking = false; o.max_reasoning_tokens = 0; return o;
 }
 
 int32_t kiln_apply_chat_template(const kiln_model* m, const kiln_chat_message* msgs, int32_t n,
@@ -131,6 +131,7 @@ kiln_status kiln_chat(kiln_context* c, const kiln_chat_message* msgs, int32_t n_
     RenderedPrompt r;
     kiln_status s = c->model->render_chat(msgs, n_msgs, o, r);
     if (s != KILN_OK) return s;
+    r.max_reasoning_tokens = o.max_reasoning_tokens;
     return c->impl->generate(r, p, cb, user, stats);
 }
 

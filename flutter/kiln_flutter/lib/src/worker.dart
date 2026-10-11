@@ -221,6 +221,7 @@ class KilnWorker {
     try {
       opts.ref = k.kiln_chat_options_default();
       opts.ref.enable_thinking = r.args['enableThinking'] as bool;
+      opts.ref.max_reasoning_tokens = r.args['maxReasoningTokens'] as int;
       final p = KilnSamplingParams.fromMap(r.args['sampling'] as Map);
       sp.ref = k.kiln_sampling_params_default();
       sp.ref.temperature = p.temperature;

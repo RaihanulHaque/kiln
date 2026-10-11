@@ -673,6 +673,12 @@ final class kiln_chat_options extends ffi.Struct {
   /// reasoning models only. false = answer directly. Ignored if unsupported.
   @ffi.Bool()
   external bool enable_thinking;
+
+  /// thinking budget, kiln_chat only: after this many reasoning tokens kiln closes
+  /// the think block itself and the model goes on to answer. <= 0 = unlimited.
+  /// Small models often never stop thinking on their own.
+  @ffi.Int32()
+  external int max_reasoning_tokens;
 }
 
 /// ------------------------------------------------------------------ */
@@ -775,6 +781,10 @@ final class kiln_gen_stats extends ffi.Struct {
 
   @ffi.Bool()
   external bool stopped_by_user;
+
+  /// max_reasoning_tokens was reached and kiln closed the think block
+  @ffi.Bool()
+  external bool reasoning_truncated;
 }
 
 /// ------------------------------------------------------------------ */

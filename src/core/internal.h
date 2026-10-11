@@ -19,6 +19,7 @@ struct RenderedPrompt {
     // without the assistant prefix. Empty if unknown (raw kiln_generate). Hybrid models save
     // their state here, because templates often rewrite the assistant reply that follows.
     std::string stable_prefix;
+    int32_t     max_reasoning_tokens = 0;      // thinking budget; <= 0 = unlimited
 };
 
 class Context {
