@@ -141,6 +141,25 @@ class KilnContext {
     });
   }
 
+  /// Ask a decision model one typed question about [state] (the text the question is about).
+  /// The model does not write text: it returns a probability per option in one forward pass.
+  ///
+  /// ```dart
+  /// final d = await ctx.decide(
+  ///   KilnQuestion.choice('Which team should handle this?',
+  ///       [KilnOption('billing', 'Payments and refunds'), KilnOption('shipping', 'Delivery problems')]),
+  ///   state: 'My parcel never arrived.');
+  /// print(d.bestKey);   // shipping
+  /// ```
+  ///
+  /// Throws a [KilnException] with `KILN_ERR_NOT_SUPPORTED` when the model is not a decision
+  /// model; check [KilnModelInfo.isDecisionModel].
+  Future<KilnDecision> decide(KilnQuestion question, {String? state}) async {
+    if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
+    return KilnDecision.fromMap(await model._kiln._worker
+        .call<Map>('decide', {'context': _handle, 'question': question.toMap(), 'state': state}));
+  }
+
   /// Clears the KV cache. Next chat starts from scratch.
   Future<void> reset() { _t('reset'); return model._kiln._worker.call<void>('reset', {'handle': _handle}); }
 

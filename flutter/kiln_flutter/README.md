@@ -23,11 +23,45 @@ Everything blocking runs on a background isolate; the UI thread only receives pi
 await `stats` without listening to `pieces`. Pass the full history to `chat` every turn and
 kiln reuses whatever prefix the KV cache already holds.
 
+## Decision models
+
+A decision model does not write text. It reads a state and one typed question, and returns a
+probability for every option in a single pass (about half a second on a Pixel 8). Supported:
+LFM2 d1-omni with a text state.
+
+```dart
+final model = await kiln.loadModel('/path/to/d1-omni-600M-Q8_0.gguf');
+print(model.info.isDecisionModel);   // true
+final ctx = await model.createContext();
+const mail = 'My blender arrived broken. I want my money back today.';
+
+final refund = await ctx.decide(KilnQuestion.yesNo('Is the customer asking for a refund?'), state: mail);
+print(refund.yes);        // true
+print(refund.value);      // 0.997, the probability of yes
+
+final team = await ctx.decide(
+    const KilnQuestion.choice('Which team should handle this?', [
+      KilnOption('billing', 'Payments, refunds and invoices'),
+      KilnOption('shipping', 'Delivery status and lost parcels'),
+    ]),
+    state: mail);
+print(team.bestKey);        // billing
+print(team.probabilities);  // one per option, in order, summing to 1
+
+final urgency = await ctx.decide(
+    KilnQuestion.score('How urgent is this?', ['Can wait', 'Today', 'Blocking the customer now']),
+    state: mail);
+print(urgency.value);     // expected level, 0 to 2
+```
+
+`chat` on a decision model and `decide` on a chat model both throw a `KilnException` with
+`KILN_ERR_NOT_SUPPORTED`. The d1-omni weights are under Liquid AI's `lfm1.0` license, not MIT.
+
 ## Status
 
 | platform | native | verified |
 |---|---|---|
-| Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Pixel 8: 10 of 10 integration tests, speed run |
+| Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Pixel 8: 16 of 16 integration tests, speed run |
 | iOS 15+ | `kiln.xcframework` from `scripts/build_ios.sh`, vendored by the podspec, Metal | iPhone 16 Pro: 7 of 9 before a Dart fix, re-run pending |
 
 Desktop (macOS/Linux) works for development by passing a host build:
@@ -50,8 +84,8 @@ cd example && flutter test integration_test -d <device-id>
 ```
 
 Downloads a 229 MB model on first run. Covers probe, bad files, info, template, single turn,
-KV reuse on turn 2, cancel, busy-context guard, context overflow, and Qwen3.5 thinking
-channels (fetches Qwen, 533 MB). `--dart-define=KILN_SPEED=true` adds a 3-run speed test per
+KV reuse on turn 2, cancel, busy-context guard, context overflow, Qwen3.5 thinking
+channels (fetches Qwen, 533 MB) and the d1-omni decision model (fetches it, 407 MB). `--dart-define=KILN_SPEED=true` adds a 3-run speed test per
 model. iOS needs Rosetta on Apple-silicon Macs for Flutter's device bridge.
 
 ## Building the native side

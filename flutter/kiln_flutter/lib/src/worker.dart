@@ -158,6 +158,9 @@ class KilnWorker {
 
       case 'chat':
         return _chat(k, r);
+
+      case 'decide':
+        return _decide(k, r);
     }
     throw KilnException(b.kiln_status.KILN_ERR_INVALID_ARG, 'unknown op ${r.op}');
   }
@@ -242,6 +245,60 @@ class KilnWorker {
     } finally {
       cb.close();
       calloc.free(arr); calloc.free(opts); calloc.free(sp); calloc.free(st);
+      for (final x in strings) {
+        calloc.free(x);
+      }
+    }
+  }
+
+  static Map<String, Object> _decide(b.KilnBindings k, _Req r) {
+    final q = KilnQuestion.fromMap(r.args['question'] as Map);
+    final state = r.args['state'] as String?;
+    final strings = <Pointer<Utf8>>[];
+    Pointer<Char> str(String? s) {
+      if (s == null) return nullptr;
+      final p = s.toNativeUtf8();
+      strings.add(p);
+      return p.cast();
+    }
+
+    final n = q.options.length;
+    final cap = q.type == KilnQuestionType.yesNo ? 2 : n;
+    final opts = n > 0 ? calloc<b.kiln_decision_option>(n) : nullptr;
+    final cq = calloc<b.kiln_decision_question>();
+    final probs = calloc<Float>(cap > 0 ? cap : 1);
+    final ans = calloc<b.kiln_decision_answer>();
+    try {
+      for (var i = 0; i < n; i++) {
+        opts[i].key = str(q.options[i].key);
+        opts[i].description = str(q.options[i].description);
+      }
+      cq.ref.id = str(q.id);
+      cq.ref.typeAsInt = q.type.index;
+      cq.ref.instructions = str(q.instructions);
+      cq.ref.options = opts;
+      cq.ref.n_options = n;
+      final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
+      final s = k.kiln_decide(ctx, str(state), cq, probs, cap, ans);
+      if (s != b.kiln_status.KILN_OK) _fail(k, s);
+      final a = ans.ref;
+      return KilnDecision(
+        type: q.type,
+        probabilities: [for (var i = 0; i < a.n_probs; i++) probs[i]],
+        keys: switch (q.type) {
+          KilnQuestionType.yesNo => const ['no', 'yes'],
+          KilnQuestionType.choice => [for (final o in q.options) o.key],
+          KilnQuestionType.score => [for (final o in q.options) o.description ?? o.key],
+        },
+        best: a.best,
+        value: a.value,
+        confidence: a.confidence,
+        promptTokens: a.prompt_tokens,
+        ms: a.ms,
+      ).toMap();
+    } finally {
+      if (opts != nullptr) calloc.free(opts);
+      calloc.free(cq); calloc.free(probs); calloc.free(ans);
       for (final x in strings) {
         calloc.free(x);
       }

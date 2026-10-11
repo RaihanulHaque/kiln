@@ -26,13 +26,13 @@ from v0.1.0 (2026-10-10), and the benchmarks were not repeated for v0.2.0:
 
 | platform | backend | what passed |
 |---|---|---|
-| Pixel 8 (Tensor G3, Android 16), v0.2.0 | llama.cpp CPU, 5 threads pinned | 154 C checks, 13 Flutter integration tests; benchmarks at v0.1.0 |
+| Pixel 8 (Tensor G3, Android 16), v0.2.0 | llama.cpp CPU, 5 threads pinned | 154 C checks, 16 Flutter integration tests; benchmarks at v0.1.0 |
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | 7 of 9 Flutter integration tests; remaining 2 hit a Dart bug fixed since, not yet re-run |
 | MacBook Pro M4 Pro, v0.2.0 | llama.cpp Metal | 154 C checks; benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.2.0 | llama.cpp CPU | 154 C checks |
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
-and the decision model LFM2 d1-omni 600M (C API only; not in the Flutter plugin).
+and the decision model LFM2 d1-omni 600M (C API, and `decide` in the Flutter plugin on the Pixel 8).
 Not yet: Snapdragon or MediaTek phones, 4 GB RAM devices, x86 emulators.
 See the [release checklist](docs/RELEASE.md) for what gates a pub.dev release.
 
