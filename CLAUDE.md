@@ -55,6 +55,11 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 - **`flutter/kiln_flutter/src/core` wins over the repo source** when it exists (it is the
   vendored copy made by `scripts/vendor_flutter.sh`, git-ignored). Delete it after a publish
   check, or the plugin builds an old core against new bindings.
+- **pub publishes by ignore rules, not by what is on disk.** `src/core` and `ios/Frameworks`
+  are git-ignored in `flutter/kiln_flutter/.gitignore`, and `.pubignore` next to it replaces
+  that file for pub so they are uploaded. A rule in the root `.gitignore` still applies to pub:
+  an unanchored `models/` there once hid llama.cpp's `src/models`. `scripts/pub_files.py`
+  lists what pub would upload.
 - **A shell glob that matches nothing makes `ls` fail**, and with `set -o pipefail` that ends
   the script without a message. This broke the Android scripts on macOS once.
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
@@ -68,7 +73,7 @@ macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes
 - iOS: the items already listed in `docs/RELEASE.md`.
 - Benchmarks on 0.2.0. Run them on a cool phone: after the test suites the Pixel 8 capped its
   fast cores at 1.07 of 2.37 GHz and LFM2.5 ran at 55 tok/s instead of about 105.
-- `v0.2.0` is not tagged.
+- pub.dev: not published. `docs/RELEASE.md` has the steps and what is still open.
 
 Known gaps: decision models take a text state only (no images or audio,
 only the lfm2-d1-omni family); the probe counts hyperthreads as cores and trusts max frequency
