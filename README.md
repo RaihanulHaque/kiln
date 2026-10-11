@@ -20,7 +20,9 @@ maintainers happened to own. kiln is built the other way round:
 
 ## Status
 
-v0.1.0. C core frozen. Verified on real hardware on 2026-10-10:
+v0.2.0 adds cache reuse for hybrid models, a thinking budget and decision models; those were
+verified on Linux x86 (Ryzen 5 8500G, CPU) only. The hardware below was verified at v0.1.0 on
+2026-10-10 and has not been re-run:
 
 | platform | backend | what passed |
 |---|---|---|

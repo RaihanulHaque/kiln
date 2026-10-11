@@ -1,6 +1,6 @@
 name: kiln_flutter
 description: "On-device LLM runtime for Flutter. Honest about what it runs on."
-version: 0.1.0
+version: 0.2.0
 repository: https://github.com/RaihanulHaque/kiln
 issue_tracker: https://github.com/RaihanulHaque/kiln/issues
 topics: [llm, on-device, llama-cpp, ffi, android]
