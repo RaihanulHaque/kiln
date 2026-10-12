@@ -20,7 +20,45 @@
 #include <string>
 #include <vector>
 
+#if defined(__linux__)
+#include <sched.h>
+#endif
+
 namespace kiln {
+
+// Lets the calling thread run on every core of `mask` for as long as it lives, then puts the
+// old setting back.
+// Why: kiln's pinned threadpool ties the thread that calls into kiln to one core (it is worker 0
+// of the pool). The image / audio encoder starts its own threads, and new threads inherit the
+// caller's setting, so all of them landed on that single core: one small image took 14 s on a
+// Pixel 8 instead of about 3 s. Widening the caller first lets the encoder spread over the fast
+// cores. mask == 0 does nothing. Only Linux and Android pin threads this way.
+class AffinityScope {
+public:
+    explicit AffinityScope(uint64_t mask) {
+#if defined(__linux__)
+        if (!mask || sched_getaffinity(0, sizeof old_, &old_) != 0) return;
+        cpu_set_t wide;
+        CPU_ZERO(&wide);
+        for (int i = 0; i < 64; ++i) if (mask & (1ull << i)) CPU_SET(i, &wide);
+        active_ = sched_setaffinity(0, sizeof wide, &wide) == 0;
+#else
+        (void)mask;
+#endif
+    }
+    ~AffinityScope() {
+#if defined(__linux__)
+        if (active_) sched_setaffinity(0, sizeof old_, &old_);
+#endif
+    }
+    AffinityScope(const AffinityScope&) = delete;
+    AffinityScope& operator=(const AffinityScope&) = delete;
+private:
+#if defined(__linux__)
+    cpu_set_t old_;
+    bool      active_ = false;
+#endif
+};
 
 class EmbeddingHead {
 public:
@@ -64,7 +102,8 @@ public:
     ~EmbeddingHead() { free_projector(); }
     void free_projector() { if (mctx_) { mtmd_free(mctx_); mctx_ = nullptr; } }
 
-    kiln_status load_projector(const llama_model* model, const char* path, const kiln_projector_params& p, bool use_gpu, int n_threads, kiln_projector_info& out) {
+    // cpu_mask: the cores the encoders may use (0 = leave thread placement to the system)
+    kiln_status load_projector(const llama_model* model, const char* path, const kiln_projector_params& p, bool use_gpu, int n_threads, uint64_t cpu_mask, kiln_projector_info& out) {
         std::lock_guard<std::mutex> lock(media_mutex_);
         if (mctx_) return kiln::set_error(KILN_ERR_INVALID_ARG, "a projector is already loaded for this model");
         mtmd_context_params mp = mtmd_context_params_default();
@@ -79,6 +118,7 @@ public:
         if (!mctx_) return kiln::set_error(KILN_ERR_MODEL_LOAD, std::string("failed to load projector ") + path + " (missing, corrupt, or made for another model)");
         out.supports_images = mtmd_support_vision(mctx_);
         out.supports_audio  = mtmd_support_audio(mctx_);
+        media_mask_ = cpu_mask;
         return KILN_OK;
     }
 
@@ -228,7 +268,7 @@ private:
         const size_t n_embd_inp    = (size_t)llama_model_n_embd_inp(model);
         const bool   mrope         = mtmd_decode_use_mrope(mctx_);
         std::vector<std::vector<float>> encoded;            // must outlive llama_process
-        const auto tm = std::chrono::steady_clock::now();
+        double encoder_ms = 0.0;                            // time inside the encoders only
         llama_pos pos = 0;
         for (size_t ci = 0; ci < mtmd_input_chunks_size(chunks.c); ++ci) {
             const mtmd_input_chunk* chunk = mtmd_input_chunks_get(chunks.c, ci);
@@ -244,7 +284,13 @@ private:
                 }
                 continue;
             }
-            if (mtmd_encode_chunk(mctx_, chunk) != 0) return kiln::set_error(KILN_ERR_BACKEND, "the image / audio encoder failed");
+            {
+                AffinityScope spread(media_mask_);          // see AffinityScope: the encoder's threads inherit this
+                const auto te = std::chrono::steady_clock::now();
+                const int32_t erc = mtmd_encode_chunk(mctx_, chunk);
+                encoder_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - te).count();
+                if (erc != 0) return kiln::set_error(KILN_ERR_BACKEND, "the image / audio encoder failed");
+            }
             const size_t nt   = mtmd_input_chunk_get_n_tokens(chunk);
             const float* embd = mtmd_get_output_embd(mctx_);
             encoded.emplace_back(embd, embd + nt * n_embd_inp);
@@ -266,7 +312,7 @@ private:
             pos += (llama_pos)mtmd_input_chunk_get_n_pos(chunk);
             st.media_tokens += (int32_t)nt;
         }
-        st.media_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tm).count();
+        st.media_ms = encoder_ms;
 
         llama_memory_clear(llama_get_memory(ctx), true);
         const int rc = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.b);
@@ -288,6 +334,7 @@ private:
     bool        doc_titled_   = false;
 
     mtmd_context*      mctx_ = nullptr;     // image / audio encoders, loaded on request
+    uint64_t           media_mask_ = 0;     // cores the encoders may use; 0 = not restricted
     mutable std::mutex media_mutex_;
 };
 

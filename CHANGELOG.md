@@ -3,7 +3,9 @@
 ## 0.3.0
 
 The C ABI changed: `kiln_model_info` has two new fields at the end (its size is unchanged),
-and there are new functions with their structs.
+and there are four new functions (`kiln_embed`, `kiln_embed_media`, `kiln_model_load_projector`,
+and the `kiln_*_default` helpers for their options) with their structs and the
+`kiln_embed_kind` enum.
 
 - Embedding models: `kiln_embed` turns a text into a vector, and
   `kiln_model_info.is_embedding_model` / `n_embd` say when to use it and how long the vector

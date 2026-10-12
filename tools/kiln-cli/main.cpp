@@ -4,7 +4,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
 static void usage() {
@@ -22,10 +24,10 @@ static void usage() {
         "       kiln-cli -m model.gguf --embed \"text\" [--embed \"text\"]... [--query \"text\"] [--dim N]\n"
         "       kiln-cli -m model.gguf --mmproj projector.gguf --media file [--media file]... [--query \"text\"]\n"
         "  --embed  a text to turn into a vector; prints its first numbers\n"
-        "  --media  an image (jpg, png) or audio file (wav, mp3, flac) to turn into a vector; needs --mmproj\n"
+        "  --media  an image (jpg, png, bmp, gif) or audio file (wav, mp3, flac) to turn into a vector; needs --mmproj\n"
         "  --mmproj the model's image / audio encoders\n"
         "  --image-tokens N  most tokens one image may take (default 280; -1 = the model's own limit)\n"
-        "  --query  rank the --embed texts and --media files by how well they match this query\n"
+        "  --query  rank the --embed texts and --media files by how well they match this query, best first\n"
         "  --dim    keep only the first N numbers of each vector\n");
 }
 
@@ -144,6 +146,12 @@ int main(int argc, char** argv) {
         std::vector<float> qv, v;
         kiln_embed_stats es;
         const bool ranking = !embed_query.empty();
+        if (ranking && embed_texts.empty() && embed_media.empty()) {
+            fprintf(stderr, "--query needs something to rank: add --embed texts or --media files\n");
+            kiln_context_free(c); kiln_model_free(m);     // Metal aborts at exit if these are still alive
+            return 2;
+        }
+        std::vector<std::pair<double, std::string>> ranked;     // printed best first at the end
         if (ranking) {
             if (!run(embed_query, KILN_EMBED_QUERY, qv, es)) return 1;
             fprintf(stderr, "query:    %d tok in %.1f ms, %d numbers%s\n", es.tokens, es.ms, es.dimensions, es.prefixed ? ", prefix added" : "");
@@ -153,7 +161,7 @@ int main(int argc, char** argv) {
             if (ranking) {
                 double sim = 0;
                 for (int i = 0; i < es.dimensions; ++i) sim += (double)qv[i] * v[i];
-                printf("%.3f  %s\n", sim, t.c_str());
+                ranked.emplace_back(sim, t);
             } else {
                 printf("[");
                 for (int i = 0; i < es.dimensions && i < 6; ++i) printf("%s%.6f", i ? ", " : "", v[i]);
@@ -168,7 +176,7 @@ int main(int argc, char** argv) {
             if (ranking) {
                 double sim = 0;
                 for (int i = 0; i < es.dimensions; ++i) sim += (double)qv[i] * v[i];
-                printf("%.3f  %s\n", sim, f.c_str());
+                ranked.emplace_back(sim, f);
             } else {
                 printf("[");
                 for (int i = 0; i < es.dimensions && i < 6; ++i) printf("%s%.6f", i ? ", " : "", v[i]);
@@ -176,6 +184,8 @@ int main(int argc, char** argv) {
             }
             fprintf(stderr, "          %d tok (%d media) in %.1f ms (encoder %.1f ms), %d numbers\n", es.tokens, es.media_tokens, es.ms, es.media_ms, es.dimensions);
         }
+        std::stable_sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        for (const auto& r : ranked) printf("%.3f  %s\n", r.first, r.second.c_str());
         kiln_context_free(c); kiln_model_free(m);
         return 0;
     }

@@ -399,14 +399,8 @@ public:
         // little cores and every barrier waits for the slowest one: measured 1 thread > 5 threads on Pixel 8.
         // Benchmarking escape hatches: KILN_NO_AFFINITY=1 disables pinning,
         // KILN_CPU_MASK=<hex> forces an exact core set (thread count follows the mask).
-        const char* no_aff = getenv("KILN_NO_AFFINITY");
-        const char* mask_s = getenv("KILN_CPU_MASK");
-        uint64_t mask = fast_mask_;
-        int n_threads = threads_;
-        if (mask_s && *mask_s) {
-            mask = strtoull(mask_s, nullptr, 16);
-            if (mask) n_threads = __builtin_popcountll(mask);
-        }
+        uint64_t mask; int n_threads;
+        const bool pin = affinity(mask, n_threads);
 
         llama_context_params cp = llama_context_default_params();
         cp.n_ctx           = p.n_ctx > 0 ? (uint32_t)p.n_ctx : 4096;
@@ -427,7 +421,7 @@ public:
         c->decision_ = &decision_;
         c->embedding_ = &embedding_;
 
-        if (mask && !(no_aff && *no_aff == '1')) {
+        if (pin) {
             ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
             int set = 0;
             for (int i = 63; i >= 0 && set < n_threads; --i)      // highest-index cores are usually the biggest
@@ -444,10 +438,28 @@ public:
     kiln_status load_projector(const char* path, const kiln_projector_params& p, kiln_projector_info& out) override {
         if (!embedding_.is_embedding_model())
             return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "images and audio are supported for embedding models only");
-        return embedding_.load_projector(model_, path, p, kind_ == KILN_BACKEND_GPU, threads_, out);
+        // same cores and thread count as text; see AffinityScope in embedding.h for why the mask is needed
+        uint64_t mask; int n_threads;
+        const bool pin = affinity(mask, n_threads);
+        return embedding_.load_projector(model_, path, p, kind_ == KILN_BACKEND_GPU, n_threads, pin ? mask : 0, out);
     }
 
 private:
+    // Which cores to use and how many threads. Returns whether threads are pinned to `mask`.
+    // Benchmarking escape hatches: KILN_NO_AFFINITY=1 disables pinning,
+    // KILN_CPU_MASK=<hex> forces an exact core set (thread count follows the mask).
+    bool affinity(uint64_t& mask, int& n_threads) const {
+        const char* no_aff = getenv("KILN_NO_AFFINITY");
+        const char* mask_s = getenv("KILN_CPU_MASK");
+        mask      = fast_mask_;
+        n_threads = threads_;
+        if (mask_s && *mask_s) {
+            mask = strtoull(mask_s, nullptr, 16);
+            if (mask) n_threads = __builtin_popcountll(mask);
+        }
+        return mask && !(no_aff && *no_aff == '1');
+    }
+
     llama_model*              model_;
     const llama_vocab*        vocab_;
     std::string               backend_name_;

@@ -172,7 +172,7 @@ Some embedding models also take images and audio and put them in the same space 
 a text query can find a photo or a voice note. They need a second file, the projector:
 
 ```c
-kiln_model_load_projector(model, "mmproj-embeddinggemma-2-Q8_0.gguf", NULL, NULL);
+kiln_model_load_projector(m, "mmproj-embeddinggemma-2-Q8_0.gguf", NULL, NULL);
 kiln_media photo = {"holiday.jpg", NULL, 0};          // a path, or the bytes of the file
 kiln_embed_media(ctx, NULL, &photo, 1, NULL, d, 768, NULL);
 // compare d with the vector of the query "a lake between mountains", as above

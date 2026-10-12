@@ -107,7 +107,7 @@ One source tree, three outputs, no copies.
 - [x] v0.3.0: embedding models (`kiln_embed`): EmbeddingGemma 2, nomic-embed-text v1.5, jina v5 omni nano; Linux x86 only so far
 - [x] v0.3.0: images and audio for embedding models (`kiln_embed_media`, llama.cpp mtmd): EmbeddingGemma 2 (both), jina v5 omni nano (images)
 - [ ] Embeddings: Flutter binding, macOS / Android / iOS runs, several inputs per call, video, raw pixels and samples, rerankers
-- [ ] Images and audio for chat and decision models (the projector plumbing is now in the build)
+- [ ] Images and audio for chat models (the projector plumbing is now in the build; decision models are tracked above)
 - [ ] ASR (speech to text): the pinned llama.cpp `mtmd` has Whisper, Parakeet and Qwen3-ASR encoders, and `mtmd` is now in the build.
       A chat-style call that takes an audio clip and streams the words. First step: load Qwen3-ASR 0.6B and compare with `llama-mtmd-cli`. Nothing run yet
 - [ ] TTS (text to speech): `mtmd` has Qwen3-TTS and PocketTTS, but its header marks audio generation as experimental and subject

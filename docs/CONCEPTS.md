@@ -184,8 +184,10 @@ The first note wins although it shares no word with the query. The second shares
 at 4 bits through `kiln-cli --query ... --embed ...`.)
 
 **Similarity** is the dot product: multiply the two vectors number by number and add up.
-kiln returns vectors of length 1, so the result is between -1 and 1, and 1 means the same
-meaning. This is the cosine similarity.
+kiln returns vectors of length 1 by default, so the result is between -1 and 1. This is the
+cosine similarity: 1 means the two vectors point the same way, which the model produces for
+texts it reads as meaning the same. (With `normalize = false` the vectors keep the model's own
+length, and you have to divide by both lengths yourself to get a cosine.)
 
 **Pooling.** The model produces one vector per token. To get one vector for the whole text
 they are combined, usually by averaging. The model file says which way; llama.cpp does it.

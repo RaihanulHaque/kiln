@@ -299,7 +299,8 @@ static void test_decision(const std::string& path) {
 
 // Embedding model: text in, vector out. ref = the first numbers llama.cpp's own llama-embedding
 // tool prints for "The cat sat on the mat." (same commit, CPU, normalised).
-static void test_embedding(const std::string& path, const char* label, bool expect_prefix, bool matryoshka, const float ref[3]) {
+// titled_model: the model has a place for a document title in its prefix (EmbeddingGemma).
+static void test_embedding(const std::string& path, const char* label, bool expect_prefix, bool matryoshka, bool titled_model, const float ref[3]) {
     SECTION(label);
     if (!exists(path)) { fprintf(stderr, "  SKIP (missing %s)\n", path.c_str()); return; }
     kiln_model* m = nullptr;
@@ -323,7 +324,10 @@ static void test_embedding(const std::string& path, const char* label, bool expe
     CHECK(s == KILN_OK, "%s", kiln_last_error());
     CHECK(st.dimensions == D && st.tokens > 4 && st.tokens < 16 && !st.prefixed, "dims=%d tokens=%d prefixed=%d", st.dimensions, st.tokens, st.prefixed);
     CHECK(fabs(dot(v, v, D) - 1.0) < 1e-4, "length^2=%.6f", dot(v, v, D));
-    CHECK(fabsf(v[0] - ref[0]) < 5e-3f && fabsf(v[1] - ref[1]) < 5e-3f && fabsf(v[2] - ref[2]) < 5e-3f,
+    // ref was measured on x86. A 4-bit model is computed with different instructions on each
+    // kind of processor and the rounding differs: a Pixel 8 is off by up to 0.009 on nomic, an
+    // M4 GPU by 0.003. A wrong prefix or pooling moves these numbers by far more than 0.015.
+    CHECK(fabsf(v[0] - ref[0]) < 1.5e-2f && fabsf(v[1] - ref[1]) < 1.5e-2f && fabsf(v[2] - ref[2]) < 1.5e-2f,
           "got %.6f %.6f %.6f, llama.cpp gives %.6f %.6f %.6f", v[0], v[1], v[2], ref[0], ref[1], ref[2]);
     s = kiln_embed(c, "The cat sat on the mat.", nullptr, v2.data(), D, nullptr);
     CHECK(s == KILN_OK && memcmp(v.data(), v2.data(), D * sizeof(float)) == 0, "not deterministic");
@@ -351,6 +355,8 @@ static void test_embedding(const std::string& path, const char* label, bool expe
     std::vector<float> tv(D);
     CHECK(kiln_embed(c, "Steps to recover account access: open Settings, choose Security, and tap Forgot credentials.", &titled, tv.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
     CHECK(fabs(dot(tv, tv, D) - 1.0) < 1e-4, "titled document");
+    // the title must reach the model where the model has a place for it, and only there
+    CHECK((memcmp(tv.data(), right.data(), D * sizeof(float)) != 0) == titled_model, "title %s", titled_model ? "was ignored" : "changed the vector of a model without titles");
 
     // shortened vector: the leading numbers of the full one, scaled back to length 1
     kiln_embed_options sh = kiln_embed_options_default(); sh.dimensions = 256;
@@ -361,17 +367,23 @@ static void test_embedding(const std::string& path, const char* label, bool expe
     const double head = sqrt(dot(v, v, 256));
     CHECK(fabs(sv[0] * head - v[0]) < 1e-5 && fabs(sv[255] * head - v[255]) < 1e-5, "not the leading part of the full vector");
     if (matryoshka) {
+        // A shortened vector is a coarser one. It must still tell the answer from an unrelated
+        // text and score it close to the full vector. It is not required to beat the trap
+        // sentence: at 256 numbers the two are 0.001 apart and the order depends on the hardware.
         std::vector<float> a(256), b(256), t2(256);
         kiln_embed_options q2 = q, d2 = d; q2.dimensions = d2.dimensions = 256;
         kiln_embed(c, "how do I reset my password", &q2, a.data(), 256, nullptr);
         kiln_embed(c, "Steps to recover account access: open Settings, choose Security, and tap Forgot credentials.", &d2, b.data(), 256, nullptr);
-        kiln_embed(c, "Passwords should contain at least twelve characters including a symbol.", &d2, t2.data(), 256, nullptr);
-        CHECK(dot(a, b, 256) > dot(a, t2, 256), "256 numbers: right=%.3f trap=%.3f", dot(a, b, 256), dot(a, t2, 256));
+        kiln_embed(c, "Soda loaf uses baking soda and buttermilk as the raising agent.", &d2, t2.data(), 256, nullptr);
+        const double r256 = dot(a, b, 256), o256 = dot(a, t2, 256);
+        CHECK(r256 > o256 + 0.1 && fabs(r256 - s_right) < 0.05, "256 numbers: right=%.3f unrelated=%.3f, full right=%.3f", r256, o256, s_right);
     }
     kiln_embed_options un = kiln_embed_options_default(); un.normalize = false;
     CHECK(kiln_embed(c, "The cat sat on the mat.", &un, v2.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
     const double len = sqrt(dot(v2, v2, D));
-    CHECK(len > 0 && fabs(v2[0] / len - v[0]) < 1e-5, "normalize=false, length=%.4f", len);
+    // the raw vector points the same way but keeps the model's own length (about 1246 for
+    // EmbeddingGemma 2 and 22 for nomic), so a result of length 1 means the option was ignored
+    CHECK(len > 0 && fabs(v2[0] / len - v[0]) < 1e-5 && fabs(len - 1.0) > 0.5, "normalize=false, length=%.4f", len);
 
     // bad input, text too long, wrong kind of call
     CHECK(kiln_embed(c, "text", nullptr, v.data(), D - 1, nullptr) == KILN_ERR_INVALID_ARG, "out too small accepted");
@@ -545,8 +557,8 @@ int main(int argc, char** argv) {
     test_decision(dir + "/d1-omni-600M-Q8_0.gguf");
     const float gemma_ref[3] = {-0.001069f, -0.025002f, 0.020770f};
     const float nomic_ref[3] = {0.047576f, 0.061704f, -0.118842f};
-    test_embedding(dir + "/embeddinggemma-2-UD-Q4_K_XL.gguf", "EmbeddingGemma 2 (embedding model)", true, true, gemma_ref);
-    test_embedding(dir + "/nomic-embed-text-v1.5.Q4_K_M.gguf", "nomic-embed-text v1.5 (embedding model)", true, false, nomic_ref);
+    test_embedding(dir + "/embeddinggemma-2-UD-Q4_K_XL.gguf", "EmbeddingGemma 2 (embedding model)", true, true, true, gemma_ref);
+    test_embedding(dir + "/nomic-embed-text-v1.5.Q4_K_M.gguf", "nomic-embed-text v1.5 (embedding model)", true, false, false, nomic_ref);
     // test images and audio: tests/media in the repo, or media/ next to the models (Android)
     const char* media_env = getenv("KILN_TEST_MEDIA");
     std::string media = media_env ? media_env : exists(dir + "/media/invoice.png") ? dir + "/media" : dir + "/../tests/media";

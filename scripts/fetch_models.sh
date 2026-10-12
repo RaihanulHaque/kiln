@@ -4,6 +4,10 @@
 # for the kiln_embed_media tests (~0.9 GB more).
 # usage: scripts/fetch_models.sh [--media]
 set -euo pipefail
+# a mistyped flag must not look like a successful setup that then skips the media tests
+for arg in "$@"; do
+  [ "$arg" = "--media" ] || { echo "unknown argument: $arg" >&2; echo "usage: scripts/fetch_models.sh [--media]" >&2; exit 2; }
+done
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$ROOT/models"
 

@@ -321,7 +321,7 @@ typedef struct kiln_embed_stats {
     int32_t media_tokens;         /* of those, how many came from images and audio */
     int32_t dimensions;           /* numbers written to out */
     bool    prefixed;             /* a task prefix was added */
-    double  media_ms;             /* time spent in the image / audio encoders */
+    double  media_ms;             /* time inside the image / audio encoders only */
     double  ms;                   /* total, media_ms included */
 } kiln_embed_stats;
 
@@ -329,7 +329,8 @@ typedef struct kiln_embed_stats {
  * Each call is independent; the context keeps nothing between texts. Blocking.
  * A text longer than the context returns KILN_ERR_CONTEXT_FULL (nothing is cut silently):
  * split long documents into pieces. For an embedding model kiln_context_params.n_ctx is the
- * longest text in tokens (0 = 2048). opts and stats may be NULL.
+ * longest text in tokens (0 = 2048). The context is never larger than the model's training
+ * context (kiln_model_info.n_ctx_train), whatever is asked for. opts and stats may be NULL.
  * Returns KILN_ERR_NOT_SUPPORTED on a model that is not an embedding model. */
 KILN_API kiln_status kiln_embed(kiln_context* c, const char* text,
                                 const kiln_embed_options* opts,

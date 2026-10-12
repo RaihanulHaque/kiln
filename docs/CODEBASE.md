@@ -166,8 +166,9 @@ template.
    it does not fit. Then it clears the memory, decodes the whole text in one batch with every
    token marked as an output, and reads the pooled vector with `llama_get_embeddings_seq`.
 5. **Shorten and normalise.** With `dimensions = 256` only the first 256 numbers are kept.
-   The result is divided by its length so that a dot product of two vectors is their cosine
-   similarity.
+   Unless `normalize` is switched off, the result is divided by its length so that a dot
+   product of two vectors is their cosine similarity. With `normalize = false` the vector keeps
+   the model's own length and a dot product is no longer a cosine.
 
 **With images or audio** (`kiln_embed_media`) step 4 changes. The projector is a second
 model file holding an image encoder, an audio encoder, or both. llama.cpp's `mtmd` library
@@ -178,8 +179,9 @@ model file holding an image encoder, an audio encoder, or both. llama.cpp's `mtm
 3. `mtmd_tokenize` splits the input at each `<__media__>` marker into chunks: runs of text
    tokens, and one chunk per media item, wrapped in the model's own begin / end tokens.
 4. `mtmd_encode_chunk` runs the encoder on a media chunk. Out come vectors of the same size
-   the model uses for a text token: 81 for a small image, 25 per second of audio
-   (EmbeddingGemma 2).
+   the model uses for a text token. How many vectors depends on the input: 81 of them for a
+   small image, 25 for each second of audio (EmbeddingGemma 2). Each one takes a place in the
+   context, like a token.
 5. Everything goes into one `llama_batch_ext` that mixes token ids and those vectors, and
    one `llama_process` call. This follows `add_prompt_mixed` in llama.cpp's server, which is
    how the server handles a non-causal model. Pooling and normalising are the same as for text.
