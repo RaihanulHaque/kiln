@@ -28,7 +28,7 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 | platform | backend | what passed |
 |---|---|---|
 | Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5, Android 17), v0.3.1 | llama.cpp CPU, 6 threads pinned | 319 C checks, 26 Flutter integration tests, example app, benchmarks; [profile](docs/devices/galaxy-s26-ultra.md) |
-| Pixel 8 (Tensor G3, Android 16), v0.3.1 | llama.cpp CPU, 5 threads pinned | 334 C checks; 23 Flutter integration tests and benchmarks at v0.3.0 |
+| Pixel 8 (Tensor G3, Android 16), v0.3.1 | llama.cpp CPU, 5 threads pinned | 334 C checks, 26 Flutter integration tests; benchmarks at v0.3.0 |
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
 | MacBook Pro M4 Pro, v0.3.1 | llama.cpp Metal | 334 C checks; chat benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.3.0 | llama.cpp CPU | 317 C checks, before two checks were added on the Mac; not re-run since |

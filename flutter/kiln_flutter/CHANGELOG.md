@@ -7,6 +7,7 @@
   unchanged. `KilnDeviceInfo.cpuFastCores` reports the new choice.
 - Verified on a Galaxy S26 Ultra (26 integration tests and the native test suite) and on a
   Pixel 8 (native test suite; its integration test was last run at 0.3.0). No API change.
+  Added after the release: the 26 integration tests also pass on the Pixel 8 at 0.3.1.
 
 ## 0.3.0
 

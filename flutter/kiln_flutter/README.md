@@ -123,7 +123,7 @@ EmbeddingGemma 2 (text, images, audio; Apache 2.0) and nomic-embed-text v1.5 (te
 
 | platform | native | verified |
 |---|---|---|
-| Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Galaxy S26 Ultra: 26 of 26 integration tests with speed and media groups (0.3.1). Pixel 8: 23 of 23 at 0.3.0, native suite at 0.3.1 |
+| Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Galaxy S26 Ultra and Pixel 8: 26 of 26 integration tests with speed and media groups (0.3.1) |
 | iOS 15+ | not in the pub.dev package; from a clone, `kiln.xcframework` via `scripts/build_ios.sh`, Metal | **In progress, not supported yet.** iPhone 16 Pro at v0.1.0: 7 of 9 integration tests; not re-run for v0.2.0 |
 
 Desktop (macOS/Linux) works for development by passing a host build:
