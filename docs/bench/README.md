@@ -157,6 +157,40 @@ Three things to take from this:
 3. "Available RAM" on this 8 GB phone bottomed at 1.67 GB with Qwen loaded. A 2B model at Q4
    (1.5 to 2.5 GB resident) would work but would start evicting other apps.
 
+## Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5, CPU, 6 threads pinned to cores 2 to 7)
+
+2026-10-12, kiln v0.3.0 plus the core-selection fix this phone led to. The chip has no little
+cores: two at 4.74 GHz and six at 3.63 GHz. kiln v0.3.0 used only the two; it now uses six.
+The whole story, the core sweep and a GPU trial are in
+[../devices/galaxy-s26-ultra.md](../devices/galaxy-s26-ultra.md). Files: `s26ultra_*` is the
+new default, `s26ultra-2t_*` the v0.3.0 default, `s26ultra-8t_*` all eight cores (chat models).
+
+Every series started on a warm phone (38.5 °C skin, throttle status 1), so compare the first
+runs here with the Pixel 8's warm figures, not its cold ones.
+
+| model | load | peak RSS | speed run 1 → 5 | fast-core MHz run 1 → 5 |
+|---|---|---|---|---|
+| LFM2.5 350M Q4_K_M | 0.3 s | 513 MB | 224 → 194 tok/s | 3652 → 2894 |
+| Qwen3.5 0.8B Q4_K_M | 1.0 s | 1218 MB | 76 → 56 tok/s | 3511 → 1827 |
+| Gemma 3 270M Q8_0 | 0.5 s | 665 MB | 173 → 146 tok/s | 3694 → 2934 |
+| LFM2 d1-omni 600M Q8_0 | 0.5 s | 802 MB | 77 → 122 ms per question | 3546 → 2160 |
+| nomic-embed-text v1.5 | 0.2 s | 177 MB | 10 → 13 ms per note | 3741 → 2726 |
+| jina v5 omni nano | 0.4 s | 297 MB | 9 → 11 ms per note | 3758 → 2987 |
+| | +0.2 s | 677 MB | image: 1.5 → 2.1 s | 2550 → 1766 |
+| EmbeddingGemma 2 | 0.5 s | 393 MB | 17 → 24 ms per note | 3738 → 2587 |
+| | +0.7 s | 1074 MB | image: 1.5 → 2.2 s | 2269 → 1570 |
+| | | | 3 s audio clip: 0.55 s (first run 1.4 s) | 1605 → 1541 |
+
+![](s26ultra_Qwen3.5-0.8B-Q4_K_M.png)
+
+Against the Pixel 8 in the same warm state, this phone is about twice as fast for chat (Qwen3.5
+56 vs 26 tok/s in the fifth run), three times as fast for decisions and text embedding, and three
+times as fast for images. It also never ran short of memory: at least 3 GB stayed available with
+the largest model loaded, where the Pixel 8 dropped under 1 GB and stalled.
+
+The same throttling pattern is there, just gentler: the OS steps the clock down as the skin
+warms from 38.5 to about 42 °C, and the fifth run is 15 to 35% slower than the first.
+
 ## M4 Pro (Metal)
 
 | model | load | peak RSS | gen tok/s (5 runs) | process CPU |

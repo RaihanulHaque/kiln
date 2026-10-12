@@ -69,7 +69,7 @@ typedef struct kiln_device_info {
     char     soc[64];             /* e.g. "Qualcomm SM8650", "Apple M4 Pro" */
     char     abi[16];             /* e.g. "arm64-v8a" */
     int32_t  cpu_cores;
-    int32_t  cpu_big_cores;       /* cores outside the slowest cluster, = cpu_cores if unknown */
+    int32_t  cpu_big_cores;       /* cores kiln treats as fast: all but the little cores, = cpu_cores if unknown */
     uint64_t cpu_fast_mask;       /* bitmask of those cores (bit i = cpu i); 0 = no affinity info */
     uint64_t ram_total_bytes;
     uint64_t ram_available_bytes;

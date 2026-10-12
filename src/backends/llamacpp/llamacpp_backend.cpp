@@ -2,6 +2,7 @@
 #include "../../core/internal.h"
 #include "decision.h"
 #include "embedding.h"
+#include "../../probe/fast_cores.h"
 #include "reasoning_splitter.h"
 #include "llama.h"
 #include "ggml-backend.h"
@@ -60,9 +61,7 @@ ggml_backend_dev_t first_gpu_device() {
 }
 
 int default_threads(const kiln_device_info& d) {
-    int n = d.cpu_big_cores > 0 ? d.cpu_big_cores : d.cpu_cores;
-    if (n <= 0) n = 4;
-    return n > 8 ? 8 : n;
+    return kiln::default_thread_count(d.cpu_cores, d.cpu_big_cores, d.cpu_fast_mask != 0);   // rules in fast_cores.h
 }
 
 std::string rtrim(std::string s) {

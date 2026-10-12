@@ -1,4 +1,5 @@
 // CPU / RAM / ABI probe. GPU and NPU fields are filled by backends via annotate_device().
+#include "fast_cores.h"
 #include "../core/internal.h"
 #include <cstring>
 #include <cstdio>
@@ -129,22 +130,21 @@ void probe_cpu(kiln_device_info& d) {
     (void)hw2;
 #    endif
 #  endif
-    // big.LITTLE: group cores by max freq. "Fast" = every core not in the slowest cluster.
-    // On Tensor G3 that is X3 + 4x A715 (5 cores); the 4x A510 are excluded.
+    // Which cores to use: see fast_cores.h for the rules and the chips they were written for.
     {
-        std::vector<long> freqs(d.cpu_cores, 0);
-        long minf = 0, maxf = 0;
-        for (int i = 0; i < d.cpu_cores && i < 64; ++i) {
-            char p[96]; snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
-            std::ifstream f(p); long v = 0; if (f >> v) freqs[i] = v;
-            if (v) { if (!minf || v < minf) minf = v; if (v > maxf) maxf = v; }
+        const int n = d.cpu_cores < 64 ? d.cpu_cores : 64;
+        std::vector<long> freqs(n, 0), caps(n, 0);
+        bool caps_ok = true;
+        for (int i = 0; i < n; ++i) {
+            char p[96];
+            snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
+            { std::ifstream f(p); long v = 0; if (f >> v) freqs[i] = v; }
+            snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%d/cpu_capacity", i);
+            { std::ifstream f(p); long v = 0; if (f >> v && v > 0) caps[i] = v; else caps_ok = false; }
         }
-        if (maxf > minf) {
-            int fast = 0; uint64_t mask = 0;
-            for (int i = 0; i < d.cpu_cores && i < 64; ++i)
-                if (freqs[i] > minf) { ++fast; mask |= (1ull << i); }
-            d.cpu_big_cores = fast; d.cpu_fast_mask = mask;
-        }
+        if (!caps_ok) caps.clear();
+        const uint64_t mask = fast_core_mask(freqs, caps);
+        if (mask) { d.cpu_fast_mask = mask; d.cpu_big_cores = __builtin_popcountll(mask); }
     }
 #endif
     if (d.cpu_big_cores <= 0) d.cpu_big_cores = d.cpu_cores;

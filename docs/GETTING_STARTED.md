@@ -311,7 +311,9 @@ Expect rough edges, and please open an issue with what you find.
 
 ## What is and is not verified
 
-kiln only claims what was run. As of v0.3.0: Pixel 8 (Tensor G3) with the full test suite and
-the example app. Not yet tried: Snapdragon and MediaTek phones, phones with 4 GB of RAM, and
+kiln only claims what was run. As of v0.3.0: Pixel 8 (Tensor G3) and Galaxy S26 Ultra
+(Snapdragon 8 Elite Gen 5) with the full test suite and the example app. kiln_flutter 0.3.0
+uses only 2 of the S26 Ultra's 8 cores; the fix is in the repo and in the next release.
+Not yet tried: MediaTek and mid-range Snapdragon phones, phones with 4 GB of RAM, and
 iOS since v0.1.0. If you run it on another device, an issue with the output of `probeDevice()` and
 `stats` is very welcome. The [README](../README.md) has the status table.

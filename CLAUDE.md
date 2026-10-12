@@ -97,6 +97,18 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   with llama.cpp's numbers allow 0.015; tests that rank two texts need a real margin.
 - **The Pixel 8's screen is damaged (2026-10).** adb, `scripts/android-test.sh`, the Flutter
   integration test and `adb exec-out screencap` all still work; only physical taps do not.
+- **Core selection lives in `src/probe/fast_cores.h`** as pure functions with unit tests
+  (`test_core_selection`). A new chip layout gets a test there with the values the phone
+  reports (`cpuinfo_max_freq`, `cpu_capacity`) before the rule is touched.
+- **`flutter test integration_test` overwrites `build/app/outputs/flutter-apk/app-debug.apk`**
+  with a test-harness build that sits on the splash screen. Run `flutter build apk` again
+  before installing the example app by hand.
+- **A borrowed phone gets everything in one session**: tests, bench, Flutter test, app, and a
+  saved profile in `docs/devices/`. Clean up after: uninstall the example app and remove
+  `/data/local/tmp/kiln` (and `/data/local/tmp/llama.cpp`, the OpenCL kernel cache, if a GPU
+  build was run).
+- **GPU builds for Android are a trial only.** The OpenCL recipe and its two traps (vendor
+  library path, static C++ runtime) are in `docs/devices/galaxy-s26-ultra.md`.
 - **A shell glob that matches nothing makes `ls` fail**, and with `set -o pipefail` that ends
   the script without a message. This broke the Android scripts on macOS once.
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
@@ -123,6 +135,11 @@ the Pixel 8 (`--dart-define=KILN_MEDIA=true` for the image and audio test). Stil
   changed on the Mac). Linux arm64 in Docker on the Mac gives 319 passed, and so does emulated x86_64
   (add `--platform linux/amd64`, about four times slower); see the command above.
 - iOS, as for everything else.
+- Pixel 8 after the core-selection change (2026-10-12). The rule should leave it at 5 threads
+  on cores 4 to 8: check with `kiln-cli --probe` (expect `fast: 5, mask: 0x1f0`) and
+  `cat /sys/devices/system/cpu/cpu*/cpu_capacity` the next time it is plugged in.
+- The Galaxy S26 Ultra ran the core-selection rule in its first form; the refactor into
+  `fast_cores.h` came after the phone was returned and is covered by unit tests only.
 
 Known gaps: embedding models take one input per call; no video, no raw pixels or samples
 (files or file bytes only); images and audio are for embedding models only, not chat. Decision models take a text state only (no images or audio,

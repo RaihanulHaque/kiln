@@ -12,7 +12,8 @@ that release and still apply to the next one.
 
 - [ ] `cmake --build --preset host && ./build/host/kiln-tests models` green on macOS
 - [ ] `scripts/android-test.sh` green on at least one Snapdragon, one Tensor, one MediaTek
-      device (today: Tensor G3 only)
+      device (today: Tensor G3 on a Pixel 8, and Snapdragon 8 Elite Gen 5 on a Galaxy S26 Ultra;
+      no MediaTek, and no older or mid-range Snapdragon)
 - [ ] `kiln-cli --chat` manual run with each supported family: LFM2, Qwen3.5 (think on/off),
       Gemma 3; and one new GGUF the suite has never seen
 - [ ] `scripts/bench.sh` run; numbers in `docs/bench` refreshed if the core changed

@@ -3,7 +3,11 @@
 # Every model in models/ is benchmarked the way it is used: chat models generate text, decision
 # models answer questions, embedding models embed texts and, when their projector file is there,
 # an image and an audio clip from tests/media.
-# usage: scripts/bench.sh [runs] [tokens]        KILN_BENCH_ONLY=<substring> limits it to matching models
+# usage: scripts/bench.sh [runs] [tokens]
+#   KILN_BENCH_ONLY=<substring>     only models whose file name contains it
+#   KILN_BENCH_SKIP_HOST=1          device only (do not overwrite the host's results)
+#   KILN_BENCH_DEVICE_TAG=<name>    file prefix for the device (default: its model name, lower case)
+#   KILN_BENCH_DEVICE_ENV="A=b"     environment for kiln-bench on the device, e.g. KILN_CPU_MASK=fc
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUNS="${1:-5}"; N="${2:-256}"
@@ -61,6 +65,7 @@ wait_cool() {
 }
 
 while IFS= read -r m; do
+  [ -z "${KILN_BENCH_SKIP_HOST:-}" ] || break
   name="$(basename "$m" .gguf)"
   echo "=== $HOST_TAG $name ==="
   # shellcheck disable=SC2046
@@ -69,7 +74,7 @@ while IFS= read -r m; do
 done < <(models)
 
 if adb get-state >/dev/null 2>&1; then
-  tag="$(adb shell getprop ro.product.model | tr -d '\r ' | tr '[:upper:]' '[:lower:]')"
+  tag="${KILN_BENCH_DEVICE_TAG:-$(adb shell getprop ro.product.model | tr -d '\r ' | tr '[:upper:]' '[:lower:]')}"
   adb shell mkdir -p "$DEV/media"
   adb push "$ROOT/build/android-arm64/kiln-bench" "$ROOT/build/android-arm64/libkiln.so" "$DEV/" >/dev/null
   adb push "$ROOT"/tests/media/. "$DEV/media/" >/dev/null
@@ -83,7 +88,7 @@ if adb get-state >/dev/null 2>&1; then
     fi
     echo "=== $tag $name ==="
     wait_cool
-    adb shell "cd $DEV && LD_LIBRARY_PATH=$DEV ./kiln-bench -m $name.gguf -r $RUNS -n $N --cooldown 10 -o $DEV/bench.csv $extra" < /dev/null
+    adb shell "cd $DEV && LD_LIBRARY_PATH=$DEV ${KILN_BENCH_DEVICE_ENV:-} ./kiln-bench -m $name.gguf -r $RUNS -n $N --cooldown 10 -o $DEV/bench.csv $extra" < /dev/null
     adb pull "$DEV/bench.csv" "$OUT/${tag}_$name.csv" >/dev/null
     adb pull "$DEV/bench.runs.csv" "$OUT/${tag}_$name.runs.csv" >/dev/null
     sleep 30   # skin temperature lags the cores; wait_cool handles the rest before the next model

@@ -143,8 +143,12 @@ struct Sampler {
                 double t = now_ms(), c = cpu_seconds();
                 double pct = (c - last_cpu) * 1000.0 / (t - last_t) * 100.0;   // 100% = one core
                 last_t = t; last_cpu = c;
-                if (zones.empty() && t - last_therm > 1000) { th = read_dumpsys_thermal(); last_therm = t; }
-                double temp = zones.empty() ? th.cpu_c : max_temp_c(zones);
+                // Android's thermal service is asked about once a second on every device: it is the
+                // only source of skin temperature and throttle status, and its CPU reading is the
+                // one the OS acts on. Raw sysfs zones are the fallback (some report a constant:
+                // a Galaxy S26 Ultra has one stuck at 105 C).
+                if (t - last_therm > 1000) { th = read_dumpsys_thermal(); last_therm = t; }
+                double temp = th.cpu_c > 0 ? th.cpu_c : max_temp_c(zones);
                 fprintf(out, "%.0f,%d,%s,%.1f,%.1f,%.0f,%.1f,%.1f,%d,%.0f,%d\n", t, run.load(), phase_names[phase.load()],
                         rss_mb(), pct, cpu_freq_mhz(fast_mask), temp, th.skin_c, th.status, mem_available_mb(), tokens.load());
                 fflush(out);
@@ -156,6 +160,12 @@ struct Sampler {
 
 static Sampler* g_sampler;
 static bool on_piece(kiln_channel, const char*, int32_t, void*) { g_sampler->tokens++; return true; }
+
+// CPU temperature right now, from the thermal service where there is one, else from sysfs.
+static double current_temp_c(const std::vector<ThermalZone>& zones) {
+    const Thermal th = read_dumpsys_thermal();
+    return th.cpu_c > 0 ? th.cpu_c : max_temp_c(zones);
+}
 
 // ---------------------------------------------------------------- per-run results
 // One line per run, on stderr and (with -o x.csv) in x.runs.csv:
@@ -199,9 +209,8 @@ static bool burst(Sampler& s, int phase, const std::string& series, int runs, in
         }
         const double total = now_ms() - t0;
         peak_rss = std::max(peak_rss, rss_mb());
-        const Thermal th = s.zones.empty() ? read_dumpsys_thermal() : Thermal{};
         report(series, r, "call", calls, total, total / calls, *std::min_element(ms.begin(), ms.end()), *std::max_element(ms.begin(), ms.end()),
-               calls * 1000.0 / total, s.zones.empty() ? th.cpu_c : max_temp_c(s.zones), (int)(tokens / calls), 0, 0);
+               calls * 1000.0 / total, current_temp_c(s.zones), (int)(tokens / calls), 0, 0);
         s.phase = 0;
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -272,7 +281,7 @@ int main(int argc, char** argv) {
     }
     s.fast_mask = dev.cpu_fast_mask; s.zones = find_thermal_zones(); s.interval_ms = interval_ms;
     g_sampler = &s;
-    fprintf(stderr, "device: %s, %d cores (%d fast), thermal: %s\n", dev.soc, dev.cpu_cores, dev.cpu_big_cores, !s.zones.empty() ? "sysfs" : read_dumpsys_thermal().ok ? "dumpsys" : "none");
+    fprintf(stderr, "device: %s, %d cores (%d fast), thermal: %s\n", dev.soc, dev.cpu_cores, dev.cpu_big_cores, read_dumpsys_thermal().ok ? "dumpsys" : !s.zones.empty() ? "sysfs" : "none");
     now_ms();
     s.start();
     std::this_thread::sleep_for(std::chrono::seconds(2));          // baseline
@@ -349,9 +358,8 @@ int main(int argc, char** argv) {
             kiln_gen_stats st;
             kiln_status rc = kiln_chat(c, msgs, 1, nullptr, &sp, Hook::cb, nullptr, &st);
             double rss = rss_mb(); if (rss > peak_rss) peak_rss = rss;
-            Thermal th = s.zones.empty() ? read_dumpsys_thermal() : Thermal{};
             report("chat", r, "tok", st.generated_tokens, st.gen_ms, st.generated_tokens > 0 ? st.gen_ms / st.generated_tokens : 0, 0, 0, st.gen_tps,
-                   s.zones.empty() ? th.cpu_c : max_temp_c(s.zones), 0, st.prompt_tokens, st.prompt_ms);
+                   current_temp_c(s.zones), 0, st.prompt_tokens, st.prompt_ms);
             if (rc != KILN_OK) fprintf(stderr, "run %d: %s\n", r, kiln_last_error());
             s.phase = 0;
             std::this_thread::sleep_for(std::chrono::milliseconds(500));

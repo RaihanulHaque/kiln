@@ -62,7 +62,8 @@ flowchart LR
 Before loading anything, kiln reads what the device is: SoC name, how many cores, each
 core's maximum clock, RAM, which ARM instruction extensions exist, whether a GPU backend is
 compiled in. From the per-core clocks it groups cores into **tiers** and drops the slowest
-tier; what remains are the **fast cores**, which become the thread count and the pin set.
+tier, unless that tier is not made of little cores at all; what remains are the **fast
+cores**, which become the thread count and the pin set.
 Everything in `kiln_device_info` comes from here and is also what the stats and the sample
 app display.
 
@@ -71,9 +72,12 @@ flowchart TD
     A["read cpuinfo_max_freq for every core"] --> B["group cores by max clock into tiers"]
     B --> C{"more than one tier?"}
     C -- no --> D["fast set = all cores"]
-    C -- yes --> E["fast set = every core not in the slowest tier"]
+    C -- yes --> S{"is the slowest tier at least half as strong as the best core? (cpu_capacity)"}
+    S -- no: little cores --> E["fast set = every core not in the slowest tier"]
+    S -- yes: no little cores --> K["fast set = all cores, leave two free"]
     D --> F["threads = min(fast cores, 8)"]
     E --> F
+    K --> F
     F --> G["pin thread i to the i-th highest-numbered fast core"]
     G --> H["Pixel 8: cores 4..8 → X3 + 4× A715, A510s idle"]
 ```
