@@ -107,8 +107,9 @@ temperatures from the thermal service first.
 | Flutter integration test with `KILN_SPEED` and `KILN_MEDIA` | 26 passed |
 | example app: library, load, chat | works; the device card shows "QTI SM8850, 8 cores, 8 fast" |
 
-The 15 unit checks for the core-selection rules were added after the phone had been returned;
-on the phone itself the rule ran in its first form (same logic, inside the probe).
+The suite and the benchmarks ran with the rule in its first form, inside the probe. The final
+form (pure functions in `fast_cores.h`, with 15 unit checks) was then run on the phone as well:
+the probe gave the same result (`fast: 8, mask: 0xff`) and the unit checks passed there.
 
 ## GPU: OpenCL on the Adreno 840
 

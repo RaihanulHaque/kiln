@@ -138,8 +138,6 @@ the Pixel 8 (`--dart-define=KILN_MEDIA=true` for the image and audio test). Stil
 - Pixel 8 after the core-selection change (2026-10-12). The rule should leave it at 5 threads
   on cores 4 to 8: check with `kiln-cli --probe` (expect `fast: 5, mask: 0x1f0`) and
   `cat /sys/devices/system/cpu/cpu*/cpu_capacity` the next time it is plugged in.
-- The Galaxy S26 Ultra ran the core-selection rule in its first form; the refactor into
-  `fast_cores.h` came after the phone was returned and is covered by unit tests only.
 
 Known gaps: embedding models take one input per call; no video, no raw pixels or samples
 (files or file bytes only); images and audio are for embedding models only, not chat. Decision models take a text state only (no images or audio,
