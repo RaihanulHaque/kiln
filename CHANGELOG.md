@@ -13,8 +13,9 @@ checks, 26 Flutter integration tests, the example app and the benchmarks. See
   that is 6 threads instead of 2. Under sustained load LFM2.5 and Qwen3.5 chat are 18 to 24%
   faster, Gemma 3 270M is about level (4% slower), and a decision or an embedding takes 35 to
   45% less time. `kiln_device_info.cpu_big_cores` and `cpu_fast_mask` report
-  the new choice. Chips with little cores are not affected (unit-tested with a Tensor G3
-  layout; the Pixel 8 itself was not re-run). No ABI change.
+  the new choice. Chips with little cores are not affected: the Pixel 8 was re-run on
+  2026-10-13 and still gets 5 threads on the same cores (its little cores are rated 182 of
+  1024), with 334 checks passing. No ABI change.
 - `kiln-bench` takes temperatures from Android's thermal service first; the S26 Ultra has a raw
   sensor stuck at 105 °C.
 - `scripts/bench.sh`: `KILN_BENCH_SKIP_HOST`, `KILN_BENCH_DEVICE_TAG`, `KILN_BENCH_DEVICE_ENV`.

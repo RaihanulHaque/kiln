@@ -61,11 +61,11 @@ static void test_core_selection() {
     // without cpu_capacity only the frequency rule is left: the two prime cores, as before the fix
     CHECK(fast_core_mask(s26_f, {}) == 0xc0ull, "S26 Ultra without capacity");
 
-    // Pixel 8, Tensor G3: frequencies as measured. The capacities are typical values for these
-    // cores (A510 / A715 / X3), not read from the phone; what matters is that a little core is
-    // far below half of the strongest. The five fast cores must stay selected, with 5 threads.
+    // Pixel 8, Tensor G3: values read from the phone on 2026-10-13. The little cores (A510) are at
+    // 18% of the strongest, the middle ones (A715) at 71%. The five fast cores must stay selected,
+    // with 5 threads.
     const std::vector<long> p8_f = {1704000, 1704000, 1704000, 1704000, 2367000, 2367000, 2367000, 2367000, 2914000};
-    const std::vector<long> p8_c = {250, 250, 250, 250, 760, 760, 760, 760, 1024};
+    const std::vector<long> p8_c = {182, 182, 182, 182, 725, 725, 725, 725, 1024};
     CHECK(fast_core_mask(p8_f, p8_c) == 0x1f0ull, "Pixel 8 mask=%llx", (unsigned long long)fast_core_mask(p8_f, p8_c));
     CHECK(fast_core_mask(p8_f, {}) == 0x1f0ull, "Pixel 8 without capacity");
     CHECK(default_thread_count(9, 5, true) == 5, "Pixel 8 threads=%d", default_thread_count(9, 5, true));

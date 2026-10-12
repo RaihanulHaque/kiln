@@ -105,6 +105,9 @@ its `cpu_capacity` (the kernel's rating of a core, 1024 = strongest) is at least
 strongest core's: then it is not a little cluster. N = that many threads (capped at 8) are
 pinned to the highest-numbered of those cores; where every core is fast, two are left free.
 The rules are pure functions in `src/probe/fast_cores.h`, with unit tests.
+Measured `cpu_capacity`: Pixel 8 (Tensor G3) 182 / 725 / 1024 for A510 / A715 / X3;
+Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5) 741 / 1024. A little core is under a fifth of the
+best core; the half-way line has a wide margin on both sides.
 
 - no-little layouts (8 Elite, Dimensity 9300): **fixed after measuring a Galaxy S26 Ultra**
   (Snapdragon 8 Elite Gen 5, 2 + 6). The frequency rule alone kept 2 cores; with the capacity

@@ -34,7 +34,9 @@ kiln's rule was "group cores by top clock and drop the slowest group", written f
 little cores. Here it dropped six strong cores. The rule now keeps the slowest group when its
 `cpu_capacity` is at least half of the strongest core's, and where every core is fast it leaves
 two free for the rest of the system. Both rules are in `src/probe/fast_cores.h` with unit tests
-that use this phone's values.
+that use this phone's values and the Pixel 8's. For comparison, the Pixel 8 reports 182 for its
+little cores, 725 for the middle ones and 1024 for the big one; it was re-run after the change
+and keeps its 5 threads.
 
 ## Which cores to use: the sweep
 

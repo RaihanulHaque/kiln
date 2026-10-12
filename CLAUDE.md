@@ -135,9 +135,6 @@ the Pixel 8 (`--dart-define=KILN_MEDIA=true` for the image and audio test). Stil
   changed on the Mac). Linux arm64 in Docker on the Mac gives 319 passed, and so does emulated x86_64
   (add `--platform linux/amd64`, about four times slower); see the command above.
 - iOS, as for everything else.
-- Pixel 8 after the core-selection change (2026-10-12). The rule should leave it at 5 threads
-  on cores 4 to 8: check with `kiln-cli --probe` (expect `fast: 5, mask: 0x1f0`) and
-  `cat /sys/devices/system/cpu/cpu*/cpu_capacity` the next time it is plugged in.
 
 Known gaps: embedding models take one input per call; no video, no raw pixels or samples
 (files or file bytes only); images and audio are for embedding models only, not chat. Decision models take a text state only (no images or audio,
