@@ -39,8 +39,9 @@ checks, 26 Flutter integration tests, the example app and the benchmarks. See
 Verified with `kiln-tests` (334 checks: 319 plus 15 for core selection) on macOS (M4 Pro,
 Metal) and Android (Pixel 8); the Galaxy S26 Ultra ran the 319 before the unit checks existed
 and the 15 afterwards. Flutter integration test: 26 tests on the Galaxy S26 Ultra with the
-core-selection fix. It was not repeated on the Pixel 8 for 0.3.1 (the Dart code is unchanged
-since 0.3.0, where it passed there). Not run on Linux or iOS.
+core-selection fix, and 26 on the Pixel 8 at 0.3.1. The Pixel 8 run was done on 2026-10-13,
+after the release (the phone was locked before it), together with a fresh app that installed
+0.3.1 from pub.dev and ran an embedding search on that phone. Not run on Linux or iOS.
 
 ## 0.3.0
 
