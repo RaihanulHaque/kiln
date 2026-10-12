@@ -1,8 +1,16 @@
-// kiln-bench: resource usage over time while kiln loads and generates.
+// kiln-bench: resource usage over time while kiln loads a model and works with it.
 // Samples RSS, process CPU%, CPU frequency, and thermal zones on a background thread.
 // Writes CSV; scripts/bench_plot.py turns it into charts.
+//
+// What "work" is depends on the kind of model, which the tool reads from the model itself:
+//   chat model       each run generates -n tokens                      speed = tokens per second
+//   decision model   each run asks --calls questions (kiln_decide)     speed = ms per question
+//   embedding model  each run embeds --calls texts (kiln_embed), and with --mmproj and --media
+//                    each media file --media-calls times               speed = ms per input
+// Runs come back to back, so the later ones show what heat does to the speed.
 #include "kiln/kiln.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -118,7 +126,7 @@ struct Sampler {
     std::atomic<int>  phase{0};          // index into phase_names
     std::atomic<int>  tokens{0};
     std::atomic<int>  run{0};
-    std::vector<const char*> phase_names{"idle", "load", "prompt", "generate", "cooldown"};
+    std::vector<const char*> phase_names{"idle", "load", "prompt", "generate", "cooldown", "decide", "embed", "encode"};
     FILE* out;
     uint64_t fast_mask;
     std::vector<ThermalZone> zones;
@@ -149,9 +157,80 @@ struct Sampler {
 static Sampler* g_sampler;
 static bool on_piece(kiln_channel, const char*, int32_t, void*) { g_sampler->tokens++; return true; }
 
+// ---------------------------------------------------------------- per-run results
+// One line per run, on stderr and (with -o x.csv) in x.runs.csv:
+//   series  chat | decide | embed-text | embed-<media file>
+//   unit    tok (chat: count = generated tokens) or call (count = calls in the run)
+//   per_s   tokens per second, or calls per second
+
+static FILE* g_runs = nullptr;
+static const char* kRunsHeader = "series,run,unit,count,total_ms,mean_ms,min_ms,max_ms,per_s,rss_mb,temp_c,tokens_per_call,prompt_tok,prompt_ms";
+
+static void report(const std::string& series, int run, const char* unit, int count, double total_ms, double mean_ms,
+                   double min_ms, double max_ms, double per_s, double temp_c, int tokens_per_call, int prompt_tok, double prompt_ms) {
+    char line[512];
+    snprintf(line, sizeof line, "%s,%d,%s,%d,%.0f,%.2f,%.2f,%.2f,%.1f,%.0f,%.1f,%d,%d,%.0f", series.c_str(), run, unit, count, total_ms,
+             mean_ms, min_ms, max_ms, per_s, rss_mb(), temp_c, tokens_per_call, prompt_tok, prompt_ms);
+    fprintf(stderr, "%s\n", line);
+    if (g_runs) { fprintf(g_runs, "%s\n", line); fflush(g_runs); }
+}
+
+static std::string base_name(const std::string& path) {
+    const size_t p = path.find_last_of('/');
+    return p == std::string::npos ? path : path.substr(p + 1);
+}
+
+// Runs `calls` calls of fn back to back, `runs` times, and reports each run. fn returns the
+// tokens the model read for that call, or a negative number on failure.
+template <class Fn>
+static bool burst(Sampler& s, int phase, const std::string& series, int runs, int calls, int& run_no, double& peak_rss, Fn fn) {
+    for (int r = 1; r <= runs; ++r) {
+        s.run = ++run_no; s.tokens = 0; s.phase = phase;
+        std::vector<double> ms; ms.reserve(calls);
+        long tokens = 0;
+        const double t0 = now_ms();
+        for (int i = 0; i < calls; ++i) {
+            const double a = now_ms();
+            const int tok = fn(i);
+            if (tok < 0) { fprintf(stderr, "%s run %d call %d: %s\n", series.c_str(), r, i, kiln_last_error()); s.phase = 0; return false; }
+            ms.push_back(now_ms() - a);
+            tokens += tok;
+            s.tokens++;                                   // the samples' "tokens" column counts calls here
+        }
+        const double total = now_ms() - t0;
+        peak_rss = std::max(peak_rss, rss_mb());
+        const Thermal th = s.zones.empty() ? read_dumpsys_thermal() : Thermal{};
+        report(series, r, "call", calls, total, total / calls, *std::min_element(ms.begin(), ms.end()), *std::max_element(ms.begin(), ms.end()),
+               calls * 1000.0 / total, s.zones.empty() ? th.cpu_c : max_temp_c(s.zones), (int)(tokens / calls), 0, 0);
+        s.phase = 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    return true;
+}
+
+// A support message and three questions about it, one of each kind: what an app would ask to
+// route a ticket. The same inputs every call, so run-to-run changes are the device, not the work.
+static const char* kState =
+    "Hi, I ordered a blender two weeks ago and it arrived broken. I have emailed twice and nobody "
+    "answered. I want my money back today or I will dispute the charge with my bank.";
+
+// Notes of different lengths, as an app would index them for search.
+static const char* kTexts[] = {
+    "Knead the dough and let it rise for an hour before baking.",
+    "The train to Leeds leaves from platform 4 at 9:15.",
+    "To get back into your account, open Settings, choose Security, then tap Forgot credentials and follow the link we send you.",
+    "Water the tomatoes every second day and keep them in full sun.",
+    "The dentist moved my appointment to Thursday afternoon, so the review meeting has to start an hour earlier than planned.",
+    "Ahmed owes me 40 for the concert tickets.",
+    "The wifi code for the flat is written under the router, and the guest network is switched off on weekdays.",
+    "Replace the bike chain when it starts skipping gears; a worn chain also wears out the cassette, which costs three times as much.",
+};
+
 int main(int argc, char** argv) {
     std::string model, out_path;
-    int runs = 5, n_gen = 256, cooldown_s = 5, interval_ms = 250, threads = 0;
+    int runs = 5, n_gen = 256, cooldown_s = 5, interval_ms = 250, threads = 0, calls = 0, media_calls = 0;
+    std::string mmproj;
+    std::vector<std::string> media;
     std::string prompt = "You are a helpful assistant. Write a detailed, multi-paragraph explanation of how a kiln works, "
                          "covering the history of kilns, the physics of heat transfer inside them, the chemistry of firing clay, "
                          "and modern electric versus wood-fired designs. Be thorough.";
@@ -165,13 +244,32 @@ int main(int argc, char** argv) {
         else if (a == "-t")  threads = atoi(next());
         else if (a == "--cooldown") cooldown_s = atoi(next());
         else if (a == "--interval") interval_ms = atoi(next());
-        else { fprintf(stderr, "usage: kiln-bench -m model.gguf [-o out.csv] [-r runs] [-n tokens] [-t threads] [--cooldown s]\n"); return 2; }
+        else if (a == "--calls") calls = atoi(next());
+        else if (a == "--media-calls") media_calls = atoi(next());
+        else if (a == "--mmproj") mmproj = next();
+        else if (a == "--media") media.push_back(next());
+        else {
+            fprintf(stderr, "usage: kiln-bench -m model.gguf [-o out.csv] [-r runs] [-t threads] [--cooldown s]\n"
+                            "  chat models:      [-n tokens per run]                      (default 256)\n"
+                            "  decision models:  [--calls questions per run]              (default 40)\n"
+                            "  embedding models: [--calls texts per run]                  (default 150)\n"
+                            "                    [--mmproj projector.gguf --media file]... [--media-calls per run] (default 5)\n"
+                            "  -o x.csv also writes x.runs.csv with one line per run\n");
+            return 2;
+        }
     }
     if (model.empty()) return 2;
     kiln_set_log_level(KILN_LOG_ERROR);
 
     kiln_device_info dev; kiln_probe_device(&dev);
     Sampler s; s.out = out_path.empty() ? stdout : fopen(out_path.c_str(), "w");
+    if (!s.out) { fprintf(stderr, "cannot write %s\n", out_path.c_str()); return 1; }
+    if (!out_path.empty()) {
+        std::string rp = out_path;
+        if (rp.size() > 4 && rp.compare(rp.size() - 4, 4, ".csv") == 0) rp.erase(rp.size() - 4);
+        g_runs = fopen((rp + ".runs.csv").c_str(), "w");
+        if (g_runs) fprintf(g_runs, "%s\n", kRunsHeader);
+    }
     s.fast_mask = dev.cpu_fast_mask; s.zones = find_thermal_zones(); s.interval_ms = interval_ms;
     g_sampler = &s;
     fprintf(stderr, "device: %s, %d cores (%d fast), thermal: %s\n", dev.soc, dev.cpu_cores, dev.cpu_big_cores, !s.zones.empty() ? "sysfs" : read_dumpsys_thermal().ok ? "dumpsys" : "none");
@@ -193,24 +291,71 @@ int main(int argc, char** argv) {
     s.phase = 0;
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    kiln_chat_message msgs[] = {{"user", prompt.c_str()}};
-    kiln_sampling_params sp = kiln_sampling_params_default(); sp.max_tokens = n_gen; sp.seed = 1;
     double peak_rss = 0;
-    fprintf(stderr, "run,prompt_tok,prompt_ms,gen_tok,gen_ms,gen_tps,rss_mb,temp_c\n");
-    for (int r = 1; r <= runs; ++r) {
-        kiln_context_reset(c);
-        s.run = r; s.tokens = 0;
-        // phase flips to "generate" on first piece; prompt eval is everything before that
-        s.phase = 2;
-        struct Hook { static bool cb(kiln_channel ch, const char* p, int32_t t, void* u) { if (g_sampler->phase.load() == 2) g_sampler->phase = 3; return on_piece(ch, p, t, u); } };
-        kiln_gen_stats st;
-        kiln_status rc = kiln_chat(c, msgs, 1, nullptr, &sp, Hook::cb, nullptr, &st);
-        double rss = rss_mb(); if (rss > peak_rss) peak_rss = rss;
-        Thermal th = s.zones.empty() ? read_dumpsys_thermal() : Thermal{};
-        fprintf(stderr, "%d,%d,%.0f,%d,%.0f,%.1f,%.0f,%.1f\n", r, st.prompt_tokens, st.prompt_ms, st.generated_tokens, st.gen_ms, st.gen_tps, rss, s.zones.empty() ? th.cpu_c : max_temp_c(s.zones));
-        if (rc != KILN_OK) fprintf(stderr, "run %d: %s\n", r, kiln_last_error());
-        s.phase = 0;
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    int run_no = 0;
+    fprintf(stderr, "%s\n", kRunsHeader);
+    if (mi.is_decision_model) {
+        // one run = `calls` questions, cycling through the three kinds of question
+        if (calls <= 0) calls = 40;
+        const kiln_decision_option teams[] = {{"billing", "Payments, refunds and invoices"}, {"shipping", "Delivery status and lost parcels"},
+                                              {"technical", "The product does not work as expected"}};
+        const kiln_decision_option levels[] = {{nullptr, "Can wait"}, {nullptr, "Today"}, {nullptr, "Blocking the customer now"}};
+        const kiln_decision_question qs[] = {
+            {"wants_refund", KILN_QUESTION_NOUL, "Is the customer asking for a refund?", nullptr, 0},
+            {"team", KILN_QUESTION_CHOICE, "Which team should handle this?", teams, 3},
+            {"urgency", KILN_QUESTION_SCORE, "How urgent is this?", levels, 3},
+        };
+        burst(s, 5, "decide", runs, calls, run_no, peak_rss, [&](int i) {
+            float probs[8]; kiln_decision_answer a;
+            return kiln_decide(c, kState, &qs[i % 3], probs, 8, &a) == KILN_OK ? a.prompt_tokens : -1;
+        });
+    } else if (mi.is_embedding_model) {
+        // one run = `calls` notes embedded as documents; then, with a projector, each media file
+        if (calls <= 0) calls = 150;
+        if (media_calls <= 0) media_calls = 5;
+        std::vector<float> v(mi.n_embd > 0 ? mi.n_embd : 1);
+        kiln_embed_options eo = kiln_embed_options_default(); eo.kind = KILN_EMBED_DOCUMENT;
+        const int n_texts = (int)(sizeof kTexts / sizeof kTexts[0]);
+        bool ok = burst(s, 6, "embed-text", runs, calls, run_no, peak_rss, [&](int i) {
+            kiln_embed_stats es;
+            return kiln_embed(c, kTexts[i % n_texts], &eo, v.data(), (int32_t)v.size(), &es) == KILN_OK ? es.tokens : -1;
+        });
+        if (ok && !mmproj.empty()) {
+            s.phase = 1;
+            const double tp = now_ms(), rss_before = rss_mb();
+            kiln_projector_info pi;
+            if (kiln_model_load_projector(m, mmproj.c_str(), nullptr, &pi) != KILN_OK) { fprintf(stderr, "projector: %s\n", kiln_last_error()); return 1; }
+            fprintf(stderr, "projector: load %.0f ms, +%.0f MB rss, images=%d audio=%d\n", now_ms() - tp, rss_mb() - rss_before, pi.supports_images, pi.supports_audio);
+            s.phase = 0;
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            for (const std::string& f : media) {
+                if (!ok) break;
+                ok = burst(s, 7, "embed-" + base_name(f), runs, media_calls, run_no, peak_rss, [&](int) {
+                    kiln_media item = {f.c_str(), nullptr, 0};
+                    kiln_embed_stats es;
+                    return kiln_embed_media(c, nullptr, &item, 1, nullptr, v.data(), (int32_t)v.size(), &es) == KILN_OK ? es.tokens : -1;
+                });
+            }
+        }
+    } else {
+        kiln_chat_message msgs[] = {{"user", prompt.c_str()}};
+        kiln_sampling_params sp = kiln_sampling_params_default(); sp.max_tokens = n_gen; sp.seed = 1;
+        for (int r = 1; r <= runs; ++r) {
+            kiln_context_reset(c);
+            s.run = ++run_no; s.tokens = 0;
+            // phase flips to "generate" on first piece; prompt eval is everything before that
+            s.phase = 2;
+            struct Hook { static bool cb(kiln_channel ch, const char* p, int32_t t, void* u) { if (g_sampler->phase.load() == 2) g_sampler->phase = 3; return on_piece(ch, p, t, u); } };
+            kiln_gen_stats st;
+            kiln_status rc = kiln_chat(c, msgs, 1, nullptr, &sp, Hook::cb, nullptr, &st);
+            double rss = rss_mb(); if (rss > peak_rss) peak_rss = rss;
+            Thermal th = s.zones.empty() ? read_dumpsys_thermal() : Thermal{};
+            report("chat", r, "tok", st.generated_tokens, st.gen_ms, st.generated_tokens > 0 ? st.gen_ms / st.generated_tokens : 0, 0, 0, st.gen_tps,
+                   s.zones.empty() ? th.cpu_c : max_temp_c(s.zones), 0, st.prompt_tokens, st.prompt_ms);
+            if (rc != KILN_OK) fprintf(stderr, "run %d: %s\n", r, kiln_last_error());
+            s.phase = 0;
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
     }
     s.phase = 4;
     std::this_thread::sleep_for(std::chrono::seconds(cooldown_s));
@@ -220,5 +365,6 @@ int main(int argc, char** argv) {
     s.finish();
     fprintf(stderr, "peak rss %.0f MB, rss after free %.0f MB\n", peak_rss, rss_mb());
     if (s.out != stdout) fclose(s.out);
+    if (g_runs) fclose(g_runs);
     return 0;
 }

@@ -184,14 +184,15 @@ loaded (0.4 GB without it).
 
 ## Measured
 
-Generation tok/s, 3 to 8 runs back to back of the same job. "cold" is the first run,
-"warm" the last. Details, charts and raw CSVs in [docs/bench](docs/bench/README.md).
+Generation tok/s, 5 runs back to back of the same job. "cold" is the first run, "warm" the
+last. Pixel 8 figures are from v0.3.0 (2026-10-13), M4 Pro from v0.1.0 on a quiet machine.
+Details, charts and raw CSVs in [docs/bench](docs/bench/README.md).
 
 | model | quant | resident | Pixel 8 cold → warm | iPhone 16 Pro | M4 Pro Metal |
 |---|---|---|---|---|---|
-| LFM2.5 350M | Q4_K_M | 0.23 GB | 111 → 90 | runs, not benchmarked | 210 to 360 |
-| Qwen3.5 0.8B | Q4_K_M | 0.52 GB | 38 → 31 | not run | 140 to 147 |
-| Gemma 3 270M | Q8_0 | 0.29 GB | 80 → 71 | not run | 118 to 166 |
+| LFM2.5 350M | Q4_K_M | 0.23 GB | 111 → 98 | runs, not benchmarked | 210 to 360 |
+| Qwen3.5 0.8B | Q4_K_M | 0.52 GB | 37 → 26 | not run | 140 to 147 |
+| Gemma 3 270M | Q8_0 | 0.29 GB | 80 → 65 | not run | 118 to 166 |
 
 Sustained generation on the Pixel 8 holds the CPU cluster at 80 °C and steps the fast cores
 from 2.48 GHz to 1.69 GHz within a minute; token rate follows. Any phone benchmark shorter
@@ -202,21 +203,31 @@ than a minute reports the cold number.
 ### Decision and embedding models
 
 These do not generate text, so tokens per second does not apply. What matters in an app is the
-time for one call. Measured with `kiln-cli` on 2026-10-13; the first call after loading a model
-is slower (up to about 3 times) and is not counted. Times are for the whole call; for images
-and audio most of it is the encoder (about 2.5 s and 0.6 s on the Pixel 8). They are not part of `kiln-bench` and have
-no charts or sustained-load runs yet.
+time for one call. `kiln-bench` runs them too: bursts of questions or inputs back to back, with
+the same heat and memory sampling as for chat. "first" is one call on a cool, idle device;
+"sustained" is the average call in the fifth burst in a row, on the phone a minute or more
+into nonstop work. Measured 2026-10-13, v0.3.0.
 
-| what one call does | model | Pixel 8 | M4 Pro Metal |
-|---|---|---|---|
-| answer one yes / no question about a short message (56 tokens) | LFM2 d1-omni 600M, Q8_0 | 190 to 235 ms | 38 ms |
-| embed a sentence (18 tokens) | EmbeddingGemma 2, UD-Q4_K_XL | 40 to 60 ms | 10 to 13 ms |
-| embed a small image (81 media tokens) | the same, with its Q8_0 projector | 2.8 s | 95 ms |
-| embed a 3-second audio clip (78 media tokens) | the same | 0.9 s | 43 ms |
+| what one call does | model | Pixel 8 first | Pixel 8 sustained | M4 Pro Metal |
+|---|---|---|---|---|
+| answer a question about a short message (79 tokens) | LFM2 d1-omni 600M, Q8_0 | 0.21 s | 0.38 s | 20 ms |
+| embed a note (26 tokens) | EmbeddingGemma 2, UD-Q4_K_XL | 39 ms | 54 ms | 12 to 17 ms |
+| embed a note (24 tokens) | nomic-embed-text v1.5, Q4_K_M | 27 ms | 33 ms | 6 ms |
+| embed a small image (81 media tokens) | EmbeddingGemma 2 with its Q8_0 projector | 2.8 s | 6.0 s | 95 ms |
+| embed a 3-second audio clip (78 media tokens) | the same | 0.9 s | 1.6 to 3 s | 50 ms |
 
-In practice on the phone: sorting a message into one of a few classes feels instant, a search
-query over notes that are already embedded takes well under a tenth of a second, and photos
-and audio are slow enough that an app should embed them in the background when they are added.
+On the phone the sustained numbers are slower for two reasons, and the charts show both. Heat:
+within a minute Android steps the fast cores from 2.48 GHz down to about 1.1 GHz to protect
+the skin temperature, and holds them there. Memory: with a 1 GB model loaded and other apps
+running, Android takes pages of the model back, and a call that needs them rereads them from
+storage (single calls of 2 to 6 s). [docs/bench](docs/bench/README.md#embedding-models) has
+the detail.
+
+In practice: sorting a message into a few classes feels instant, a search query over notes
+that are already embedded takes well under a tenth of a second, and photos and audio are slow
+enough that an app should embed them in the background when they are added.
+
+<img src="docs/bench/pixel8_embeddinggemma-2-UD-Q4_K_XL.png" width="720">
 
 ## Repository
 

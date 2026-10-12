@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `kiln-bench` measures decision and embedding models as well as chat models. It reads the kind
+  from the model: questions per burst for a decision model, notes per burst for an embedding
+  model, and with `--mmproj` / `--media` an image and an audio clip. One line per run goes to
+  `<out>.runs.csv`, and the charts get a speed-per-run panel.
+- `scripts/bench.sh` runs every model in `models/` that way, skips projector files, and waits
+  for the phone's cores to be uncapped before each model.
+- Benchmarks re-run on the Pixel 8 at v0.3.0 for all model kinds; see `docs/bench`.
+
 ## 0.3.0
 
 The C ABI changed: `kiln_model_info` has two new fields at the end (its size is unchanged),

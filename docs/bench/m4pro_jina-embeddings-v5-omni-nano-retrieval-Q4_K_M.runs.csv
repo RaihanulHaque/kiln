@@ -1,0 +1,11 @@
+series,run,unit,count,total_ms,mean_ms,min_ms,max_ms,per_s,rss_mb,temp_c,tokens_per_call,prompt_tok,prompt_ms
+embed-text,1,call,150,1198,7.99,3.81,29.05,125.2,322,0.0,21,0,0
+embed-text,2,call,150,1071,7.14,3.67,18.87,140.1,322,0.0,21,0,0
+embed-text,3,call,150,1168,7.79,3.73,18.48,128.4,322,0.0,21,0,0
+embed-text,4,call,150,1136,7.57,3.76,19.22,132.1,322,0.0,21,0,0
+embed-text,5,call,150,1283,8.55,3.78,18.35,116.9,322,0.0,21,0,0
+embed-red_circle.png,1,call,5,435,87.06,74.52,130.17,11.5,704,0.0,269,0,0
+embed-red_circle.png,2,call,5,428,85.64,78.14,101.89,11.7,706,0.0,269,0,0
+embed-red_circle.png,3,call,5,452,90.48,81.85,112.19,11.1,706,0.0,269,0,0
+embed-red_circle.png,4,call,5,444,88.84,82.07,108.54,11.3,706,0.0,269,0,0
+embed-red_circle.png,5,call,5,447,89.34,83.88,107.58,11.2,706,0.0,269,0,0
