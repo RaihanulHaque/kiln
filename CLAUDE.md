@@ -26,7 +26,7 @@ CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desk
 git submodule update --init --recursive      # CMake also does this if the submodule is empty
 cmake --preset host && cmake --build --preset host -j
 scripts/fetch_models.sh --media              # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders)
-./build/host/kiln-tests models               # 319 checks at 0.3.0; without --media the image / audio tests are skipped
+./build/host/kiln-tests models               # 334 checks at 0.3.1; without --media the image / audio tests are skipped
 ./build/host/kiln-cli -m models/<file>.gguf --chat
 ```
 
@@ -47,8 +47,8 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 - **Linux builds use OpenMP; macOS and Android builds do not.** A threadpool smaller than
   `cp.n_threads` crashes only on Linux. Keep the context's thread count and the pool size equal.
 - **`kiln-bench` prints one line per run on stderr** (`chat,1,tok,...`, `decide,1,call,...`,
-  `embed-text,...`) and the samples on stdout; with `-o x.csv` the per-run lines also go to
-  `x.runs.csv`. It picks the workload from the kind of model. `scripts/bench.sh` skips
+  `embed-text,...`). The samples go to stdout by default; `-o x.csv` writes them to that file
+  and the per-run lines to `x.runs.csv` as well. It exits non-zero when a call fails. It picks the workload from the kind of model. `scripts/bench.sh` skips
   projector files and pairs embedding models with theirs; `KILN_BENCH_ONLY=<substring>` limits it.
 - **Benchmark only on a quiet machine.** A video call cut tok/s by a third on unchanged code,
   and on 2026-10-13 Spotlight indexing made Metal tok/s swing between 100 and 177 for the same
@@ -113,7 +113,7 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   the script without a message. This broke the Android scripts on macOS once.
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
 
-## Not yet verified (as of 0.3.0)
+## Not yet verified (as of 0.3.1)
 
 Checked on 2026-10-11: `kiln-tests models` gives 154 passed on Linux x86 (Ryzen 5 8500G),
 macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes on the Pixel 8
@@ -122,7 +122,7 @@ macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes
 - iOS: the items already listed in `docs/RELEASE.md`.
 - M4 Pro chat benchmarks: still the v0.1.0 figures. Re-run `scripts/bench.sh` on a quiet Mac.
   (Pixel 8 chat, and decision and embedding models on both, were run at v0.3.0 on 2026-10-13.)
-- pub.dev: `kiln_flutter` 0.3.0 was published on 2026-10-13 (0.2.0 on 2026-10-12), Android only. A published version
+- pub.dev: `kiln_flutter` 0.3.1 was published on 2026-10-13 (0.3.0 the same day, 0.2.0 on 2026-10-12), Android only. A published version
   cannot be changed: any fix needs a new version number. `scripts/publish_flutter.sh` publishes.
 
 0.3.0 (embedding models, `kiln_embed` and `kiln_embed_media`): `kiln-tests models` gives 319

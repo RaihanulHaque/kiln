@@ -26,7 +26,7 @@ extern "C" {
 
 #define KILN_VERSION_MAJOR 0
 #define KILN_VERSION_MINOR 3
-#define KILN_VERSION_PATCH 0
+#define KILN_VERSION_PATCH 1
 
 /* ------------------------------------------------------------------ */
 /* Status                                                              */

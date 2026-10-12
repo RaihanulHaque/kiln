@@ -31,7 +31,8 @@ def load_runs(path):
     runs = pd.read_csv(rp)
     if runs.empty:
         return None
-    runs["global_run"] = range(1, len(runs) + 1)
+    # the `run` value the run has in the samples; files written before that column existed are in order
+    runs["global_run"] = runs["sample_run"] if "sample_run" in runs else range(1, len(runs) + 1)
     return runs
 
 
@@ -79,7 +80,10 @@ def plot_one(path, out_png):
     if runs is not None:
         # speed of each run, drawn at the time the run happened
         ax = axes[0]
-        when = df[df["run"] > 0].groupby("run")["t_s"].mean()
+        # only samples taken while the model was working: older files keep the run number
+        # through the pause after a run, which would pull the marker to the right
+        busy = df[(df["run"] > 0) & df["phase"].isin(WORK_PHASES + ["prompt"])]
+        when = busy.groupby("run")["t_s"].mean()
         is_chat = (runs["unit"] == "tok").all()
         for k, (series, g) in enumerate(runs.groupby("series", sort=False)):
             xs = [when.get(r, float("nan")) for r in g["global_run"]]
@@ -159,7 +163,8 @@ def main():
         rows.append(plot_one(csv, csv[:-4] + ".png"))
         print("plotted", csv)
     with open(os.path.join(d, "summary.md"), "w") as f:
-        f.write("Speed is first run → last run. \"work\" is while the model is computing: generating, deciding or embedding.\n\n")
+        f.write("Speed is the first run → the last run of each series. \"work\" is while the model is computing: "
+                "generating, deciding, embedding text, or encoding an image or audio clip.\n\n")
         f.write("| run | speed, first → last run | baseline RSS | peak RSS | work CPU mean | work CPU max | work freq | CPU temp start → max | OS throttle | min mem avail |\n")
         f.write("|---|---|---|---|---|---|---|---|---|---|\n")
         for r in rows:

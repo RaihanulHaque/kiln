@@ -22,7 +22,8 @@ models() {
   local m
   for m in "$ROOT"/models/*.gguf; do
     case "$(basename "$m")" in *mmproj*) continue ;; esac
-    case "$(basename "$m")" in *"${KILN_BENCH_ONLY:-}"*) echo "$m" ;; esac
+    # the filter ignores case: file names are a mix (Qwen3.5..., LiquidAI_LFM2.5..., gemma-3...)
+    if printf '%s' "$(basename "$m")" | grep -qiF -- "${KILN_BENCH_ONLY:-}"; then echo "$m"; fi
   done
 }
 
@@ -38,17 +39,17 @@ media_for() {
   return 0
 }
 
-# media_args <name> <models dir> <media dir>  ->  --mmproj ... --media ... for kiln-bench
+# media_args <name> <models dir> <media dir>: the --mmproj / --media arguments for kiln-bench,
+# one per line, so that paths with spaces survive (read them into an array).
 media_args() {
-  local models_dir="$2" media_dir="$3" spec out f
+  local models_dir="$2" media_dir="$3" spec f
   spec="$(media_for "$1")"
   [ -n "$spec" ] || return 0
   # shellcheck disable=SC2086
-  set -- $spec                      # $1 = projector file, the rest = media files
-  out="--mmproj $models_dir/$1"
+  set -- $spec                      # $1 = projector file, the rest = media files (names have no spaces)
+  printf '%s\n' "--mmproj" "$models_dir/$1"
   shift
-  for f in "$@"; do out="$out --media $media_dir/$f"; done
-  echo "$out"
+  for f in "$@"; do printf '%s\n' "--media" "$media_dir/$f"; done
 }
 
 # Wait until the phone lets its cores run at full clock again (it caps them while it is hot), so
@@ -68,9 +69,9 @@ while IFS= read -r m; do
   [ -z "${KILN_BENCH_SKIP_HOST:-}" ] || break
   name="$(basename "$m" .gguf)"
   echo "=== $HOST_TAG $name ==="
-  # shellcheck disable=SC2046
-  "$ROOT/build/host/kiln-bench" -m "$m" -r "$RUNS" -n "$N" --cooldown 3 -o "$OUT/${HOST_TAG}_$name.csv" \
-      $(media_args "$name" "$ROOT/models" "$ROOT/tests/media")
+  extra=()
+  while IFS= read -r a; do extra+=("$a"); done < <(media_args "$name" "$ROOT/models" "$ROOT/tests/media")
+  "$ROOT/build/host/kiln-bench" -m "$m" -r "$RUNS" -n "$N" --cooldown 3 -o "$OUT/${HOST_TAG}_$name.csv" ${extra[@]+"${extra[@]}"}
 done < <(models)
 
 if adb get-state >/dev/null 2>&1; then
@@ -81,7 +82,7 @@ if adb get-state >/dev/null 2>&1; then
   while IFS= read -r m; do
     name="$(basename "$m" .gguf)"
     adb shell "[ -f $DEV/$name.gguf ]" < /dev/null || adb push "$m" "$DEV/" < /dev/null
-    extra="$(media_args "$name" "$DEV" "$DEV/media")"
+    extra="$(media_args "$name" "$DEV" "$DEV/media" | tr '\n' ' ')"   # device paths have no spaces
     if [ -n "$extra" ]; then
       proj="$(media_for "$name" | cut -d' ' -f1)"
       adb shell "[ -f $DEV/$proj ]" < /dev/null || adb push "$ROOT/models/$proj" "$DEV/" < /dev/null

@@ -174,13 +174,20 @@ static double current_temp_c(const std::vector<ThermalZone>& zones) {
 //   per_s   tokens per second, or calls per second
 
 static FILE* g_runs = nullptr;
-static const char* kRunsHeader = "series,run,unit,count,total_ms,mean_ms,min_ms,max_ms,per_s,rss_mb,temp_c,tokens_per_call,prompt_tok,prompt_ms";
+static const char* kRunsHeader = "series,run,unit,count,total_ms,mean_ms,min_ms,max_ms,per_s,rss_mb,temp_c,tokens_per_call,prompt_tok,prompt_ms,sample_run";
 
-static void report(const std::string& series, int run, const char* unit, int count, double total_ms, double mean_ms,
+//   run         index inside the series; sample_run is the `run` value the same run has in the samples
+//   min_ms / max_ms are empty for chat, where single tokens are not timed
+static void report(const std::string& series_in, int run, int sample_run, const char* unit, int count, double total_ms, double mean_ms,
                    double min_ms, double max_ms, double per_s, double temp_c, int tokens_per_call, int prompt_tok, double prompt_ms) {
-    char line[512];
-    snprintf(line, sizeof line, "%s,%d,%s,%d,%.0f,%.2f,%.2f,%.2f,%.1f,%.0f,%.1f,%d,%d,%.0f", series.c_str(), run, unit, count, total_ms,
-             mean_ms, min_ms, max_ms, per_s, rss_mb(), temp_c, tokens_per_call, prompt_tok, prompt_ms);
+    std::string series = series_in;                   // comes from a file name: keep the line a valid CSV row
+    for (char& ch : series) if (ch == ',' || ch == '"' || ch == '\n' || ch == '\r') ch = '_';
+    char lo[32] = "", hi[32] = "";
+    if (min_ms >= 0) snprintf(lo, sizeof lo, "%.2f", min_ms);
+    if (max_ms >= 0) snprintf(hi, sizeof hi, "%.2f", max_ms);
+    char line[640];
+    snprintf(line, sizeof line, "%s,%d,%s,%d,%.0f,%.2f,%s,%s,%.1f,%.0f,%.1f,%d,%d,%.0f,%d", series.c_str(), run, unit, count, total_ms,
+             mean_ms, lo, hi, per_s, rss_mb(), temp_c, tokens_per_call, prompt_tok, prompt_ms, sample_run);
     fprintf(stderr, "%s\n", line);
     if (g_runs) { fprintf(g_runs, "%s\n", line); fflush(g_runs); }
 }
@@ -209,9 +216,9 @@ static bool burst(Sampler& s, int phase, const std::string& series, int runs, in
         }
         const double total = now_ms() - t0;
         peak_rss = std::max(peak_rss, rss_mb());
-        report(series, r, "call", calls, total, total / calls, *std::min_element(ms.begin(), ms.end()), *std::max_element(ms.begin(), ms.end()),
+        report(series, r, run_no, "call", calls, total, total / calls, *std::min_element(ms.begin(), ms.end()), *std::max_element(ms.begin(), ms.end()),
                calls * 1000.0 / total, current_temp_c(s.zones), (int)(tokens / calls), 0, 0);
-        s.phase = 0;
+        s.phase = 0; s.run = 0;                           // the gap between runs belongs to no run
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
     return true;
@@ -277,7 +284,8 @@ int main(int argc, char** argv) {
         std::string rp = out_path;
         if (rp.size() > 4 && rp.compare(rp.size() - 4, 4, ".csv") == 0) rp.erase(rp.size() - 4);
         g_runs = fopen((rp + ".runs.csv").c_str(), "w");
-        if (g_runs) fprintf(g_runs, "%s\n", kRunsHeader);
+        if (!g_runs) { fprintf(stderr, "cannot write %s.runs.csv\n", rp.c_str()); return 1; }
+        fprintf(g_runs, "%s\n", kRunsHeader);
     }
     s.fast_mask = dev.cpu_fast_mask; s.zones = find_thermal_zones(); s.interval_ms = interval_ms;
     g_sampler = &s;
@@ -290,10 +298,11 @@ int main(int argc, char** argv) {
     double t_load = now_ms();
     kiln_model_params mp = kiln_model_params_default(); mp.n_threads = threads;
     kiln_model* m = nullptr;
-    if (kiln_model_load(model.c_str(), &mp, &m) != KILN_OK) { fprintf(stderr, "load: %s\n", kiln_last_error()); return 1; }
+    // from here on the sampler thread is running: every exit has to stop it first
+    if (kiln_model_load(model.c_str(), &mp, &m) != KILN_OK) { fprintf(stderr, "load: %s\n", kiln_last_error()); s.finish(); return 1; }
     kiln_context_params cp = kiln_context_params_default(); cp.n_ctx = 2048;
     kiln_context* c = nullptr;
-    if (kiln_context_create(m, &cp, &c) != KILN_OK) { fprintf(stderr, "ctx: %s\n", kiln_last_error()); return 1; }
+    if (kiln_context_create(m, &cp, &c) != KILN_OK) { fprintf(stderr, "ctx: %s\n", kiln_last_error()); kiln_model_free(m); s.finish(); return 1; }
     double load_ms = now_ms() - t_load;
     kiln_model_info mi; kiln_model_get_info(m, &mi);
     fprintf(stderr, "model: %s %s via %s, load %.0f ms, rss after load %.0f MB\n", mi.arch, mi.quant, mi.backend_name, load_ms, rss_mb());
@@ -302,6 +311,7 @@ int main(int argc, char** argv) {
 
     double peak_rss = 0;
     int run_no = 0;
+    bool failed = false;                                  // a call failed: finish cleanly, then exit non-zero
     fprintf(stderr, "%s\n", kRunsHeader);
     if (mi.is_decision_model) {
         // one run = `calls` questions, cycling through the three kinds of question
@@ -314,7 +324,7 @@ int main(int argc, char** argv) {
             {"team", KILN_QUESTION_CHOICE, "Which team should handle this?", teams, 3},
             {"urgency", KILN_QUESTION_SCORE, "How urgent is this?", levels, 3},
         };
-        burst(s, 5, "decide", runs, calls, run_no, peak_rss, [&](int i) {
+        failed = !burst(s, 5, "decide", runs, calls, run_no, peak_rss, [&](int i) {
             float probs[8]; kiln_decision_answer a;
             return kiln_decide(c, kState, &qs[i % 3], probs, 8, &a) == KILN_OK ? a.prompt_tokens : -1;
         });
@@ -333,8 +343,12 @@ int main(int argc, char** argv) {
             s.phase = 1;
             const double tp = now_ms(), rss_before = rss_mb();
             kiln_projector_info pi;
-            if (kiln_model_load_projector(m, mmproj.c_str(), nullptr, &pi) != KILN_OK) { fprintf(stderr, "projector: %s\n", kiln_last_error()); return 1; }
-            fprintf(stderr, "projector: load %.0f ms, +%.0f MB rss, images=%d audio=%d\n", now_ms() - tp, rss_mb() - rss_before, pi.supports_images, pi.supports_audio);
+            if (kiln_model_load_projector(m, mmproj.c_str(), nullptr, &pi) != KILN_OK) {
+                fprintf(stderr, "projector: %s\n", kiln_last_error());
+                ok = false;
+            } else {
+                fprintf(stderr, "projector: load %.0f ms, +%.0f MB rss, images=%d audio=%d\n", now_ms() - tp, rss_mb() - rss_before, pi.supports_images, pi.supports_audio);
+            }
             s.phase = 0;
             std::this_thread::sleep_for(std::chrono::seconds(1));
             for (const std::string& f : media) {
@@ -346,6 +360,7 @@ int main(int argc, char** argv) {
                 });
             }
         }
+        failed = !ok;
     } else {
         kiln_chat_message msgs[] = {{"user", prompt.c_str()}};
         kiln_sampling_params sp = kiln_sampling_params_default(); sp.max_tokens = n_gen; sp.seed = 1;
@@ -358,10 +373,10 @@ int main(int argc, char** argv) {
             kiln_gen_stats st;
             kiln_status rc = kiln_chat(c, msgs, 1, nullptr, &sp, Hook::cb, nullptr, &st);
             double rss = rss_mb(); if (rss > peak_rss) peak_rss = rss;
-            report("chat", r, "tok", st.generated_tokens, st.gen_ms, st.generated_tokens > 0 ? st.gen_ms / st.generated_tokens : 0, 0, 0, st.gen_tps,
+            report("chat", r, run_no, "tok", st.generated_tokens, st.gen_ms, st.generated_tokens > 0 ? st.gen_ms / st.generated_tokens : 0, -1, -1, st.gen_tps,
                    current_temp_c(s.zones), 0, st.prompt_tokens, st.prompt_ms);
-            if (rc != KILN_OK) fprintf(stderr, "run %d: %s\n", r, kiln_last_error());
-            s.phase = 0;
+            if (rc != KILN_OK) { fprintf(stderr, "run %d: %s\n", r, kiln_last_error()); failed = true; }
+            s.phase = 0; s.run = 0;
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
     }
@@ -374,5 +389,5 @@ int main(int argc, char** argv) {
     fprintf(stderr, "peak rss %.0f MB, rss after free %.0f MB\n", peak_rss, rss_mb());
     if (s.out != stdout) fclose(s.out);
     if (g_runs) fclose(g_runs);
-    return 0;
+    return failed ? 1 : 0;
 }

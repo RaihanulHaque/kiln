@@ -1,6 +1,6 @@
 name: kiln_flutter
 description: "On-device LLM runtime for Flutter on Android: chat, thinking and decision models from GGUF files, with honest stats about what actually ran."
-version: 0.3.0
+version: 0.3.1
 repository: https://github.com/RaihanulHaque/kiln
 issue_tracker: https://github.com/RaihanulHaque/kiln/issues
 topics: [llm, on-device, llama-cpp, ffi, android]
