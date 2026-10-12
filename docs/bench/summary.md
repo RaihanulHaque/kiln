@@ -1,4 +1,4 @@
-Speed is first run → last run. "work" is while the model is computing: generating, deciding or embedding.
+Speed is the first run → the last run of each series. "work" is while the model is computing: generating, deciding, embedding text, or encoding an image or audio clip.
 
 | run | speed, first → last run | baseline RSS | peak RSS | work CPU mean | work CPU max | work freq | CPU temp start → max | OS throttle | min mem avail |
 |---|---|---|---|---|---|---|---|---|---|

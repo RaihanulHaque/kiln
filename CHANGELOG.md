@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
+
+No ABI change: code built against 0.3.0 headers keeps working.
 
 First run on a Snapdragon: Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5), 2026-10-12. 319 C
 checks, 26 Flutter integration tests, the example app and the benchmarks. See
@@ -29,6 +31,16 @@ checks, 26 Flutter integration tests, the example app and the benchmarks. See
 - `scripts/bench.sh` runs every model in `models/` that way, skips projector files, and waits
   for the phone's cores to be uncapped before each model.
 - Benchmarks re-run on the Pixel 8 at v0.3.0 for all model kinds; see `docs/bench`.
+- `kiln-bench` fixes: it exits non-zero when a call fails, stops its sampler before any early
+  exit (a failed projector load used to abort the process), refuses to run when it cannot write
+  the per-run file, and adds `sample_run` to that file. `bench.sh`: `KILN_BENCH_ONLY` ignores
+  case, and paths with spaces work.
+
+Verified with `kiln-tests` (334 checks: 319 plus 15 for core selection) on macOS (M4 Pro,
+Metal) and Android (Pixel 8); the Galaxy S26 Ultra ran the 319 before the unit checks existed
+and the 15 afterwards. Flutter integration test: 26 tests on the Galaxy S26 Ultra with the
+core-selection fix. It was not repeated on the Pixel 8 for 0.3.1 (the Dart code is unchanged
+since 0.3.0, where it passed there). Not run on Linux or iOS.
 
 ## 0.3.0
 

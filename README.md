@@ -20,16 +20,17 @@ maintainers happened to own. kiln is built the other way round:
 
 ## Status
 
-v0.3.0 adds embedding models (text, images and audio). It was run on 2026-10-12 and
-2026-10-13 on the Linux desktop, the MacBook, a Linux container and the Pixel 8. The iPhone row is still from
+v0.3.0 added embedding models (text, images and audio); v0.3.1 fixes core selection on chips
+with no little cores. Run on 2026-10-12 and 2026-10-13 on the phones, the MacBook, the Linux
+desktop and a Linux container. The iPhone row is still from
 v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 
 | platform | backend | what passed |
 |---|---|---|
-| Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5, Android 17), v0.3.0 + core-selection fix | llama.cpp CPU, 6 threads pinned | 319 C checks, 26 Flutter integration tests, example app, benchmarks; [profile](docs/devices/galaxy-s26-ultra.md) |
-| Pixel 8 (Tensor G3, Android 16), v0.3.0 | llama.cpp CPU, 5 threads pinned | 319 C checks (334 with the core-selection fix), 23 Flutter integration tests, benchmarks |
+| Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5, Android 17), v0.3.1 | llama.cpp CPU, 6 threads pinned | 319 C checks, 26 Flutter integration tests, example app, benchmarks; [profile](docs/devices/galaxy-s26-ultra.md) |
+| Pixel 8 (Tensor G3, Android 16), v0.3.1 | llama.cpp CPU, 5 threads pinned | 334 C checks; 23 Flutter integration tests and benchmarks at v0.3.0 |
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
-| MacBook Pro M4 Pro, v0.3.0 | llama.cpp Metal | 319 C checks; benchmarks at v0.1.0 |
+| MacBook Pro M4 Pro, v0.3.1 | llama.cpp Metal | 334 C checks; chat benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.3.0 | llama.cpp CPU | 317 C checks, before two checks were added on the Mac; not re-run since |
 | Linux arm64 and emulated x86_64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.3.0 | llama.cpp CPU, OpenMP | 319 C checks on each; arm64 also with `KILN_CPU_MASK=3` |
 
@@ -42,7 +43,7 @@ Flutter plugin on the Pixel 8.
 v0.2.0 and is not part of the pub.dev package. Use Android for now.
 
 Not yet: MediaTek and older or mid-range Snapdragon phones, 4 GB RAM devices, x86 emulators.
-`kiln_flutter` 0.3.0 is on pub.dev as an Android-only package. The
+`kiln_flutter` 0.3.1 is on pub.dev as an Android-only package. The
 [release checklist](docs/RELEASE.md) lists what is still open.
 
 ## Quick start
@@ -212,17 +213,21 @@ than a minute reports the cold number.
 
 These do not generate text, so tokens per second does not apply. What matters in an app is the
 time for one call. `kiln-bench` runs them too: bursts of questions or inputs back to back, with
-the same heat and memory sampling as for chat. "first" is one call on a cool, idle device;
-"sustained" is the average call in the fifth burst in a row, on the phone a minute or more
-into nonstop work. Measured 2026-10-13, v0.3.0.
+the same heat and memory sampling as for chat. Every figure is the average call of a burst
+(40 questions, 150 notes, or 5 images or clips). "first" is the first burst and "sustained"
+the fifth in a row, a minute or more into nonstop work. Neither phone started cold: the
+Pixel 8 was at throttle status 1 for the decision and embedding runs, as was the S26 Ultra.
+The two Pixel 8 "first" figures for media are the exception, marked with *: those are single
+calls on a cool phone, timed with `kiln-cli`, because in the bench the media bursts come after
+750 notes and never see a cool phone. Measured 2026-10-12 and 13, v0.3.0.
 
 | what one call does | model | Pixel 8 first | Pixel 8 sustained | S26 Ultra first → sustained | M4 Pro Metal |
 |---|---|---|---|---|---|
 | answer a question about a short message (79 tokens) | LFM2 d1-omni 600M, Q8_0 | 0.21 s | 0.38 s | 77 → 122 ms | 20 ms |
 | embed a note (26 tokens) | EmbeddingGemma 2, UD-Q4_K_XL | 39 ms | 54 ms | 17 → 24 ms | 12 to 17 ms |
 | embed a note (24 tokens) | nomic-embed-text v1.5, Q4_K_M | 27 ms | 33 ms | 10 → 13 ms | 6 ms |
-| embed a small image (81 media tokens) | EmbeddingGemma 2 with its Q8_0 projector | 2.8 s | 6.0 s | 1.5 → 2.2 s | 95 ms |
-| embed a 3-second audio clip (78 media tokens) | the same | 0.9 s | 1.6 to 3 s | 0.55 s | 50 ms |
+| embed a small image (85 tokens, 81 of them from the image) | EmbeddingGemma 2 with its Q8_0 projector | 2.8 s * | 6.0 s | 1.5 → 2.2 s | 95 ms |
+| embed a 3-second audio clip (82 tokens, 78 from the clip) | the same | 0.9 s * | 1.6 to 3 s | 0.55 s | 50 ms |
 
 On the phone the sustained numbers are slower for two reasons, and the charts show both. Heat:
 within a minute Android steps the fast cores from 2.48 GHz down to about 1.1 GHz to protect

@@ -1,3 +1,13 @@
+## 0.3.1
+
+- **Phones whose chip has no little cores now use more of it.** On a Galaxy S26 Ultra
+  (Snapdragon 8 Elite Gen 5) kiln ran on 2 of 8 cores; it now runs 6 threads. Chat with
+  LFM2.5 350M and Qwen3.5 0.8B is about 20% faster under sustained load, and a decision or an
+  embedding takes 35 to 45% less time. Phones with little cores, such as the Pixel 8, are
+  unchanged. `KilnDeviceInfo.cpuFastCores` reports the new choice.
+- Verified on a Galaxy S26 Ultra (26 integration tests and the native test suite) and on a
+  Pixel 8 (native test suite; its integration test was last run at 0.3.0). No API change.
+
 ## 0.3.0
 
 Embedding models. Verified on a Pixel 8 (Tensor G3): 23 integration tests, including images

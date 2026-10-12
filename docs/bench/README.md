@@ -12,9 +12,11 @@ model file:
 | chat model | a ~65-token prompt and 256 generated tokens | tokens per second |
 | decision model | 40 questions about a support message (yes / no, choice, score in turn) | milliseconds per question |
 | embedding model | 150 notes of 15 to 40 tokens embedded as documents | milliseconds per note |
-| embedding model with its projector | then 5 embeddings of an image, and 5 of a 3-second audio clip | milliseconds per item |
+| embedding model with its projector | then 5 embeddings of each kind of media the projector takes: an image, and a 3-second audio clip (Jina's projector is image-only) | milliseconds per item |
 
-Each series is 5 runs back to back with a 0.5 s gap, then a cooldown. Sampler at 250 ms:
+Each series is 5 runs back to back with a 0.5 s gap. The series of one model follow each other
+without a pause (text, then image, then audio), and the cooldown comes only after the last one,
+so the media series always start on a device the text series has already warmed. Sampler at 250 ms:
 process RSS, process CPU% (100 = one core), mean frequency of the fast cores, CPU cluster and
 skin temperature (Android: `dumpsys thermalservice`, since `/sys/class/thermal` is not
 readable by apps on Android 14+), and the OS thermal throttle status.
@@ -37,9 +39,10 @@ now the only thing that changes between run 1 and run 5 is heat.
 So "how fast is kiln on a Pixel 8 with Qwen3.5 0.8B?" has two honest answers: 37 tok/s for
 the first message, about 26 tok/s a minute into the conversation. Quote both.
 
-The same holds for the other kinds. One question to a decision model takes 0.2 s on a cool
-phone. An app that classifies a whole inbox asks hundreds in a row, and by the fifth run each
-one takes 0.38 s.
+The same holds for the other kinds. On the Pixel 8 a question to a decision model averaged
+0.21 s over the first 40, on a phone that was already slightly warm (38.7 °C skin, throttle
+status 1). An app that classifies a whole inbox asks hundreds in a row, and by the fifth run
+each one takes 0.38 s.
 
 ## How to read the tables
 
@@ -209,8 +212,9 @@ v0.1.0 and v0.3.0 builds in that state gave 98 to 173 tok/s for the old one and 
 the new one, so the difference is the machine, not the code, and the quiet-machine numbers are
 kept. Benchmark Metal on a Mac that is doing nothing else.
 
-Decision and embedding models, 2026-10-13, same (busy) machine. These are milliseconds per
-call, so the noise matters less:
+Decision and embedding models, 2026-10-13, on the same busy machine. Treat these as rough: the
+load that made the chat figures swing affects these calls too, and they have not been repeated
+on an idle Mac.
 
 | model | input | peak RSS | ms per input, run 1 → 5 |
 |---|---|---|---|
@@ -230,7 +234,10 @@ Nothing slows down over the five runs: there is no thermal limit to hit at this 
   `phase` is `load`, `prompt`, `generate`, `decide`, `embed` (text), `encode` (image or audio),
   `cooldown` or `idle`. For decision and embedding models `tokens` counts calls in the run.
 - `<device>_<model>.runs.csv`: one line per run. Columns:
-  `series,run,unit,count,total_ms,mean_ms,min_ms,max_ms,per_s,rss_mb,temp_c,tokens_per_call,prompt_tok,prompt_ms`.
+  `series,run,unit,count,total_ms,mean_ms,min_ms,max_ms,per_s,rss_mb,temp_c,tokens_per_call,prompt_tok,prompt_ms`,
+  and from v0.3.1 `sample_run`, the `run` value the same run has in the samples file (`run`
+  itself counts inside the series). In files written by v0.3.0 the chat rows have 0.00 for
+  `min_ms` and `max_ms`; single tokens are not timed, and newer files leave those two empty.
   `series` is `chat`, `decide`, `embed-text` or `embed-<media file>`; `unit` is `tok` or `call`.
   The M4 Pro chat files have none: they predate it.
 - `<device>_<model>.png`: chart. The top panel is the speed of each run, at the time it ran.

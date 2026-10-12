@@ -2,7 +2,8 @@
 
 What has to be true before a version is tagged, and before `kiln_flutter` goes to pub.dev.
 
-**Published:** `kiln_flutter` 0.3.0 on 2026-10-13 (embedding models), Android only, from the
+**Published:** `kiln_flutter` 0.3.1 on 2026-10-13 (core selection on chips with no little
+cores), from the `v0.3.1` tag. `kiln_flutter` 0.3.0 on 2026-10-13 (embedding models), from the
 `v0.3.0` tag. Before it: `kiln_flutter` 0.2.0 on 2026-10-12, Android only, from commit c485fcb. Afterwards
 a fresh `flutter create` app installed it with `flutter pub add kiln_flutter`, built, and
 replied at 94 tok/s on the Pixel 8. The unchecked items below were accepted as known gaps for

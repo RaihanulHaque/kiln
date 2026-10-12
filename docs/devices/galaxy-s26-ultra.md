@@ -1,7 +1,7 @@
 # Galaxy S26 Ultra (SM-S948B)
 
 Snapdragon 8 Elite Gen 5. The first Snapdragon kiln was run on, on 2026-10-12, with kiln v0.3.0
-plus the changes this phone led to. It was a borrowed phone: everything here was collected in one
+plus the changes this phone led to, which were released as v0.3.1. It was a borrowed phone: everything here was collected in one
 session so that later work does not need it.
 
 ## Hardware, as the system reports it
@@ -28,7 +28,7 @@ are at 72%.
 | | cores it called fast | threads | pinned to |
 |---|---|---|---|
 | v0.3.0 | 2 (mask `0xc0`) | 2 | cores 6, 7 |
-| after the fix | 8 (mask `0xff`) | 6 | cores 2 to 7 |
+| v0.3.1 | 8 (mask `0xff`) | 6 | cores 2 to 7 |
 
 kiln's rule was "group cores by top clock and drop the slowest group", written for chips with
 little cores. Here it dropped six strong cores. The rule now keeps the slowest group when its
