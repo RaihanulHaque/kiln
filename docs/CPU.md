@@ -99,12 +99,24 @@ otherwise the same work just takes longer. That is exactly what the thread sweep
 
 ## 6. What kiln does today, and what it should do
 
-**Today** (v0.1): probe reads `cpuinfo_max_freq` per core, clusters by frequency, keeps every
-core faster than the slowest cluster, pins N = that many threads (capped at 8) to the
-highest-numbered of those cores. Correct on 1+4+4 and 4+4 layouts. Wrong on:
+**Today**: probe reads `cpuinfo_max_freq` and `cpu_capacity` per core, clusters by frequency,
+and keeps every core faster than the slowest cluster. The slowest cluster is kept as well when
+its `cpu_capacity` (the kernel's rating of a core, 1024 = strongest) is at least half of the
+strongest core's: then it is not a little cluster. N = that many threads (capped at 8) are
+pinned to the highest-numbered of those cores; where every core is fast, two are left free.
+The rules are pure functions in `src/probe/fast_cores.h`, with unit tests.
+Measured `cpu_capacity`: Pixel 8 (Tensor G3) 182 / 725 / 1024 for A510 / A715 / X3;
+Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5) 741 / 1024. A little core is under a fifth of the
+best core; the half-way line has a wide margin on both sides.
 
-- no-little layouts (8 Elite, Dimensity 9300): would drop most cores. Fix: if the "slow"
-  cluster is within ~70% of the fastest, it is not a little cluster; keep it.
+- no-little layouts (8 Elite, Dimensity 9300): **fixed after measuring a Galaxy S26 Ultra**
+  (Snapdragon 8 Elite Gen 5, 2 + 6). The frequency rule alone kept 2 cores; with the capacity
+  rule it keeps all 8 and runs 6 threads, which under sustained load is 18 to 24% faster for LFM2.5 and Qwen3.5 chat,
+  about level for Gemma 3 270M (4% slower), and takes 35 to 45% less time per decision and embedding. Sweep and numbers:
+  [devices/galaxy-s26-ultra.md](devices/galaxy-s26-ultra.md). A Dimensity has not been tried.
+
+Still wrong or unknown on:
+
 - four-tier layouts (Exynos 2400): "slowest cluster" removes only the A520s; the remaining
   mix of 2.9 and 2.6 GHz A720s is unequal and will barrier-wait. Fix: group into tiers, and
   only mix tiers whose frequencies are within ~10% of each other.

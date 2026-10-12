@@ -1,0 +1,6 @@
+series,run,unit,count,total_ms,mean_ms,min_ms,max_ms,per_s,rss_mb,temp_c,tokens_per_call,prompt_tok,prompt_ms
+embed-text,1,call,150,880,5.87,2.90,23.93,170.4,189,0.0,24,0,0
+embed-text,2,call,150,1089,7.26,3.70,16.71,137.8,188,0.0,24,0,0
+embed-text,3,call,150,1100,7.34,4.10,20.58,136.3,188,0.0,24,0,0
+embed-text,4,call,150,1407,9.38,4.02,16.29,106.6,188,0.0,24,0,0
+embed-text,5,call,150,959,6.39,3.11,20.63,156.5,188,0.0,24,0,0

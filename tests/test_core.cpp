@@ -2,6 +2,7 @@
 // scripts/fetch_models.sh downloads (three chat models, a decision model, two embedding models).
 // Missing models are skipped, not failed. Runs on host and on Android via scripts/android-test.sh.
 #include "kiln/kiln.h"
+#include "../src/probe/fast_cores.h"      // header-only rules, tested with layouts of real chips
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -44,6 +45,44 @@ static void test_probe() {
     CHECK(d.ram_total_bytes > 1000000000ull, "ram=%llu", (unsigned long long)d.ram_total_bytes);
     CHECK(d.cpu_big_cores > 0 && d.cpu_big_cores <= d.cpu_cores, "big=%d", d.cpu_big_cores);
     CHECK(strlen(d.abi) > 0, "");
+}
+
+// The core-selection rules, fed the layouts real chips report. No device needed.
+static void test_core_selection() {
+    SECTION("core selection");
+    using kiln::fast_core_mask; using kiln::default_thread_count;
+
+    // Galaxy S26 Ultra, Snapdragon 8 Elite Gen 5: values read from the phone on 2026-10-12.
+    // No little cores: the six slower ones have capacity 741 of 1024.
+    const std::vector<long> s26_f = {3628800, 3628800, 3628800, 3628800, 3628800, 3628800, 4742400, 4742400};
+    const std::vector<long> s26_c = {741, 741, 741, 741, 741, 741, 1024, 1024};
+    CHECK(fast_core_mask(s26_f, s26_c) == 0xffull, "S26 Ultra mask=%llx", (unsigned long long)fast_core_mask(s26_f, s26_c));
+    CHECK(default_thread_count(8, 8, true) == 6, "S26 Ultra threads=%d", default_thread_count(8, 8, true));
+    // without cpu_capacity only the frequency rule is left: the two prime cores, as before the fix
+    CHECK(fast_core_mask(s26_f, {}) == 0xc0ull, "S26 Ultra without capacity");
+
+    // Pixel 8, Tensor G3: values read from the phone on 2026-10-13. The little cores (A510) are at
+    // 18% of the strongest, the middle ones (A715) at 71%. The five fast cores must stay selected,
+    // with 5 threads.
+    const std::vector<long> p8_f = {1704000, 1704000, 1704000, 1704000, 2367000, 2367000, 2367000, 2367000, 2914000};
+    const std::vector<long> p8_c = {182, 182, 182, 182, 725, 725, 725, 725, 1024};
+    CHECK(fast_core_mask(p8_f, p8_c) == 0x1f0ull, "Pixel 8 mask=%llx", (unsigned long long)fast_core_mask(p8_f, p8_c));
+    CHECK(fast_core_mask(p8_f, {}) == 0x1f0ull, "Pixel 8 without capacity");
+    CHECK(default_thread_count(9, 5, true) == 5, "Pixel 8 threads=%d", default_thread_count(9, 5, true));
+
+    // a slowest group at exactly half is kept, just under half is dropped
+    CHECK(fast_core_mask({1000, 1000, 2000, 2000}, {512, 512, 1024, 1024}) == 0xfull, "capacity at half");
+    CHECK(fast_core_mask({1000, 1000, 2000, 2000}, {511, 511, 1024, 1024}) == 0xcull, "capacity under half");
+    // an unreadable capacity for one core turns the capacity rule off
+    CHECK(fast_core_mask(s26_f, {741, 741, 741, 0, 741, 741, 1024, 1024}) == 0xc0ull, "one capacity missing");
+    // all cores alike (desktop, or frequencies unreadable): nothing to choose, no pinning
+    CHECK(fast_core_mask({3000, 3000, 3000, 3000}, {1024, 1024, 1024, 1024}) == 0, "uniform cores");
+    CHECK(fast_core_mask({0, 0, 0, 0}, {}) == 0, "no frequencies");
+    // thread counts: unpinned desktops are not reduced, small chips are not reduced, never above 8
+    CHECK(default_thread_count(12, 12, false) == 8, "desktop threads=%d", default_thread_count(12, 12, false));
+    CHECK(default_thread_count(4, 4, true) == 4, "4-core threads");
+    CHECK(default_thread_count(10, 10, true) == 8, "10 fast cores");
+    CHECK(default_thread_count(0, 0, false) == 4, "unknown");
 }
 
 static void test_bad_loads(const std::string& dir) {
@@ -549,6 +588,7 @@ int main(int argc, char** argv) {
     std::string dir = argc > 1 ? argv[1] : "models";
     kiln_set_log_level(KILN_LOG_ERROR);
     test_probe();
+    test_core_selection();
     test_bad_loads(dir);
     //                                                       label           thinking
     test_model(dir + "/LiquidAI_LFM2.5-350M_Q4_K_M.gguf", "LFM2.5-350M",  false);

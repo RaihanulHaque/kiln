@@ -1,0 +1,6 @@
+series,run,unit,count,total_ms,mean_ms,min_ms,max_ms,per_s,rss_mb,temp_c,tokens_per_call,prompt_tok,prompt_ms
+decide,1,call,40,3074,76.86,66.13,92.26,13.0,802,46.8,79,0,0
+decide,2,call,40,3524,88.09,74.04,117.03,11.4,802,52.7,79,0,0
+decide,3,call,40,4065,101.63,90.38,117.08,9.8,802,53.1,79,0,0
+decide,4,call,40,4493,112.34,98.52,132.84,8.9,802,52.7,79,0,0
+decide,5,call,40,4894,122.34,108.71,153.05,8.2,802,52.2,79,0,0

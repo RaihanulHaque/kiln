@@ -1,0 +1,16 @@
+series,run,unit,count,total_ms,mean_ms,min_ms,max_ms,per_s,rss_mb,temp_c,tokens_per_call,prompt_tok,prompt_ms
+embed-text,1,call,150,1855,12.37,9.43,54.04,80.8,415,0.0,26,0,0
+embed-text,2,call,150,2563,17.09,13.86,30.50,58.5,415,0.0,26,0,0
+embed-text,3,call,150,2188,14.59,9.76,29.10,68.5,415,0.0,26,0,0
+embed-text,4,call,150,2065,13.77,9.40,31.90,72.6,415,0.0,26,0,0
+embed-text,5,call,150,2514,16.76,10.05,31.85,59.7,415,0.0,26,0,0
+embed-red_circle.png,1,call,5,489,97.87,84.42,139.00,10.2,1062,0.0,85,0,0
+embed-red_circle.png,2,call,5,497,99.36,95.23,109.99,10.1,1063,0.0,85,0,0
+embed-red_circle.png,3,call,5,465,93.06,86.38,113.97,10.7,1063,0.0,85,0,0
+embed-red_circle.png,4,call,5,449,89.80,85.94,101.18,11.1,1065,0.0,85,0,0
+embed-red_circle.png,5,call,5,477,95.44,89.96,110.37,10.5,1065,0.0,85,0,0
+embed-speech_train.wav,1,call,5,248,49.50,46.01,62.61,20.2,1068,0.0,82,0,0
+embed-speech_train.wav,2,call,5,254,50.85,44.28,66.84,19.7,1062,0.0,82,0,0
+embed-speech_train.wav,3,call,5,259,51.85,45.40,73.45,19.3,1062,0.0,82,0,0
+embed-speech_train.wav,4,call,5,326,65.25,45.03,110.96,15.3,967,0.0,82,0,0
+embed-speech_train.wav,5,call,5,274,54.89,43.85,62.45,18.2,967,0.0,82,0,0

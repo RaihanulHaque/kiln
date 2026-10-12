@@ -26,7 +26,8 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 
 | platform | backend | what passed |
 |---|---|---|
-| Pixel 8 (Tensor G3, Android 16), v0.3.0 | llama.cpp CPU, 5 threads pinned | 319 C checks, 23 Flutter integration tests; benchmarks at v0.1.0 |
+| Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5, Android 17), v0.3.0 + core-selection fix | llama.cpp CPU, 6 threads pinned | 319 C checks, 26 Flutter integration tests, example app, benchmarks; [profile](docs/devices/galaxy-s26-ultra.md) |
+| Pixel 8 (Tensor G3, Android 16), v0.3.0 | llama.cpp CPU, 5 threads pinned | 319 C checks (334 with the core-selection fix), 23 Flutter integration tests, benchmarks |
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
 | MacBook Pro M4 Pro, v0.3.0 | llama.cpp Metal | 319 C checks; benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.3.0 | llama.cpp CPU | 317 C checks, before two checks were added on the Mac; not re-run since |
@@ -40,7 +41,7 @@ Flutter plugin on the Pixel 8.
 **iOS is in progress.** It built and ran on an iPhone at v0.1.0, but it has not been re-run for
 v0.2.0 and is not part of the pub.dev package. Use Android for now.
 
-Not yet: Snapdragon or MediaTek phones, 4 GB RAM devices, x86 emulators.
+Not yet: MediaTek and older or mid-range Snapdragon phones, 4 GB RAM devices, x86 emulators.
 `kiln_flutter` 0.3.0 is on pub.dev as an Android-only package. The
 [release checklist](docs/RELEASE.md) lists what is still open.
 
@@ -115,10 +116,13 @@ configure step also tries this automatically when `third_party/llama.cpp` is emp
 
 ## What makes it honest
 
-**Threads are pinned to the fast cores.** The probe groups cores by clock, drops the slowest
-tier and binds one ggml worker to each remaining core. On a Pixel 8 that is the difference
+**Threads are pinned to the fast cores.** The probe groups cores by clock, drops the little
+cores and binds one ggml worker to each remaining core. On a Pixel 8 that is the difference
 between 21 tok/s and 3 tok/s once the phone is warm: unpinned, Android parks workers on the
 little cores and every matmul waits for the slowest one. [Sweep](docs/bench/threads/README.md).
+On a Galaxy S26 Ultra, whose chip has no little cores, the first rule picked 2 of 8 cores;
+measuring that phone changed the rule, and unpinned threads were just as ruinous there
+(a prompt read at 3 tokens per second). [What that phone taught](docs/devices/galaxy-s26-ultra.md).
 
 **Templates are the model's own.** The GGUF's jinja template runs through llama.cpp's minja
 engine, so system prompts, Gemma's role rules and Qwen's `enable_thinking` switch all behave
@@ -184,14 +188,19 @@ loaded (0.4 GB without it).
 
 ## Measured
 
-Generation tok/s, 3 to 8 runs back to back of the same job. "cold" is the first run,
-"warm" the last. Details, charts and raw CSVs in [docs/bench](docs/bench/README.md).
+Generation tok/s, 5 runs back to back of the same job. "cold" is the first run, "warm" the
+last. Pixel 8 figures are from v0.3.0 (2026-10-13), M4 Pro from v0.1.0 on a quiet machine.
+Details, charts and raw CSVs in [docs/bench](docs/bench/README.md).
 
-| model | quant | resident | Pixel 8 cold → warm | iPhone 16 Pro | M4 Pro Metal |
+| model | quant | resident | Pixel 8 cold → warm | Galaxy S26 Ultra warm → warmer | M4 Pro Metal |
 |---|---|---|---|---|---|
-| LFM2.5 350M | Q4_K_M | 0.23 GB | 111 → 90 | runs, not benchmarked | 210 to 360 |
-| Qwen3.5 0.8B | Q4_K_M | 0.52 GB | 38 → 31 | not run | 140 to 147 |
-| Gemma 3 270M | Q8_0 | 0.29 GB | 80 → 71 | not run | 118 to 166 |
+| LFM2.5 350M | Q4_K_M | 0.23 GB | 111 → 98 | 224 → 194 | 210 to 360 |
+| Qwen3.5 0.8B | Q4_K_M | 0.52 GB | 37 → 26 | 76 → 56 | 140 to 147 |
+| Gemma 3 270M | Q8_0 | 0.29 GB | 80 → 65 | 173 → 146 | 118 to 166 |
+
+The Galaxy S26 Ultra (2026-10-12) started every series already warm, at throttle status 1, so
+its first-run figures are not cold numbers. An iPhone 16 Pro ran LFM2.5 at v0.1.0 and was not
+benchmarked.
 
 Sustained generation on the Pixel 8 holds the CPU cluster at 80 °C and steps the fast cores
 from 2.48 GHz to 1.69 GHz within a minute; token rate follows. Any phone benchmark shorter
@@ -202,21 +211,31 @@ than a minute reports the cold number.
 ### Decision and embedding models
 
 These do not generate text, so tokens per second does not apply. What matters in an app is the
-time for one call. Measured with `kiln-cli` on 2026-10-13; the first call after loading a model
-is slower (up to about 3 times) and is not counted. Times are for the whole call; for images
-and audio most of it is the encoder (about 2.5 s and 0.6 s on the Pixel 8). They are not part of `kiln-bench` and have
-no charts or sustained-load runs yet.
+time for one call. `kiln-bench` runs them too: bursts of questions or inputs back to back, with
+the same heat and memory sampling as for chat. "first" is one call on a cool, idle device;
+"sustained" is the average call in the fifth burst in a row, on the phone a minute or more
+into nonstop work. Measured 2026-10-13, v0.3.0.
 
-| what one call does | model | Pixel 8 | M4 Pro Metal |
-|---|---|---|---|
-| answer one yes / no question about a short message (56 tokens) | LFM2 d1-omni 600M, Q8_0 | 190 to 235 ms | 38 ms |
-| embed a sentence (18 tokens) | EmbeddingGemma 2, UD-Q4_K_XL | 40 to 60 ms | 10 to 13 ms |
-| embed a small image (81 media tokens) | the same, with its Q8_0 projector | 2.8 s | 95 ms |
-| embed a 3-second audio clip (78 media tokens) | the same | 0.9 s | 43 ms |
+| what one call does | model | Pixel 8 first | Pixel 8 sustained | S26 Ultra first → sustained | M4 Pro Metal |
+|---|---|---|---|---|---|
+| answer a question about a short message (79 tokens) | LFM2 d1-omni 600M, Q8_0 | 0.21 s | 0.38 s | 77 → 122 ms | 20 ms |
+| embed a note (26 tokens) | EmbeddingGemma 2, UD-Q4_K_XL | 39 ms | 54 ms | 17 → 24 ms | 12 to 17 ms |
+| embed a note (24 tokens) | nomic-embed-text v1.5, Q4_K_M | 27 ms | 33 ms | 10 → 13 ms | 6 ms |
+| embed a small image (81 media tokens) | EmbeddingGemma 2 with its Q8_0 projector | 2.8 s | 6.0 s | 1.5 → 2.2 s | 95 ms |
+| embed a 3-second audio clip (78 media tokens) | the same | 0.9 s | 1.6 to 3 s | 0.55 s | 50 ms |
 
-In practice on the phone: sorting a message into one of a few classes feels instant, a search
-query over notes that are already embedded takes well under a tenth of a second, and photos
-and audio are slow enough that an app should embed them in the background when they are added.
+On the phone the sustained numbers are slower for two reasons, and the charts show both. Heat:
+within a minute Android steps the fast cores from 2.48 GHz down to about 1.1 GHz to protect
+the skin temperature, and holds them there. Memory: with a 1 GB model loaded and other apps
+running, Android takes pages of the model back, and a call that needs them rereads them from
+storage (single calls of 2 to 6 s). [docs/bench](docs/bench/README.md#embedding-models) has
+the detail.
+
+In practice: sorting a message into a few classes feels instant, a search query over notes
+that are already embedded takes well under a tenth of a second, and photos and audio are slow
+enough that an app should embed them in the background when they are added.
+
+<img src="docs/bench/pixel8_embeddinggemma-2-UD-Q4_K_XL.png" width="720">
 
 ## Repository
 

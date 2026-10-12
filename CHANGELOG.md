@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+First run on a Snapdragon: Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5), 2026-10-12. 319 C
+checks, 26 Flutter integration tests, the example app and the benchmarks. See
+`docs/devices/galaxy-s26-ultra.md`.
+
+- **Core selection on chips with no little cores.** kiln dropped "the slowest group of cores",
+  which on a 2 + 6 chip like the Snapdragon 8 Elite Gen 5 left 2 threads and six strong cores
+  idle. The slowest group is now kept when the kernel rates it at half the strongest core or
+  more (`cpu_capacity`), and where every core is fast kiln runs on all but two. On the S26 Ultra
+  that is 6 threads instead of 2. Under sustained load LFM2.5 and Qwen3.5 chat are 18 to 24%
+  faster, Gemma 3 270M is about level (4% slower), and a decision or an embedding takes 35 to
+  45% less time. `kiln_device_info.cpu_big_cores` and `cpu_fast_mask` report
+  the new choice. Chips with little cores are not affected: the Pixel 8 was re-run on
+  2026-10-13 and still gets 5 threads on the same cores (its little cores are rated 182 of
+  1024), with 334 checks passing. No ABI change.
+- `kiln-bench` takes temperatures from Android's thermal service first; the S26 Ultra has a raw
+  sensor stuck at 105 °C.
+- `scripts/bench.sh`: `KILN_BENCH_SKIP_HOST`, `KILN_BENCH_DEVICE_TAG`, `KILN_BENCH_DEVICE_ENV`.
+- A trial of the OpenCL backend on the Adreno 840 is written up in the device profile; it is
+  not a supported build.
+
+- `kiln-bench` measures decision and embedding models as well as chat models. It reads the kind
+  from the model: questions per burst for a decision model, notes per burst for an embedding
+  model, and with `--mmproj` / `--media` an image and an audio clip. One line per run goes to
+  `<out>.runs.csv`, and the charts get a speed-per-run panel.
+- `scripts/bench.sh` runs every model in `models/` that way, skips projector files, and waits
+  for the phone's cores to be uncapped before each model.
+- Benchmarks re-run on the Pixel 8 at v0.3.0 for all model kinds; see `docs/bench`.
+
 ## 0.3.0
 
 The C ABI changed: `kiln_model_info` has two new fields at the end (its size is unchanged),

@@ -19,7 +19,7 @@ src/backends/llamacpp/
     embedding.h                     embedding models: detect, add the task prefix, one pass, shorten and normalise the vector;
                                     images and audio through llama.cpp's mtmd (projector), mixed with text in one batch
 tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query / --mmproj / --media (embedding models)
-tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark
+tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark for chat, decision and embedding models
 tools/barrier-lab/main.cpp          standalone experiment (not in the CMake build): split work + ggml-style barrier
 tests/test_core.cpp                 the C test suite (host and device)
 flutter/kiln_flutter/

@@ -108,6 +108,7 @@ One source tree, three outputs, no copies.
 - [x] v0.3.0: images and audio for embedding models (`kiln_embed_media`, llama.cpp mtmd): EmbeddingGemma 2 (both), jina v5 omni nano (images)
 - [x] Embeddings in the Flutter plugin (`embed`, `embedMedia`, `loadProjector`); macOS (Metal) and Android (Pixel 8) runs
 - [ ] Embeddings: iOS run, several inputs per call, video, raw pixels and samples, rerankers
+- [x] First Snapdragon run and core selection for chips with no little cores (Galaxy S26 Ultra); OpenCL on Adreno tried, slower than CPU for sub-1B models
 - [ ] Images and audio for chat models (the projector plumbing is now in the build; decision models are tracked above)
 - [ ] ASR (speech to text): the pinned llama.cpp `mtmd` has Whisper, Parakeet and Qwen3-ASR encoders, and `mtmd` is now in the build.
       A chat-style call that takes an audio clip and streams the words. First step: load Qwen3-ASR 0.6B and compare with `llama-mtmd-cli`. Nothing run yet
