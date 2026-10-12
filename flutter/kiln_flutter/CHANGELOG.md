@@ -15,7 +15,7 @@ and audio. Android arm64 only, as before.
   the other kinds.
 - The native library now includes llama.cpp's image and audio encoders (`libkiln.so` grows
   from about 6 MB to about 7 MB).
-- Example app: a Search screen for embedding models.
+- Example app: a Search screen for embedding models, with a picker for photos and audio.
 
 ## 0.2.0
 

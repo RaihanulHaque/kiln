@@ -30,6 +30,15 @@ scripts/fetch_models.sh --media              # test GGUFs into models/ (~1.7 GB,
 ./build/host/kiln-cli -m models/<file>.gguf --chat
 ```
 
+Linux from the Mac (arm64, GCC, OpenMP), with Docker Desktop running:
+
+```bash
+docker run --rm -v "$PWD":/kiln -w /kiln ubuntu:24.04 bash -c 'apt-get update -qq && \
+  apt-get install -y -qq cmake g++ make git ca-certificates >/dev/null && \
+  cmake -S . -B build/linux-arm64 -DCMAKE_BUILD_TYPE=Release >/dev/null && \
+  cmake --build build/linux-arm64 -j 10 | tail -1 && ./build/linux-arm64/kiln-tests models | tail -1'
+```
+
 Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `scripts/build_ios.sh`
 (macOS only). The NDK is looked up in the macOS and Linux default locations, or `ANDROID_NDK_HOME`.
 
@@ -103,7 +112,8 @@ passed on macOS (M4 Pro, Metal) and Android (Pixel 8) on 2026-10-13, after
 plugin has `embed` / `embedMedia` / `loadProjector` and is at 0.3.0: 23 integration tests on
 the Pixel 8 (`--dart-define=KILN_MEDIA=true` for the image and audio test). Still open for it:
 
-- Linux: re-run `kiln-tests models` (the test tolerances and two checks changed on the Mac).
+- Linux x86: re-run `kiln-tests models` on the Ryzen (the test tolerances and two checks
+  changed on the Mac). Linux arm64 in Docker on the Mac gives 319 passed; see the command below.
 - iOS, as for everything else.
 - 0.3.0 is not tagged and not published to pub.dev (0.2.0 is what `flutter pub add` gives).
 

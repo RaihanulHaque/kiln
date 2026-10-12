@@ -21,7 +21,7 @@ maintainers happened to own. kiln is built the other way round:
 ## Status
 
 v0.3.0 adds embedding models (text, images and audio). It was run on 2026-10-12 and
-2026-10-13 on the Linux desktop, the MacBook and the Pixel 8. The iPhone row is still from
+2026-10-13 on the Linux desktop, the MacBook, a Linux container and the Pixel 8. The iPhone row is still from
 v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 
 | platform | backend | what passed |
@@ -30,6 +30,7 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
 | MacBook Pro M4 Pro, v0.3.0 | llama.cpp Metal | 319 C checks; benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.3.0 | llama.cpp CPU | 317 C checks, before two checks were added on the Mac; not re-run since |
+| Linux arm64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.3.0 | llama.cpp CPU, OpenMP | 319 C checks, also with `KILN_CPU_MASK=3` |
 
 v0.3.0 is not tagged and not on pub.dev yet: `flutter pub add kiln_flutter` still gives 0.2.0,
 which has chat and decision models but no `embed`. Until it is published, use the GitHub

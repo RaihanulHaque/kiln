@@ -146,8 +146,9 @@ Desktop (macOS/Linux) works for development by passing a host build:
   d1-omni is in the download list). Type a text and a yes / no, choice or score question, or
   use one of three presets, and see the answer with a probability bar per option.
 - **Search**: opens when the loaded model is an embedding model (EmbeddingGemma 2 is in the
-  download list). A list of notes and a question; the notes are ranked by meaning. Text only:
-  the example does not pick images or audio.
+  download list). A list of notes and a question; the notes are ranked by meaning. With the
+  model's encoders switched on (a 555 MB download, one tap) you can also add photos and audio
+  clips from the phone, and they are ranked in the same list as the notes.
 
 `--dart-define=KILN_THEME=light` or `dark` forces a theme. Besides the downloader, a model can
 be copied to an Android device with

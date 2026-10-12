@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -72,7 +73,16 @@ enum _Kind { chat, decision, embedding }
 
 /// A model the app offers to download. All three are small enough for a mid-range phone.
 class _CatalogModel {
-  const _CatalogModel(this.name, this.blurb, this.megabytes, this.url, [this.alias, this.kind = _Kind.chat]);
+  const _CatalogModel(this.name, this.blurb, this.megabytes, this.url,
+      [this.alias, this.kind = _Kind.chat, this.projectorUrl, this.projectorFile, this.projectorMegabytes = 0]);
+
+  /// Embedding models: where to get the image / audio encoders (the "mmproj" file), if any.
+  final String? projectorUrl;
+
+  /// The name the projector is saved under. Projector files of different models often share
+  /// one name upstream ("mmproj-Q8_0.gguf"), so each gets its own here.
+  final String? projectorFile;
+  final int projectorMegabytes;
 
   /// Which screen the model opens: chat, Decide or Search.
   final _Kind kind;
@@ -99,7 +109,9 @@ const _catalog = [
   // Not a chat model either: it opens the Search screen. Apache 2.0.
   _CatalogModel('EmbeddingGemma 2', 'Embedding model. Finds notes by meaning.', 176,
       'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/embeddinggemma-2-UD-Q4_K_XL.gguf',
-      null, _Kind.embedding),
+      null, _Kind.embedding,
+      'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/mmproj-Q8_0.gguf',
+      'mmproj-embeddinggemma-2-Q8_0.gguf', 555),
 ];
 
 /// Ready-made questions for the Decide screen, one of each kind.
@@ -123,6 +135,27 @@ The dentist moved my appointment to Thursday afternoon.
 Ahmed owes me 40 for the concert tickets.
 The wifi code for the flat is written under the router.
 Replace the bike chain when it starts skipping gears.''';
+
+const _mediaExtensions = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'wav', 'mp3', 'flac'];
+const _imageExtensions = ['jpg', 'jpeg', 'png', 'bmp', 'gif'];
+
+/// A photo or an audio clip the user added to the Search screen.
+class _MediaItem {
+  _MediaItem(this.path, this.name);
+  final String path, name;
+  Float32List? vector; // null while it is being embedded, or if that failed
+  String info = 'reading…';
+  bool failed = false;
+  bool get isImage => _imageExtensions.contains(name.split('.').last.toLowerCase());
+}
+
+/// One line of a search result: a note, or a media item.
+class _Hit {
+  const _Hit(this.label, this.score, [this.media]);
+  final String label;
+  final double score;
+  final _MediaItem? media;
+}
 
 const _sampleQueries = ['how do I make bread', 'I forgot my password', 'who needs to pay me back', 'when is my trip'];
 
@@ -208,7 +241,10 @@ class _HomePageState extends State<HomePage> {
   final _notes = TextEditingController(text: _sampleNotes);
   final _query = TextEditingController(text: _sampleQueries[0]);
   final _noteVectors = <String, Float32List>{}; // note text -> its vector, so a note is embedded once
-  List<(String, double)>? _hits; // best first
+  List<_Hit>? _hits; // best first
+  final _media = <_MediaItem>[];
+  KilnProjectorInfo? _projector; // set once the image / audio encoders are loaded
+  bool _loadingProjector = false;
   String _searchInfo = '';
   bool _searching = false;
   final _searchScroll = ScrollController();
@@ -258,7 +294,12 @@ class _HomePageState extends State<HomePage> {
   void _refreshModels() {
     final dir = _modelDir;
     if (dir == null) return;
-    final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.gguf')).toList()
+    final files = dir
+        .listSync()
+        .whereType<File>()
+        // a projector (mmproj) is an add-on to an embedding model, not a model to open
+        .where((f) => f.path.endsWith('.gguf') && !_fileName(f).startsWith('mmproj'))
+        .toList()
       ..sort((a, b) => _prettyName(_fileName(a)).toLowerCase().compareTo(_prettyName(_fileName(b)).toLowerCase()));
     if (mounted) setState(() => _models = files);
   }
@@ -274,13 +315,13 @@ class _HomePageState extends State<HomePage> {
 
   /// Streams to a .part file and renames at the end, so a dropped connection never leaves a
   /// truncated file that would later be loaded as a model.
-  Future<void> _download(String url) async {
+  Future<void> _download(String url, {String? saveAs}) async {
     final uri = Uri.tryParse(url.trim());
     if (uri == null || !uri.hasScheme || !uri.path.endsWith('.gguf')) {
       _toast('That does not look like a link to a .gguf file.');
       return;
     }
-    final name = uri.pathSegments.last;
+    final name = saveAs ?? uri.pathSegments.last;
     final out = File('${_modelDir!.path}/$name');
     final part = File('${out.path}.part');
     final client = http.Client();
@@ -343,6 +384,8 @@ class _HomePageState extends State<HomePage> {
       _decision = null;
       _hits = null;
       _noteVectors.clear(); // vectors of one model mean nothing to another
+      _media.clear();
+      _projector = null; // the encoders belong to the model and went away with it
       _loadedPath = f.path;
       _thinking = false;
       _showLibrary = false;
@@ -923,8 +966,9 @@ class _HomePageState extends State<HomePage> {
     final q = _query.text.trim();
     final ctx = _ctx;
     final notes = [for (final l in _notes.text.split('\n')) if (l.trim().isNotEmpty) l.trim()];
+    final ready = [for (final m in _media) if (m.vector != null) m];
     if (ctx == null || _searching) return;
-    if (q.isEmpty || notes.isEmpty) {
+    if (q.isEmpty || (notes.isEmpty && ready.isEmpty)) {
       _toast(q.isEmpty ? 'Type what you are looking for.' : 'Add some notes first, one per line.');
       return;
     }
@@ -940,15 +984,18 @@ class _HomePageState extends State<HomePage> {
       }
       final indexMs = sw.elapsedMilliseconds;
       final qe = await ctx.embed(q, kind: KilnEmbedKind.query);
-      final hits = [for (final n in notes) (n, KilnEmbedding.cosine(qe.vector, _noteVectors[n]!))]
-        ..sort((a, b) => b.$2.compareTo(a.$2));
+      // Text, photos and audio are in one space, so they are ranked in one list.
+      final hits = [
+        for (final n in notes) _Hit(n, KilnEmbedding.cosine(qe.vector, _noteVectors[n]!)),
+        for (final m in ready) _Hit(m.name, KilnEmbedding.cosine(qe.vector, m.vector!), m),
+      ]..sort((a, b) => b.score.compareTo(a.score));
       if (!mounted) return;
       setState(() {
         _hits = hits;
         _searchInfo = [
           if (fresh > 0) '$fresh notes read in $indexMs ms',
           'query ${qe.ms.round()} ms',
-          '${qe.dimensions} numbers per note',
+          '${qe.dimensions} numbers each',
         ].join('  ·  ');
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -964,6 +1011,182 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // ---- photos and audio on the search screen
+
+  /// The catalog entry of the loaded model, when it is one the app knows.
+  _CatalogModel? get _loadedCatalog {
+    final file = _loadedPath?.split('/').last;
+    for (final m in _catalog) {
+      if (file != null && m.matches(file)) return m;
+    }
+    return null;
+  }
+
+  File? get _projectorOnDisk {
+    final name = _loadedCatalog?.projectorFile;
+    if (name == null || _modelDir == null) return null;
+    final f = File('${_modelDir!.path}/$name');
+    return f.existsSync() ? f : null;
+  }
+
+  /// Loads the model's image / audio encoders. They stay in memory until the model is unloaded.
+  Future<void> _enableMedia() async {
+    final f = _projectorOnDisk, model = _model;
+    if (f == null || model == null || _loadingProjector) return;
+    setState(() => _loadingProjector = true);
+    try {
+      final info = await model.loadProjector(f.path);
+      if (mounted) setState(() => _projector = info);
+    } catch (e) {
+      _toast(e is KilnException ? e.message : '$e');
+    } finally {
+      if (mounted) setState(() => _loadingProjector = false);
+    }
+  }
+
+  Future<void> _getProjector() async {
+    final m = _loadedCatalog;
+    if (m?.projectorUrl == null) return;
+    await _download(m!.projectorUrl!, saveAs: m.projectorFile);
+    if (_projectorOnDisk != null) await _enableMedia();
+  }
+
+  /// Lets the user pick photos and audio clips, then embeds them one after the other. An image
+  /// takes a few seconds on a phone, so each row shows its own progress and the screen stays usable.
+  Future<void> _addMedia() async {
+    final ctx = _ctx;
+    if (ctx == null || _projector == null) return;
+    final List<PlatformFile> picked;
+    try {
+      picked = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: _mediaExtensions);
+    } catch (e) {
+      _toast('Could not open the file picker: $e');
+      return;
+    }
+    final items = [
+      for (final f in picked)
+        if (f.path != null && !_media.any((m) => m.path == f.path)) _MediaItem(f.path!, f.name),
+    ];
+    if (items.isEmpty || !mounted) return;
+    setState(() {
+      _media.addAll(items);
+      _hits = null;
+    });
+    for (final item in items) {
+      if (!identical(ctx, _ctx)) return; // the model was changed meanwhile
+      try {
+        final e = await ctx.embedMedia([KilnMedia.file(item.path)]);
+        item.vector = e.vector;
+        item.info = '${e.mediaTokens} tokens  ·  ${(e.ms / 1000).toStringAsFixed(1)} s';
+      } catch (e) {
+        item.failed = true;
+        item.info = e is KilnException ? e.message : '$e';
+      }
+      if (mounted) setState(() {});
+    }
+  }
+
+  Widget _thumb(_MediaItem m, ColorScheme scheme, {double size = 44}) => ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          width: size,
+          height: size,
+          color: scheme.surfaceContainerHigh,
+          child: m.isImage
+              ? Image.file(File(m.path), fit: BoxFit.cover, cacheWidth: 160,
+                  errorBuilder: (_, _, _) => Icon(Icons.image_outlined, color: scheme.onSurfaceVariant))
+              : Icon(Icons.graphic_eq_rounded, color: scheme.onSurfaceVariant, size: size * 0.5),
+        ),
+      );
+
+  /// The "Photos and audio" block: get the encoders, switch them on, then add files.
+  Widget _mediaSection(ColorScheme scheme) {
+    final cat = _loadedCatalog;
+    if (cat?.projectorUrl == null) {
+      return _hint('This model is not in the app\'s list, so the app does not know where its image '
+          'and audio encoders are. It searches text only.', scheme);
+    }
+    if (_projector == null) {
+      final onDisk = _projectorOnDisk != null;
+      final downloading = _downloading == cat!.projectorFile;
+      return Container(
+        padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+        decoration: BoxDecoration(color: scheme.surfaceContainerLow, borderRadius: BorderRadius.circular(18)),
+        child: Column(children: [
+          Row(children: [
+            Expanded(
+              child: Text(
+                  onDisk
+                      ? 'Switch on the image and audio encoders to search photos and voice notes too. They use about 0.6 GB of memory.'
+                      : 'To search photos and voice notes too, this model needs its image and audio encoders (${cat.projectorMegabytes} MB).',
+                  style: TextStyle(fontSize: 13.5, height: 1.4, color: scheme.onSurfaceVariant)),
+            ),
+            const SizedBox(width: 10),
+            if (downloading)
+              TextButton(onPressed: _cancelDownload, child: const Text('Cancel'))
+            else if (_loadingProjector)
+              const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4)))
+            else
+              FilledButton.tonal(
+                onPressed: _downloading != null ? null : (onDisk ? _enableMedia : _getProjector),
+                child: Text(onDisk ? 'Turn on' : 'Get'),
+              ),
+          ]),
+          if (downloading) _progressBar(scheme),
+        ]),
+      );
+    }
+    final kinds = [if (_projector!.supportsImages) 'photos', if (_projector!.supportsAudio) 'audio clips'].join(' or ');
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (_media.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: _card(scheme, [
+            for (final m in _media)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+                child: Row(children: [
+                  _thumb(m, scheme),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(m.info,
+                          maxLines: 2, overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12.5, color: m.failed ? scheme.error : scheme.onSurfaceVariant)),
+                    ]),
+                  ),
+                  if (m.vector == null && !m.failed)
+                    const Padding(
+                        padding: EdgeInsets.all(14),
+                        child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.2)))
+                  else
+                    IconButton(
+                      tooltip: 'Remove',
+                      icon: Icon(Icons.close_rounded, size: 20, color: scheme.onSurfaceVariant),
+                      onPressed: () => setState(() {
+                        _media.remove(m);
+                        _hits = null;
+                      }),
+                    ),
+                ]),
+              ),
+          ]),
+        ),
+      OutlinedButton.icon(
+        onPressed: _addMedia,
+        icon: const Icon(Icons.add_photo_alternate_outlined, size: 20),
+        label: Text('Add $kinds'),
+        style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(48),
+            side: BorderSide(color: scheme.outlineVariant),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+      ),
+    ]);
+  }
+
   Widget _searchView(ColorScheme scheme) {
     void edited(String _) {
       if (_hits != null) setState(() => _hits = null); // the ranking no longer matches the inputs
@@ -975,8 +1198,8 @@ class _HomePageState extends State<HomePage> {
         controller: _searchScroll,
         padding: const EdgeInsets.fromLTRB(20, 4, 20, 32),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      _hint('An embedding model does not write text. It turns each note into numbers, so notes can '
-          'be found by what they mean, even when they share no words with the question.', scheme),
+      _hint('An embedding model does not write text. It turns each note, photo or audio clip into '
+          'numbers, so they can be found by what they mean, even with no words in common.', scheme),
       _sectionTitle('Notes', scheme),
       TextField(
         controller: _notes,
@@ -986,6 +1209,8 @@ class _HomePageState extends State<HomePage> {
         style: const TextStyle(fontSize: 14.5, height: 1.5),
         decoration: _fieldStyle(scheme, 'One note per line'),
       ),
+      _sectionTitle('Photos and audio', scheme),
+      _mediaSection(scheme),
       _sectionTitle('Find', scheme),
       Wrap(spacing: 8, runSpacing: 4, children: [
         for (final q in _sampleQueries)
@@ -1017,10 +1242,10 @@ class _HomePageState extends State<HomePage> {
     ]));
   }
 
-  Widget _hitsCard(List<(String, double)> hits, ColorScheme scheme) {
+  Widget _hitsCard(List<_Hit> hits, ColorScheme scheme) {
     // Scores of unrelated notes sit around 0.5, so the bars show the spread between the
     // weakest and the best note; the number next to each bar is the real similarity.
-    final lo = hits.last.$2, hi = hits.first.$2;
+    final lo = hits.last.score, hi = hits.first.score;
     double bar(double s) => hi - lo < 1e-6 ? 1 : 0.08 + 0.92 * (s - lo) / (hi - lo);
     return Container(
       margin: const EdgeInsets.only(top: 24),
@@ -1033,27 +1258,34 @@ class _HomePageState extends State<HomePage> {
         Text('BEST MATCH',
             style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 1.1, color: scheme.onSurfaceVariant)),
         const SizedBox(height: 6),
-        Text(hits.first.$1, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, height: 1.3, color: scheme.primary)),
+        Row(children: [
+          if (hits.first.media != null) ...[_thumb(hits.first.media!, scheme, size: 64), const SizedBox(width: 14)],
+          Expanded(
+            child: Text(hits.first.label,
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, height: 1.3, color: scheme.primary)),
+          ),
+        ]),
         const SizedBox(height: 16),
         for (var i = 0; i < hits.length; i++)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                if (hits[i].media != null) ...[_thumb(hits[i].media!, scheme, size: 30), const SizedBox(width: 10)],
                 Expanded(
-                  child: Text(hits[i].$1,
+                  child: Text(hits[i].label,
                       maxLines: 2, overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 13.5, fontWeight: i == 0 ? FontWeight.w600 : FontWeight.w400)),
                 ),
                 const SizedBox(width: 12),
-                Text(hits[i].$2.toStringAsFixed(3),
+                Text(hits[i].score.toStringAsFixed(3),
                     style: TextStyle(fontFamily: 'monospace', fontSize: 13, color: scheme.onSurfaceVariant)),
               ]),
               const SizedBox(height: 6),
               ClipRRect(
                 borderRadius: BorderRadius.circular(4),
                 child: LinearProgressIndicator(
-                  value: bar(hits[i].$2),
+                  value: bar(hits[i].score),
                   minHeight: 6,
                   backgroundColor: scheme.surfaceContainerHigh,
                   color: i == 0 ? scheme.primary : scheme.onSurfaceVariant.withValues(alpha: 0.45),
