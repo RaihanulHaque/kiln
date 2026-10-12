@@ -205,8 +205,7 @@ print(urgency.bestKey);              // Today
 
 ## 7. Embedding models: search by meaning
 
-*Needs kiln_flutter 0.3.0. pub.dev still has 0.2.0, so until 0.3.0 is published use the GitHub
-dependency from step 1 for this part.*
+*Needs kiln_flutter 0.3.0 or newer.*
 
 An embedding model turns a text into a list of numbers, a vector. Texts that mean similar
 things get similar vectors, even when they share no words. Embed your notes once, embed what
@@ -283,7 +282,7 @@ flutter run --release
 
 **In progress. Not supported yet.**
 
-kiln built and ran on an iPhone 16 Pro at v0.1.0, using the phone's GPU. For v0.2.0 it has not
+kiln built and ran on an iPhone 16 Pro at v0.1.0, using the phone's GPU. Since then it has not
 been run again, so the pub.dev package is Android only.
 
 If you want to try it anyway, on a Mac with Xcode and a clone of this repo:
@@ -312,7 +311,7 @@ Expect rough edges, and please open an issue with what you find.
 
 ## What is and is not verified
 
-kiln only claims what was run. As of v0.2.0: Pixel 8 (Tensor G3) with the full test suite and
+kiln only claims what was run. As of v0.3.0: Pixel 8 (Tensor G3) with the full test suite and
 the example app. Not yet tried: Snapdragon and MediaTek phones, phones with 4 GB of RAM, and
-iOS on v0.2.0. If you run it on another device, an issue with the output of `probeDevice()` and
+iOS since v0.1.0. If you run it on another device, an issue with the output of `probeDevice()` and
 `stats` is very welcome. The [README](../README.md) has the status table.

@@ -30,11 +30,7 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
 | MacBook Pro M4 Pro, v0.3.0 | llama.cpp Metal | 319 C checks; benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.3.0 | llama.cpp CPU | 317 C checks, before two checks were added on the Mac; not re-run since |
-| Linux arm64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.3.0 | llama.cpp CPU, OpenMP | 319 C checks, also with `KILN_CPU_MASK=3` |
-
-v0.3.0 is not tagged and not on pub.dev yet: `flutter pub add kiln_flutter` still gives 0.2.0,
-which has chat and decision models but no `embed`. Until it is published, use the GitHub
-dependency shown in [getting started](docs/GETTING_STARTED.md) to try embeddings from Flutter.
+| Linux arm64 and emulated x86_64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.3.0 | llama.cpp CPU, OpenMP | 319 C checks on each; arm64 also with `KILN_CPU_MASK=3` |
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
 the decision model LFM2 d1-omni 600M, and the embedding models EmbeddingGemma 2 (text, images,
@@ -45,7 +41,7 @@ Flutter plugin on the Pixel 8.
 v0.2.0 and is not part of the pub.dev package. Use Android for now.
 
 Not yet: Snapdragon or MediaTek phones, 4 GB RAM devices, x86 emulators.
-`kiln_flutter` 0.2.0 is on pub.dev as an Android-only package. The
+`kiln_flutter` 0.3.0 is on pub.dev as an Android-only package. The
 [release checklist](docs/RELEASE.md) lists what is still open.
 
 ## Quick start

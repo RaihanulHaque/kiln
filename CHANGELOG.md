@@ -51,7 +51,8 @@ image took 14.3 s on a Pixel 8 and now takes about 2.5 s; a 3-second audio clip 
 to about 0.5 s. Text was not affected.
 
 Verified with `kiln-tests`: 319 checks on macOS (M4 Pro, Metal) and on Android (Pixel 8, CPU);
-319 on Linux arm64 (Ubuntu 24.04 in Docker, GCC 13, OpenMP), also with `KILN_CPU_MASK=3`;
+319 on Linux arm64 (Ubuntu 24.04 in Docker, GCC 13, OpenMP), also with `KILN_CPU_MASK=3`, and
+319 on Linux x86_64 in the same container emulated on the Mac (AVX2);
 317 on Linux x86 (Ryzen 5 8500G, CPU) before two checks were added, not re-run there since.
 The Flutter plugin has `embed`, `embedMedia` and `loadProjector` with regenerated bindings:
 23 integration tests on the Pixel 8, including images and audio. Not run on iOS.

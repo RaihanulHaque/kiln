@@ -94,7 +94,7 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   the script without a message. This broke the Android scripts on macOS once.
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
 
-## Not yet verified (as of 0.2.0)
+## Not yet verified (as of 0.3.0)
 
 Checked on 2026-10-11: `kiln-tests models` gives 154 passed on Linux x86 (Ryzen 5 8500G),
 macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes on the Pixel 8
@@ -103,7 +103,7 @@ macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes
 - iOS: the items already listed in `docs/RELEASE.md`.
 - Benchmarks on 0.2.0. Run them on a cool phone: after the test suites the Pixel 8 capped its
   fast cores at 1.07 of 2.37 GHz and LFM2.5 ran at 55 tok/s instead of about 105.
-- pub.dev: `kiln_flutter` 0.2.0 was published on 2026-10-12, Android only. A published version
+- pub.dev: `kiln_flutter` 0.3.0 was published on 2026-10-13 (0.2.0 on 2026-10-12), Android only. A published version
   cannot be changed: any fix needs a new version number. `scripts/publish_flutter.sh` publishes.
 
 0.3.0 (embedding models, `kiln_embed` and `kiln_embed_media`): `kiln-tests models` gives 319
@@ -113,9 +113,9 @@ plugin has `embed` / `embedMedia` / `loadProjector` and is at 0.3.0: 23 integrat
 the Pixel 8 (`--dart-define=KILN_MEDIA=true` for the image and audio test). Still open for it:
 
 - Linux x86: re-run `kiln-tests models` on the Ryzen (the test tolerances and two checks
-  changed on the Mac). Linux arm64 in Docker on the Mac gives 319 passed; see the command below.
+  changed on the Mac). Linux arm64 in Docker on the Mac gives 319 passed, and so does emulated x86_64
+  (add `--platform linux/amd64`, about four times slower); see the command above.
 - iOS, as for everything else.
-- 0.3.0 is not tagged and not published to pub.dev (0.2.0 is what `flutter pub add` gives).
 
 Known gaps: embedding models take one input per call; no video, no raw pixels or samples
 (files or file bytes only); images and audio are for embedding models only, not chat. Decision models take a text state only (no images or audio,
