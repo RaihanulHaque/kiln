@@ -104,9 +104,10 @@ One source tree, three outputs, no copies.
 - [x] v0.2.0: ABI changed (chat options, gen stats, model info); see CHANGELOG.md
 - [x] Decision models (LFM2 d1-omni, text state): `kiln_decide`, ported from llama.cpp's server
 - [ ] Decision models: images and audio (mtmd + mmproj), other families
-- [x] v0.3.0: embedding models (`kiln_embed`): EmbeddingGemma 2, nomic-embed-text v1.5, jina v5 omni nano; Linux x86 only so far
+- [x] v0.3.0: embedding models (`kiln_embed`): EmbeddingGemma 2, nomic-embed-text v1.5, jina v5 omni nano
 - [x] v0.3.0: images and audio for embedding models (`kiln_embed_media`, llama.cpp mtmd): EmbeddingGemma 2 (both), jina v5 omni nano (images)
-- [ ] Embeddings: Flutter binding, macOS / Android / iOS runs, several inputs per call, video, raw pixels and samples, rerankers
+- [x] Embeddings in the Flutter plugin (`embed`, `embedMedia`, `loadProjector`); macOS (Metal) and Android (Pixel 8) runs
+- [ ] Embeddings: iOS run, several inputs per call, video, raw pixels and samples, rerankers
 - [ ] Images and audio for chat models (the projector plumbing is now in the build; decision models are tracked above)
 - [ ] ASR (speech to text): the pinned llama.cpp `mtmd` has Whisper, Parakeet and Qwen3-ASR encoders, and `mtmd` is now in the build.
       A chat-style call that takes an audio clip and streams the words. First step: load Qwen3-ASR 0.6B and compare with `llama-mtmd-cli`. Nothing run yet

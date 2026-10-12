@@ -45,10 +45,23 @@ of llama.cpp; kiln matches upstream llama.cpp and was not compared with PyTorch.
 projector (1.3 GB) was not tried. Jina v5 omni is licensed CC BY-NC 4.0 (non-commercial);
 EmbeddingGemma 2 and nomic are Apache 2.0.
 
-Verified with `kiln-tests` (317 checks) on Linux x86 (Ryzen 5 8500G, CPU) only. Not run on
-macOS, Android or iOS, where the image and audio code is also new to the build. The Flutter
-plugin has no `embed` yet: its bindings have to be regenerated with ffigen, and its package
-version is unchanged until then.
+Fixed before release: on Android the image and audio encoders ran on a single core. kiln pins
+the thread that calls it to one core, and the encoder's own threads inherited that. A small
+image took 14.3 s on a Pixel 8 and now takes about 2.5 s; a 3-second audio clip went from 9.6 s
+to about 0.5 s. Text was not affected.
+
+Verified with `kiln-tests`: 319 checks on macOS (M4 Pro, Metal) and on Android (Pixel 8, CPU);
+317 on Linux x86 (Ryzen 5 8500G, CPU) before two checks were added, not re-run there since.
+The Flutter plugin has `embed`, `embedMedia` and `loadProjector` with regenerated bindings:
+23 integration tests on the Pixel 8, including images and audio. Not run on iOS.
+
+Speed with EmbeddingGemma 2 at 4 bits:
+
+| input | Ryzen 5 8500G | Pixel 8 | M4 Pro (Metal) |
+|---|---|---|---|
+| short sentence | 15 ms | 30 to 80 ms | 13 ms |
+| small image (81 media tokens) | 0.7 s | about 2.5 s | 0.2 s |
+| 3-second audio clip | 0.2 s | about 0.5 s | 0.15 s |
 
 ## 0.2.0
 

@@ -79,11 +79,51 @@ print(urgency.value);     // expected level, 0 to 2
 The example app has a Decide screen that uses this. `chat` on a decision model and `decide` on a chat model both throw a `KilnException` with
 `KILN_ERR_NOT_SUPPORTED`. The d1-omni weights are under Liquid AI's `lfm1.0` license, not MIT.
 
+## Embedding models
+
+An embedding model does not write text either. It turns a text into a list of numbers, a
+vector, and texts with a similar meaning get similar vectors. That is what search over the
+user's own notes needs: embed every note once, embed the query, and sort by similarity.
+
+```dart
+final model = await kiln.loadModel('/path/to/embeddinggemma-2-UD-Q4_K_XL.gguf');
+print(model.info.isEmbeddingModel);  // true
+print(model.info.nEmbd);             // 768 numbers per vector
+final ctx = await model.createContext();
+
+final notes = ['Knead the dough and let it rise for an hour.', 'The train leaves at nine.'];
+final vectors = [for (final n in notes) await ctx.embed(n, kind: KilnEmbedKind.document)];
+
+final query = await ctx.embed('how do I bake bread', kind: KilnEmbedKind.query);
+for (var i = 0; i < notes.length; i++) {
+  print('${query.similarity(vectors[i]).toStringAsFixed(3)}  ${notes[i]}');   // 0.72 and 0.57
+}
+```
+
+`vectors[i].vector` is a `Float32List` you can store; `KilnEmbedding.cosine(a, b)` compares two
+stored vectors. `dimensions: 256` keeps a shorter vector, for models trained for it. A text
+longer than the context throws instead of being cut, so split long documents into pieces.
+
+Some embedding models also take **images and audio** and place them in the same space as text,
+so a typed query can find a photo or a voice note. They need a second file, the projector:
+
+```dart
+await model.loadProjector('/path/to/mmproj-embeddinggemma-2-Q8_0.gguf');
+final photo = await ctx.embedMedia([KilnMedia.file('/path/to/holiday.jpg')]);
+final voice = await ctx.embedMedia([KilnMedia.bytes(wavBytes)]);
+final query = await ctx.embed('a lake between mountains', kind: KilnEmbedKind.query);
+print(query.similarity(photo));
+```
+
+On a Pixel 8 a short text takes 30 to 80 ms, a small image about 2.5 s and a 3-second audio
+clip about half a second; the projector adds roughly 0.6 GB of RAM. Tested with
+EmbeddingGemma 2 (text, images, audio; Apache 2.0) and nomic-embed-text v1.5 (text; Apache 2.0).
+
 ## Status
 
 | platform | native | verified |
 |---|---|---|
-| Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Pixel 8: 16 of 16 integration tests, speed run |
+| Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Pixel 8: 23 of 23 integration tests (0.3.0); speed run at 0.2.0 |
 | iOS 15+ | not in the pub.dev package; from a clone, `kiln.xcframework` via `scripts/build_ios.sh`, Metal | **In progress, not supported yet.** iPhone 16 Pro at v0.1.0: 7 of 9 integration tests; not re-run for v0.2.0 |
 
 Desktop (macOS/Linux) works for development by passing a host build:
@@ -92,7 +132,7 @@ Desktop (macOS/Linux) works for development by passing a host build:
 ## Example app
 
 <p>
-<img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_library.png" width="170" alt="Model library"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_chat_thinking.png" width="170" alt="Thinking, streamed"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_chat_reply.png" width="170" alt="Chat reply with stats"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_decide.png" width="170" alt="Decide screen"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_library_light.png" width="170" alt="Light theme">
+<img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_library.png" width="170" alt="Model library"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_chat_thinking.png" width="170" alt="Thinking, streamed"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_chat_reply.png" width="170" alt="Chat reply with stats"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_decide.png" width="170" alt="Decide screen"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_search.png" width="170" alt="Search screen"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_library_light.png" width="170" alt="Light theme">
 </p>
 
 `example/` is a small chat app in one file, with a light and a dark theme that follow the system.
@@ -105,6 +145,9 @@ Desktop (macOS/Linux) works for development by passing a host build:
 - **Decide**: opens instead of the chat when the loaded model is a decision model (LFM2
   d1-omni is in the download list). Type a text and a yes / no, choice or score question, or
   use one of three presets, and see the answer with a probability bar per option.
+- **Search**: opens when the loaded model is an embedding model (EmbeddingGemma 2 is in the
+  download list). A list of notes and a question; the notes are ranked by meaning. Text only:
+  the example does not pick images or audio.
 
 `--dart-define=KILN_THEME=light` or `dark` forces a theme. Besides the downloader, a model can
 be copied to an Android device with
@@ -121,7 +164,9 @@ cd example && flutter test integration_test -d <device-id>
 
 Downloads a 229 MB model on first run. Covers probe, bad files, info, template, single turn,
 KV reuse on turn 2, cancel, busy-context guard, context overflow, Qwen3.5 thinking
-channels (fetches Qwen, 533 MB) and the d1-omni decision model (fetches it, 407 MB). `--dart-define=KILN_SPEED=true` adds a 3-run speed test per
+channels (fetches Qwen, 533 MB), the d1-omni decision model (fetches it, 407 MB) and the
+EmbeddingGemma 2 embedding model (176 MB). `--dart-define=KILN_MEDIA=true` adds the image and
+audio test, which fetches a 555 MB projector. `--dart-define=KILN_SPEED=true` adds a 3-run speed test per
 model.
 
 ## Building the native side

@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
@@ -161,6 +162,12 @@ class KilnWorker {
 
       case 'decide':
         return _decide(k, r);
+
+      case 'loadProjector':
+        return _loadProjector(k, r);
+
+      case 'embed':
+        return _embed(k, r);
     }
     throw KilnException(b.kiln_status.KILN_ERR_INVALID_ARG, 'unknown op ${r.op}');
   }
@@ -301,6 +308,80 @@ class KilnWorker {
       calloc.free(cq); calloc.free(probs); calloc.free(ans);
       for (final x in strings) {
         calloc.free(x);
+      }
+    }
+  }
+
+  static Map<String, Object> _loadProjector(b.KilnBindings k, _Req r) {
+    final path = (r.args['path'] as String).toNativeUtf8();
+    final pp = calloc<b.kiln_projector_params>();
+    final info = calloc<b.kiln_projector_info>();
+    try {
+      pp.ref = k.kiln_projector_params_default();
+      pp.ref.image_max_tokens = r.args['imageMaxTokens'] as int;
+      final s = k.kiln_model_load_projector(Pointer.fromAddress(r.args['model'] as int), path.cast(), pp, info);
+      if (s != b.kiln_status.KILN_OK) _fail(k, s);
+      return KilnProjectorInfo(supportsImages: info.ref.supports_images, supportsAudio: info.ref.supports_audio).toMap();
+    } finally { calloc.free(path); calloc.free(pp); calloc.free(info); }
+  }
+
+  /// Text only goes through kiln_embed (which adds the task prefix); anything with media
+  /// goes through kiln_embed_media.
+  static Map<String, Object> _embed(b.KilnBindings k, _Req r) {
+    final text = r.args['text'] as String?;
+    final title = r.args['title'] as String?;
+    final media = [for (final m in r.args['media'] as List) KilnMedia.fromMap(m as Map)];
+    final cap = r.args['cap'] as int;
+    final frees = <Pointer>[];
+    Pointer<Char> str(String? s) {
+      if (s == null) return nullptr;
+      final p = s.toNativeUtf8();
+      frees.add(p);
+      return p.cast();
+    }
+
+    final opts = calloc<b.kiln_embed_options>();
+    final st = calloc<b.kiln_embed_stats>();
+    final out = calloc<Float>(cap > 0 ? cap : 1);
+    final items = media.isEmpty ? nullptr : calloc<b.kiln_media>(media.length);
+    try {
+      opts.ref = k.kiln_embed_options_default();
+      opts.ref.kindAsInt = r.args['kind'] as int;
+      opts.ref.title = str(title);
+      opts.ref.dimensions = r.args['dimensions'] as int;
+      opts.ref.normalize = r.args['normalize'] as bool;
+      for (var i = 0; i < media.length; i++) {
+        final bytes = media[i].bytes;
+        if (bytes == null) {
+          items[i].path = str(media[i].path);
+        } else {
+          final buf = calloc<Uint8>(bytes.isEmpty ? 1 : bytes.length);
+          frees.add(buf);
+          buf.asTypedList(bytes.length).setAll(0, bytes);
+          items[i].path = nullptr;
+          items[i].data = buf;
+          items[i].size = bytes.length;
+        }
+      }
+      final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
+      final s = media.isEmpty
+          ? k.kiln_embed(ctx, str(text ?? ''), opts, out, cap, st)
+          : k.kiln_embed_media(ctx, str(text), items, media.length, opts, out, cap, st);
+      if (s != b.kiln_status.KILN_OK) _fail(k, s);
+      final e = st.ref;
+      return KilnEmbedding(
+        vector: Float32List.fromList(out.asTypedList(e.dimensions)),   // a copy: `out` is freed below
+        tokens: e.tokens,
+        mediaTokens: e.media_tokens,
+        prefixed: e.prefixed,
+        mediaMs: e.media_ms,
+        ms: e.ms,
+      ).toMap();
+    } finally {
+      calloc.free(opts); calloc.free(st); calloc.free(out);
+      if (items != nullptr) calloc.free(items);
+      for (final p in frees) {
+        calloc.free(p);
       }
     }
   }

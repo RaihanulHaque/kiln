@@ -255,8 +255,8 @@ jina-embeddings-v5-omni-nano takes text and images with its small vision project
 its audio projector is 1.3 GB and was not tried); EmbeddingGemma 2 takes text, images and
 audio with one projector. Vectors from different models cannot be compared with each other.
 
-kiln stores nothing: it returns the vector and the app keeps it. All of this was run on
-Linux x86 only so far.
+kiln stores nothing: it returns the vector and the app keeps it. This was run on Linux x86,
+on a Mac (Metal) and on a Pixel 8, and from Flutter on the Pixel 8.
 
 ## Chat templates
 

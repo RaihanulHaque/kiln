@@ -25,8 +25,8 @@ CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desk
 ```bash
 git submodule update --init --recursive      # CMake also does this if the submodule is empty
 cmake --preset host && cmake --build --preset host -j
-scripts/fetch_models.sh                      # six test GGUFs into models/ (~1.7 GB); --media adds 0.9 GB
-./build/host/kiln-tests models               # 317 checks at 0.3.0 with --media models; a missing model is skipped
+scripts/fetch_models.sh --media              # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders)
+./build/host/kiln-tests models               # 319 checks at 0.3.0; without --media the image / audio tests are skipped
 ./build/host/kiln-cli -m models/<file>.gguf --chat
 ```
 
@@ -72,6 +72,15 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   that file for pub so they are uploaded. A rule in the root `.gitignore` still applies to pub:
   an unanchored `models/` there once hid llama.cpp's `src/models`. `scripts/pub_files.py`
   lists what pub would upload.
+- **Threads started inside a kiln call inherit one core.** The pinned threadpool ties the
+  calling thread to a single core (it is worker 0). Anything that starts its own threads from
+  that thread, as the mtmd image / audio encoders do, lands on that one core unless the caller
+  is widened first: see `AffinityScope` in `embedding.h`. `top -H` on the device shows it.
+- **Reference numbers from one processor are not exact on another.** A 4-bit model's vectors
+  differ by up to 0.009 per number between x86, the Pixel 8 and the M4 GPU. Tests that compare
+  with llama.cpp's numbers allow 0.015; tests that rank two texts need a real margin.
+- **The Pixel 8's screen is damaged (2026-10).** adb, `scripts/android-test.sh`, the Flutter
+  integration test and `adb exec-out screencap` all still work; only physical taps do not.
 - **A shell glob that matches nothing makes `ls` fail**, and with `set -o pipefail` that ends
   the script without a message. This broke the Android scripts on macOS once.
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
@@ -88,16 +97,15 @@ macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes
 - pub.dev: `kiln_flutter` 0.2.0 was published on 2026-10-12, Android only. A published version
   cannot be changed: any fix needs a new version number. `scripts/publish_flutter.sh` publishes.
 
-0.3.0 (embedding models, `kiln_embed` and `kiln_embed_media`) was run on Linux x86 only:
-317 passed on 2026-10-12. Still open for it:
+0.3.0 (embedding models, `kiln_embed` and `kiln_embed_media`): `kiln-tests models` gives 319
+passed on macOS (M4 Pro, Metal) and Android (Pixel 8) on 2026-10-13, after
+`scripts/fetch_models.sh --media`; 317 on Linux x86 before two checks were added. The Flutter
+plugin has `embed` / `embedMedia` / `loadProjector` and is at 0.3.0: 23 integration tests on
+the Pixel 8 (`--dart-define=KILN_MEDIA=true` for the image and audio test). Still open for it:
 
-- macOS (Metal) and Android: `kiln-tests models` after `scripts/fetch_models.sh --media`.
-  The build now compiles llama.cpp's `mtmd` with stb_image and miniaudio, which has never
-  been built here for Android or iOS. On Metal the projector runs on the GPU
-  (`use_gpu` follows the model), a path not exercised on Linux.
-- Flutter: regenerate the bindings with ffigen, add `KilnContext.embed`, then bump
-  `pubspec.yaml` and the podspec to 0.3.0. They were left at 0.2.0 because the Dart side
-  could not be built on the Linux PC.
+- Linux: re-run `kiln-tests models` (the test tolerances and two checks changed on the Mac).
+- iOS, as for everything else.
+- 0.3.0 is not tagged and not published to pub.dev (0.2.0 is what `flutter pub add` gives).
 
 Known gaps: embedding models take one input per call; no video, no raw pixels or samples
 (files or file bytes only); images and audio are for embedding models only, not chat. Decision models take a text state only (no images or audio,

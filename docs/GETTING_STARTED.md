@@ -203,7 +203,54 @@ print(urgency.bestKey);              // Today
 
 `chat` on a decision model and `decide` on a chat model both throw a `KilnException`.
 
-## 7. Build and run
+## 7. Embedding models: search by meaning
+
+*Needs kiln_flutter 0.3.0. pub.dev still has 0.2.0, so until 0.3.0 is published use the GitHub
+dependency from step 1 for this part.*
+
+An embedding model turns a text into a list of numbers, a vector. Texts that mean similar
+things get similar vectors, even when they share no words. Embed your notes once, embed what
+the user types, and sort by similarity: that is search by meaning, fully on the phone.
+Tested: [EmbeddingGemma 2](https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/embeddinggemma-2-UD-Q4_K_XL.gguf)
+(176 MB, Apache 2.0).
+
+```dart
+final model = await kiln.loadModel(embedFile.path);
+print(model.info.isEmbeddingModel);  // true
+final ctx = await model.createContext();
+
+final notes = ['Knead the dough and let it rise for an hour.', 'The train leaves at nine.'];
+final vectors = [for (final n in notes) await ctx.embed(n, kind: KilnEmbedKind.document)];
+
+final query = await ctx.embed('how do I bake bread', kind: KilnEmbedKind.query);
+for (var i = 0; i < notes.length; i++) {
+  print('${query.similarity(vectors[i]).toStringAsFixed(3)}  ${notes[i]}');
+}
+```
+
+- Use `KilnEmbedKind.document` for what is searched and `KilnEmbedKind.query` for what the
+  user types. The model was trained with a different prefix for each, and kiln adds it.
+- `vectors[i].vector` is a `Float32List`. Save it next to the note, and compare saved vectors
+  later with `KilnEmbedding.cosine(a, b)`. Vectors from different models cannot be compared.
+- A text longer than the context (2048 tokens by default) throws `KILN_ERR_CONTEXT_FULL`.
+  Split long documents into paragraphs and embed each one.
+
+With the model's projector file
+([mmproj](https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/mmproj-Q8_0.gguf),
+555 MB) the same model also embeds images and audio into the same space, so a typed query can
+find a photo or a voice note:
+
+```dart
+await model.loadProjector(projectorFile.path);
+final photo = await ctx.embedMedia([KilnMedia.file('/path/to/holiday.jpg')]);
+final query = await ctx.embed('a lake between mountains', kind: KilnEmbedKind.query);
+print(query.similarity(photo));
+```
+
+An image takes a few seconds on a phone processor and audio about a sixth of its length, so
+embed media in the background when it is added, not while the user is searching.
+
+## 8. Build and run
 
 ```bash
 flutter run --release
@@ -224,7 +271,7 @@ few minutes slows its processor down and can run at half speed.
 ## A complete app to read
 
 [`flutter/kiln_flutter/example`](../flutter/kiln_flutter/example) is a full app in one file:
-model library with downloads, chat with thinking, and a Decide screen. To run it:
+model library with downloads, chat with thinking, a Decide screen and a Search screen. To run it:
 
 ```bash
 git clone --recursive https://github.com/RaihanulHaque/kiln.git
@@ -259,6 +306,7 @@ Expect rough edges, and please open an issue with what you find.
 | The app is killed while loading | The model does not fit in RAM. Try a smaller model or a smaller quantization. |
 | `KilnException(KILN_ERR_CONTEXT_FULL)` | The conversation is longer than `nCtx`. Start a new chat with `ctx.reset()` or raise `nCtx`. |
 | The model never answers with thinking on | Set `maxReasoningTokens`, step 5. |
+| `KILN_ERR_NOT_SUPPORTED` from `chat`, `decide` or `embed` | The model is of another kind. Check `model.info.isDecisionModel` and `isEmbeddingModel`. |
 | Much slower than the numbers in the README | Debug build, or a hot phone. Use `--release` and let the phone cool. |
 | Bold markers like `**this**` in the output | Models write markdown. Render it, or see `_Markdown` in the example app. |
 

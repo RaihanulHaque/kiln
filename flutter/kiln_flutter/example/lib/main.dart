@@ -2,6 +2,7 @@
 // a model) and the chat. Everything kiln-specific is in _HomePageState; the rest is layout.
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -67,12 +68,14 @@ class KilnApp extends StatelessWidget {
 
 // ---------------------------------------------------------------- data
 
+enum _Kind { chat, decision, embedding }
+
 /// A model the app offers to download. All three are small enough for a mid-range phone.
 class _CatalogModel {
-  const _CatalogModel(this.name, this.blurb, this.megabytes, this.url, [this.alias, this.decision = false]);
+  const _CatalogModel(this.name, this.blurb, this.megabytes, this.url, [this.alias, this.kind = _Kind.chat]);
 
-  /// Opens the Decide screen instead of the chat.
-  final bool decision;
+  /// Which screen the model opens: chat, Decide or Search.
+  final _Kind kind;
   final String name, blurb, url;
   final int megabytes;
 
@@ -92,7 +95,11 @@ const _catalog = [
       'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf'),
   // Not a chat model: it opens the Decide screen. Weights are under Liquid AI's lfm1.0 license.
   _CatalogModel('LFM2 d1-omni 600M', 'Decision model. Judges a text instead of chatting.', 407,
-      'https://huggingface.co/LiquidAI/d1-omni-600M-GGUF/resolve/main/d1-omni-600M-Q8_0.gguf', null, true),
+      'https://huggingface.co/LiquidAI/d1-omni-600M-GGUF/resolve/main/d1-omni-600M-Q8_0.gguf', null, _Kind.decision),
+  // Not a chat model either: it opens the Search screen. Apache 2.0.
+  _CatalogModel('EmbeddingGemma 2', 'Embedding model. Finds notes by meaning.', 176,
+      'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/embeddinggemma-2-UD-Q4_K_XL.gguf',
+      null, _Kind.embedding),
 ];
 
 /// Ready-made questions for the Decide screen, one of each kind.
@@ -105,6 +112,19 @@ class _Preset {
 const _sampleState =
     'Hi, I ordered a blender two weeks ago and it arrived broken. I have emailed twice and nobody '
     'answered. I want my money back today or I will dispute the charge with my bank.';
+
+/// Notes for the Search screen, and questions that share almost no words with their answer.
+const _sampleNotes = '''
+Knead the dough and let it rise for an hour before baking.
+The train to Leeds leaves from platform 4 at 9:15.
+To get back into your account, open Settings, choose Security, then Forgot credentials.
+Water the tomatoes every second day and keep them in full sun.
+The dentist moved my appointment to Thursday afternoon.
+Ahmed owes me 40 for the concert tickets.
+The wifi code for the flat is written under the router.
+Replace the bike chain when it starts skipping gears.''';
+
+const _sampleQueries = ['how do I make bread', 'I forgot my password', 'who needs to pay me back', 'when is my trip'];
 
 const _presets = [
   _Preset('Refund?', KilnQuestionType.yesNo, 'Is the customer asking for a refund?'),
@@ -184,6 +204,17 @@ class _HomePageState extends State<HomePage> {
 
   bool get _isDecision => _model?.info.isDecisionModel ?? false;
 
+  // Search screen (shown when the loaded model is an embedding model)
+  final _notes = TextEditingController(text: _sampleNotes);
+  final _query = TextEditingController(text: _sampleQueries[0]);
+  final _noteVectors = <String, Float32List>{}; // note text -> its vector, so a note is embedded once
+  List<(String, double)>? _hits; // best first
+  String _searchInfo = '';
+  bool _searching = false;
+  final _searchScroll = ScrollController();
+
+  bool get _isEmbedding => _model?.info.isEmbeddingModel ?? false;
+
   bool get _inChat => _ctx != null && !_showLibrary;
 
   @override
@@ -203,6 +234,9 @@ class _HomePageState extends State<HomePage> {
     _question.dispose();
     _options.dispose();
     _decideScroll.dispose();
+    _notes.dispose();
+    _query.dispose();
+    _searchScroll.dispose();
     super.dispose();
   }
 
@@ -303,8 +337,12 @@ class _HomePageState extends State<HomePage> {
       _model = model;
       // A decision model reads one short prompt per question, so the default context is enough.
       _ctx = await model.createContext(
-          params: model.info.isDecisionModel ? const KilnContextParams() : const KilnContextParams(nCtx: 4096));
+          params: model.info.isDecisionModel || model.info.isEmbeddingModel
+              ? const KilnContextParams()
+              : const KilnContextParams(nCtx: 4096));
       _decision = null;
+      _hits = null;
+      _noteVectors.clear(); // vectors of one model mean nothing to another
       _loadedPath = f.path;
       _thinking = false;
       _showLibrary = false;
@@ -428,7 +466,13 @@ class _HomePageState extends State<HomePage> {
       child: Scaffold(
         appBar: _inChat ? _chatBar(scheme) : _libraryBar(scheme),
         body: SafeArea(
-            child: !_inChat ? _libraryView(scheme) : _isDecision ? _decideView(scheme) : _chatView(scheme)),
+            child: !_inChat
+                ? _libraryView(scheme)
+                : _isDecision
+                    ? _decideView(scheme)
+                    : _isEmbedding
+                        ? _searchView(scheme)
+                        : _chatView(scheme)),
       ),
     );
   }
@@ -449,7 +493,7 @@ class _HomePageState extends State<HomePage> {
               child: FilledButton.tonalIcon(
                 onPressed: _openChat,
                 icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
-                label: Text(_isDecision ? 'Back to model' : 'Back to chat'),
+                label: Text(_isDecision || _isEmbedding ? 'Back to model' : 'Back to chat'),
               ),
             ),
         ],
@@ -552,7 +596,8 @@ class _HomePageState extends State<HomePage> {
             ? 'Loading…'
             : [
                 _size(f.lengthSync()),
-                if (_catalog.any((m) => m.decision && m.matches(_fileName(f)))) 'decision model',
+                if (_catalog.any((m) => m.kind == _Kind.decision && m.matches(_fileName(f)))) 'decision model',
+                if (_catalog.any((m) => m.kind == _Kind.embedding && m.matches(_fileName(f)))) 'embedding model',
                 if (loaded) 'loaded',
               ].join('  ·  '),
         style: TextStyle(color: loaded || loading ? scheme.primary : scheme.onSurfaceVariant),
@@ -868,6 +913,159 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // ---- search view
+
+  /// Embeds every note that has no vector yet, embeds the query, and sorts the notes by how
+  /// close they are to it. Notes are "documents" and the typed text is a "query": the model
+  /// was trained with a different prefix for each, and kiln adds it.
+  Future<void> _search([String? preset]) async {
+    if (preset != null) _query.text = preset;
+    final q = _query.text.trim();
+    final ctx = _ctx;
+    final notes = [for (final l in _notes.text.split('\n')) if (l.trim().isNotEmpty) l.trim()];
+    if (ctx == null || _searching) return;
+    if (q.isEmpty || notes.isEmpty) {
+      _toast(q.isEmpty ? 'Type what you are looking for.' : 'Add some notes first, one per line.');
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    setState(() => _searching = true);
+    try {
+      final sw = Stopwatch()..start();
+      var fresh = 0;
+      for (final n in notes) {
+        if (_noteVectors.containsKey(n)) continue;
+        _noteVectors[n] = (await ctx.embed(n, kind: KilnEmbedKind.document)).vector;
+        fresh++;
+      }
+      final indexMs = sw.elapsedMilliseconds;
+      final qe = await ctx.embed(q, kind: KilnEmbedKind.query);
+      final hits = [for (final n in notes) (n, KilnEmbedding.cosine(qe.vector, _noteVectors[n]!))]
+        ..sort((a, b) => b.$2.compareTo(a.$2));
+      if (!mounted) return;
+      setState(() {
+        _hits = hits;
+        _searchInfo = [
+          if (fresh > 0) '$fresh notes read in $indexMs ms',
+          'query ${qe.ms.round()} ms',
+          '${qe.dimensions} numbers per note',
+        ].join('  ·  ');
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_searchScroll.hasClients) {
+          _searchScroll.animateTo(_searchScroll.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+        }
+      });
+    } catch (e) {
+      _toast(e is KilnException ? e.message : '$e');
+    } finally {
+      if (mounted) setState(() => _searching = false);
+    }
+  }
+
+  Widget _searchView(ColorScheme scheme) {
+    void edited(String _) {
+      if (_hits != null) setState(() => _hits = null); // the ranking no longer matches the inputs
+    }
+
+    // Not a ListView: a lazy list only estimates its length while the results are off screen,
+    // and scrolling to the end would stop short.
+    return SingleChildScrollView(
+        controller: _searchScroll,
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 32),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _hint('An embedding model does not write text. It turns each note into numbers, so notes can '
+          'be found by what they mean, even when they share no words with the question.', scheme),
+      _sectionTitle('Notes', scheme),
+      TextField(
+        controller: _notes,
+        minLines: 4,
+        maxLines: 9,
+        onChanged: edited,
+        style: const TextStyle(fontSize: 14.5, height: 1.5),
+        decoration: _fieldStyle(scheme, 'One note per line'),
+      ),
+      _sectionTitle('Find', scheme),
+      Wrap(spacing: 8, runSpacing: 4, children: [
+        for (final q in _sampleQueries)
+          ActionChip(
+            label: Text(q),
+            side: BorderSide(color: scheme.outlineVariant),
+            shape: const StadiumBorder(),
+            onPressed: _searching ? null : () => _search(q),
+          ),
+      ]),
+      const SizedBox(height: 12),
+      TextField(
+        controller: _query,
+        onChanged: edited,
+        textInputAction: TextInputAction.search,
+        onSubmitted: (_) => _search(),
+        decoration: _fieldStyle(scheme, 'What are you looking for?'),
+      ),
+      const SizedBox(height: 20),
+      FilledButton(
+        onPressed: _searching ? null : _search,
+        style: FilledButton.styleFrom(
+            minimumSize: const Size.fromHeight(52), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+        child: _searching
+            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4))
+            : const Text('Search', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+      ),
+      if (_hits != null) _hitsCard(_hits!, scheme),
+    ]));
+  }
+
+  Widget _hitsCard(List<(String, double)> hits, ColorScheme scheme) {
+    // Scores of unrelated notes sit around 0.5, so the bars show the spread between the
+    // weakest and the best note; the number next to each bar is the real similarity.
+    final lo = hits.last.$2, hi = hits.first.$2;
+    double bar(double s) => hi - lo < 1e-6 ? 1 : 0.08 + 0.92 * (s - lo) / (hi - lo);
+    return Container(
+      margin: const EdgeInsets.only(top: 24),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('BEST MATCH',
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 1.1, color: scheme.onSurfaceVariant)),
+        const SizedBox(height: 6),
+        Text(hits.first.$1, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, height: 1.3, color: scheme.primary)),
+        const SizedBox(height: 16),
+        for (var i = 0; i < hits.length; i++)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: Text(hits[i].$1,
+                      maxLines: 2, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 13.5, fontWeight: i == 0 ? FontWeight.w600 : FontWeight.w400)),
+                ),
+                const SizedBox(width: 12),
+                Text(hits[i].$2.toStringAsFixed(3),
+                    style: TextStyle(fontFamily: 'monospace', fontSize: 13, color: scheme.onSurfaceVariant)),
+              ]),
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: bar(hits[i].$2),
+                  minHeight: 6,
+                  backgroundColor: scheme.surfaceContainerHigh,
+                  color: i == 0 ? scheme.primary : scheme.onSurfaceVariant.withValues(alpha: 0.45),
+                ),
+              ),
+            ]),
+          ),
+        Text(_searchInfo, style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+      ]),
+    );
+  }
+
   // ---- chat view
 
   PreferredSizeWidget _chatBar(ColorScheme scheme) {
@@ -900,7 +1098,7 @@ class _HomePageState extends State<HomePage> {
               onSelected: (v) => setState(() => _thinking = v),
             ),
           ),
-        if (!info.isDecisionModel)
+        if (!info.isDecisionModel && !info.isEmbeddingModel)
           IconButton(
             tooltip: 'New chat',
             icon: const Icon(Icons.edit_square),

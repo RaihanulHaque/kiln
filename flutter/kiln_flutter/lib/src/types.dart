@@ -1,4 +1,6 @@
 import 'dart:ffi';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
@@ -102,6 +104,8 @@ class KilnModelInfo {
     required this.modelBytes,
     required this.supportsThinking,
     this.isDecisionModel = false,
+    this.isEmbeddingModel = false,
+    this.nEmbd = 0,
   });
 
   factory KilnModelInfo.fromNative(b.kiln_model_info i) => KilnModelInfo(
@@ -116,6 +120,8 @@ class KilnModelInfo {
         modelBytes: i.model_bytes,
         supportsThinking: i.supports_thinking,
         isDecisionModel: i.is_decision_model,
+        isEmbeddingModel: i.is_embedding_model,
+        nEmbd: i.n_embd,
       );
 
   final KilnBackend backend;
@@ -126,24 +132,33 @@ class KilnModelInfo {
   /// The model answers typed questions with [KilnContext.decide] and cannot generate text.
   final bool isDecisionModel;
 
+  /// The model turns text (and, with a projector, images and audio) into vectors with
+  /// [KilnContext.embed] and cannot generate text.
+  final bool isEmbeddingModel;
+
+  /// Embedding models: how many numbers a full vector has. 0 for other models.
+  final int nEmbd;
+
   Map<String, Object> toMap() => {
         'backend': backend.index, 'backendName': backendName, 'arch': arch, 'quant': quant,
         'nParams': nParams, 'nCtxTrain': nCtxTrain, 'nVocab': nVocab,
         'gpuLayersUsed': gpuLayersUsed, 'modelBytes': modelBytes, 'supportsThinking': supportsThinking,
-        'isDecisionModel': isDecisionModel,
+        'isDecisionModel': isDecisionModel, 'isEmbeddingModel': isEmbeddingModel, 'nEmbd': nEmbd,
       };
   factory KilnModelInfo.fromMap(Map m) => KilnModelInfo(
         backend: KilnBackend.values[m['backend']], backendName: m['backendName'], arch: m['arch'],
         quant: m['quant'], nParams: m['nParams'], nCtxTrain: m['nCtxTrain'], nVocab: m['nVocab'],
         gpuLayersUsed: m['gpuLayersUsed'], modelBytes: m['modelBytes'], supportsThinking: m['supportsThinking'],
         isDecisionModel: m['isDecisionModel'] ?? false,
+        isEmbeddingModel: m['isEmbeddingModel'] ?? false, nEmbd: m['nEmbd'] ?? 0,
       );
 
   @override
   String toString() =>
       '$arch $quant, ${(nParams / 1e9).toStringAsFixed(2)}B params, '
       '${(modelBytes / 1e9).toStringAsFixed(2)} GB, via $backendName'
-      '${supportsThinking ? ', thinking' : ''}${isDecisionModel ? ', decision model' : ''}';
+      '${supportsThinking ? ', thinking' : ''}${isDecisionModel ? ', decision model' : ''}'
+      '${isEmbeddingModel ? ', embedding model ($nEmbd numbers)' : ''}';
 }
 
 class KilnModelParams {
@@ -374,6 +389,114 @@ class KilnDecision {
   String toString() =>
       '$bestKey (${(probabilities[best] * 100).toStringAsFixed(1)}%), '
       '$promptTokens tok, ${ms.round()} ms';
+}
+
+/// What a text is for, when it is embedded for search. Models are trained with a short prefix
+/// for each role, and kiln adds the right one.
+enum KilnEmbedKind {
+  /// Embed the text exactly as given.
+  raw,
+
+  /// A search query ("how do I reset my password").
+  query,
+
+  /// A text that will be searched (a note, a paragraph of a document).
+  document,
+}
+
+/// One image or one audio clip for [KilnContext.embedMedia]: a file on the device, or the
+/// bytes of such a file. Images: jpg, png, bmp, gif. Audio: wav, mp3, flac.
+class KilnMedia {
+  /// A file on the device.
+  const KilnMedia.file(String this.path) : bytes = null;
+
+  /// The contents of an image or audio file, for example from a picker or the network.
+  const KilnMedia.bytes(Uint8List this.bytes) : path = null;
+
+  final String? path;
+  final Uint8List? bytes;
+
+  /// Put this in the text where a media item belongs:
+  /// `'A red shoe ${KilnMedia.marker} seen from the side'`.
+  static const marker = '<__media__>';
+
+  Map<String, Object?> toMap() => {'path': path, 'bytes': bytes};
+  factory KilnMedia.fromMap(Map m) =>
+      m['path'] != null ? KilnMedia.file(m['path']) : KilnMedia.bytes(m['bytes']);
+}
+
+/// What a projector file can encode. See [KilnModel.loadProjector].
+class KilnProjectorInfo {
+  const KilnProjectorInfo({required this.supportsImages, required this.supportsAudio});
+  final bool supportsImages, supportsAudio;
+  Map<String, Object> toMap() => {'supportsImages': supportsImages, 'supportsAudio': supportsAudio};
+  factory KilnProjectorInfo.fromMap(Map m) =>
+      KilnProjectorInfo(supportsImages: m['supportsImages'], supportsAudio: m['supportsAudio']);
+  @override
+  String toString() => 'projector: images ${supportsImages ? 'yes' : 'no'}, audio ${supportsAudio ? 'yes' : 'no'}';
+}
+
+/// The vector an embedding model made for a text, an image or an audio clip.
+/// Inputs with a similar meaning get similar vectors; compare two with [similarity].
+class KilnEmbedding {
+  KilnEmbedding({
+    required this.vector,
+    required this.tokens,
+    required this.mediaTokens,
+    required this.prefixed,
+    required this.mediaMs,
+    required this.ms,
+  });
+
+  /// The numbers. Length 1 unless `normalize: false` was passed. Store this to search later.
+  final Float32List vector;
+
+  /// Tokens the model read: text, prefix and media together.
+  final int tokens;
+
+  /// Of those, how many came from images and audio.
+  final int mediaTokens;
+
+  /// A task prefix was added (see [KilnEmbedKind]).
+  final bool prefixed;
+
+  /// Time inside the image / audio encoders, and total time, in milliseconds.
+  final double mediaMs, ms;
+
+  /// How many numbers [vector] has.
+  int get dimensions => vector.length;
+
+  /// How close this is to [other]: about 1 for the same meaning, about 0 for unrelated.
+  /// Both must come from the same model with the same `dimensions`.
+  double similarity(KilnEmbedding other) => cosine(vector, other.vector);
+
+  /// Cosine similarity of two vectors, for vectors you stored yourself.
+  static double cosine(Float32List a, Float32List b) {
+    if (a.length != b.length) {
+      throw ArgumentError('vectors have different lengths: ${a.length} and ${b.length}');
+    }
+    var dot = 0.0, na = 0.0, nb = 0.0;
+    for (var i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+      na += a[i] * a[i];
+      nb += b[i] * b[i];
+    }
+    return na == 0 || nb == 0 ? 0 : dot / math.sqrt(na * nb);
+  }
+
+  Map<String, Object> toMap() => {
+        'vector': vector, 'tokens': tokens, 'mediaTokens': mediaTokens, 'prefixed': prefixed,
+        'mediaMs': mediaMs, 'ms': ms,
+      };
+  factory KilnEmbedding.fromMap(Map m) => KilnEmbedding(
+        vector: m['vector'], tokens: m['tokens'], mediaTokens: m['mediaTokens'],
+        prefixed: m['prefixed'], mediaMs: m['mediaMs'], ms: m['ms'],
+      );
+
+  @override
+  String toString() =>
+      '$dimensions numbers, $tokens tok${mediaTokens > 0 ? ' ($mediaTokens media, encoder ${mediaMs.round()} ms)' : ''}, '
+      '${ms.round()} ms${prefixed ? ', prefix added' : ''}';
 }
 
 /// One streamed fragment of model output.

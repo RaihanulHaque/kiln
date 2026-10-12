@@ -8,12 +8,15 @@
 //
 // Missing models skip their tests rather than fail, so the suite is usable on any device.
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:integration_test/integration_test.dart';
 import 'package:kiln_flutter/kiln_flutter.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'media_fixtures.dart';
 
 const lfm = 'LiquidAI_LFM2.5-350M_Q4_K_M.gguf';
 const qwen = 'Qwen3.5-0.8B-Q4_K_M.gguf';
@@ -31,6 +34,13 @@ const speedModels = {
   gemma: 'https://huggingface.co/unsloth/gemma-3-270m-it-GGUF/resolve/main/gemma-3-270m-it-Q8_0.gguf',
 };
 const bool speed = bool.fromEnvironment('KILN_SPEED');
+// Embedding model, fetched on demand by its tests (176 MB, once per install). Apache 2.0.
+const gemmaEmbed = 'embeddinggemma-2-UD-Q4_K_XL.gguf';
+const gemmaEmbedUrl = 'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/embeddinggemma-2-UD-Q4_K_XL.gguf';
+// Its image / audio encoders (555 MB), only fetched when KILN_MEDIA=true.
+const gemmaProjector = 'mmproj-embeddinggemma-2-Q8_0.gguf';
+const gemmaProjectorUrl = 'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/mmproj-Q8_0.gguf';
+const bool mediaTests = bool.fromEnvironment('KILN_MEDIA');
 
 /// Download to a .part file and rename when complete, so a dropped connection never leaves a
 /// truncated file that a later run would take for a model. Three attempts.
@@ -197,6 +207,20 @@ void main() {
       final g = ctx.chat([const KilnChatMessage.user('Count to twenty.')], sampling: const KilnSamplingParams.greedy(maxTokens: 24));
       expect(() => ctx.chat([const KilnChatMessage.user('x')]), throwsStateError);
       await g.stats;
+    });
+
+    test('embed on a chat model is refused', () async {
+      expect(m.info.isEmbeddingModel, isFalse);
+      expect(m.info.nEmbd, 0);
+      final ctx = await m.createContext();
+      try {
+        await expectLater(ctx.embed('some text'),
+            throwsA(isA<KilnException>().having((e) => e.status.name, 'status', 'KILN_ERR_NOT_SUPPORTED')));
+        await expectLater(m.loadProjector('${dir.path}/nothing.gguf'),
+            throwsA(isA<KilnException>().having((e) => e.status.name, 'status', 'KILN_ERR_NOT_SUPPORTED')));
+      } finally {
+        await ctx.dispose();
+      }
     });
 
     test('decide on a chat model is refused', () async {
@@ -370,5 +394,142 @@ void main() {
       // the context is usable again afterwards
       expect((await ctx.decide(KilnQuestion.yesNo('Is this a question?'))).probabilities, hasLength(2));
     });
+  });
+
+  group('EmbeddingGemma 2 embedding model', () {
+    late KilnModel m;
+    late KilnContext ctx;
+    double length(KilnEmbedding e) => KilnEmbedding.cosine(e.vector, e.vector) == 0
+        ? 0
+        : e.vector.fold<double>(0, (a, x) => a + x * x);
+
+    setUpAll(() async {
+      final f = await fetch(gemmaEmbed, gemmaEmbedUrl);
+      m = await kiln.loadModel(f.path);
+      ctx = await m.createContext(params: const KilnContextParams(nCtx: 256));
+    });
+    tearDownAll(() async {
+      await ctx.dispose();
+      await m.dispose();
+    });
+
+    test('info says it is an embedding model', () {
+      expect(m.info.isEmbeddingModel, isTrue);
+      expect(m.info.isDecisionModel, isFalse);
+      expect(m.info.nEmbd, 768);
+      // ignore: avoid_print
+      print('model: ${m.info}');
+    });
+
+    test('a text becomes a vector of length 1, the same every time', () async {
+      final a = await ctx.embed('The cat sat on the mat.');
+      final b = await ctx.embed('The cat sat on the mat.');
+      expect(a.dimensions, 768);
+      expect(a.vector, hasLength(768));
+      expect(length(a), closeTo(1, 1e-4));
+      expect(a.tokens, inInclusiveRange(5, 15));
+      expect(a.prefixed, isFalse);
+      expect(a.mediaTokens, 0);
+      expect(b.vector, a.vector);
+      // ignore: avoid_print
+      print('embed: $a');
+    });
+
+    test('search ranks the answer above the trap and the unrelated text', () async {
+      final q = await ctx.embed('how do I reset my password', kind: KilnEmbedKind.query);
+      expect(q.prefixed, isTrue);
+      Future<KilnEmbedding> doc(String t) => ctx.embed(t, kind: KilnEmbedKind.document);
+      final right = await doc('Steps to recover account access: open Settings, choose Security, and tap Forgot credentials.');
+      final trap = await doc('Passwords should contain at least twelve characters including a symbol.');
+      final other = await doc('Soda loaf uses baking soda and buttermilk as the raising agent.');
+      final sr = q.similarity(right), st = q.similarity(trap), so = q.similarity(other);
+      // ignore: avoid_print
+      print('password query: answer ${sr.toStringAsFixed(3)}, trap ${st.toStringAsFixed(3)}, unrelated ${so.toStringAsFixed(3)}');
+      expect(sr, greaterThan(st));
+      expect(st, greaterThan(so));
+    });
+
+    test('options: kind, title, dimensions, normalize', () async {
+      const text = 'Steps to recover account access: open Settings, choose Security, and tap Forgot credentials.';
+      final raw = await ctx.embed(text);
+      final doc = await ctx.embed(text, kind: KilnEmbedKind.document);
+      final titled = await ctx.embed(text, kind: KilnEmbedKind.document, title: 'Account help');
+      expect(doc.vector, isNot(raw.vector));
+      expect(titled.vector, isNot(doc.vector));
+
+      final short = await ctx.embed(text, dimensions: 256);
+      expect(short.vector, hasLength(256));
+      expect(length(short), closeTo(1, 1e-4));
+      // the short vector is the start of the full one, scaled back to length 1
+      expect(short.vector[0] / short.vector[1], closeTo(raw.vector[0] / raw.vector[1], 1e-3));
+
+      final unscaled = await ctx.embed(text, normalize: false);
+      expect(length(unscaled), greaterThan(4));
+      expect(unscaled.similarity(raw), closeTo(1, 1e-4));
+    });
+
+    test('bad input and wrong calls fail cleanly', () async {
+      Matcher status(String name) => throwsA(isA<KilnException>().having((e) => e.status.name, 'status', name));
+      await expectLater(ctx.embed('text', dimensions: 769), status('KILN_ERR_INVALID_ARG'));
+      await expectLater(ctx.embed(List.filled(400, 'a long sentence about nothing').join(' ')), status('KILN_ERR_CONTEXT_FULL'));
+      await expectLater(ctx.embedMedia([KilnMedia.bytes(redCirclePng)]), status('KILN_ERR_NOT_SUPPORTED')); // no projector yet
+      expect(() => ctx.embedMedia(const []), throwsArgumentError);
+      await expectLater(ctx.decide(KilnQuestion.yesNo('Is this a question?')), status('KILN_ERR_NOT_SUPPORTED'));
+      final gen = ctx.chat([const KilnChatMessage.user('hi')]);
+      await expectLater(gen.stats, status('KILN_ERR_NOT_SUPPORTED'));
+      // the context is usable again afterwards
+      expect((await ctx.embed('still works')).vector, hasLength(768));
+    });
+
+    test('images and audio share the space of text', () async {
+      if (!mediaTests) {
+        markTestSkipped('run with --dart-define=KILN_MEDIA=true (downloads a 555 MB projector)');
+        return;
+      }
+      Matcher status(String name) => throwsA(isA<KilnException>().having((e) => e.status.name, 'status', name));
+      await expectLater(m.loadProjector('${dir.path}/nothing.gguf'), status('KILN_ERR_MODEL_LOAD'));
+      final p = await fetch(gemmaProjector, gemmaProjectorUrl);
+      final info = await m.loadProjector(p.path);
+      // ignore: avoid_print
+      print(info);
+      expect(info.supportsImages, isTrue);
+      expect(info.supportsAudio, isTrue);
+
+      // an image given as bytes, and the same image given as a file, are the same vector
+      final red = await ctx.embedMedia([KilnMedia.bytes(redCirclePng)]);
+      final file = File('${dir.path}/red_circle.png')..writeAsBytesSync(redCirclePng);
+      final redFromFile = await ctx.embedMedia([KilnMedia.file(file.path)]);
+      final blue = await ctx.embedMedia([KilnMedia.bytes(blueSquarePng)]);
+      expect(red.vector, hasLength(768));
+      expect(length(red), closeTo(1, 1e-4));
+      expect(red.mediaTokens, greaterThan(0));
+      expect(red.mediaMs, greaterThan(0));
+      expect(redFromFile.vector, red.vector);
+      // ignore: avoid_print
+      print('image: $red');
+
+      final q = await ctx.embed('a red circle', kind: KilnEmbedKind.query);
+      final sRed = q.similarity(red), sBlue = q.similarity(blue);
+      // ignore: avoid_print
+      print('"a red circle": red circle ${sRed.toStringAsFixed(3)}, blue square ${sBlue.toStringAsFixed(3)}');
+      expect(sRed, greaterThan(sBlue));
+
+      final tone = await ctx.embedMedia([KilnMedia.bytes(toneWav())]);
+      expect(tone.vector, hasLength(768));
+      expect(length(tone), closeTo(1, 1e-4));
+      expect(tone.mediaTokens, greaterThan(0));
+      // ignore: avoid_print
+      print('audio: $tone');
+
+      // text and an image together, with the marker saying where the image goes
+      final mixed = await ctx.embedMedia([KilnMedia.bytes(redCirclePng)], text: 'A drawing ${KilnMedia.marker} on white paper');
+      expect(mixed.tokens, greaterThan(red.tokens));
+      expect(mixed.vector, isNot(red.vector));
+
+      await expectLater(ctx.embedMedia([KilnMedia.bytes(redCirclePng), KilnMedia.bytes(blueSquarePng)], text: 'one ${KilnMedia.marker} marker'),
+          status('KILN_ERR_INVALID_ARG'));
+      await expectLater(ctx.embedMedia([KilnMedia.bytes(Uint8List.fromList(List.filled(64, 7)))]), status('KILN_ERR_INVALID_ARG'));
+      await expectLater(m.loadProjector(p.path), status('KILN_ERR_INVALID_ARG')); // already loaded
+    }, timeout: const Timeout(Duration(minutes: 15)));
   });
 }

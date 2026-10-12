@@ -20,24 +20,26 @@ maintainers happened to own. kiln is built the other way round:
 
 ## Status
 
-v0.2.0 adds cache reuse for hybrid models, a thinking budget and decision models. It was
-re-run on 2026-10-11 on the Pixel 8, the MacBook and the Linux desktop. The iPhone row is still
-from v0.1.0 (2026-10-10), and the benchmarks were not repeated for v0.2.0:
+v0.3.0 adds embedding models (text, images and audio). It was run on 2026-10-12 and
+2026-10-13 on the Linux desktop, the MacBook and the Pixel 8. The iPhone row is still from
+v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 
 | platform | backend | what passed |
 |---|---|---|
-| Pixel 8 (Tensor G3, Android 16), v0.2.0 | llama.cpp CPU, 5 threads pinned | 154 C checks, 16 Flutter integration tests; benchmarks at v0.1.0 |
+| Pixel 8 (Tensor G3, Android 16), v0.3.0 | llama.cpp CPU, 5 threads pinned | 319 C checks, 23 Flutter integration tests; benchmarks at v0.1.0 |
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
-| MacBook Pro M4 Pro, v0.2.0 | llama.cpp Metal | 154 C checks; benchmarks at v0.1.0 |
-| Ryzen 5 8500G desktop (Linux x86_64), v0.2.0 | llama.cpp CPU | 154 C checks |
+| MacBook Pro M4 Pro, v0.3.0 | llama.cpp Metal | 319 C checks; benchmarks at v0.1.0 |
+| Ryzen 5 8500G desktop (Linux x86_64), v0.3.0 | llama.cpp CPU | 317 C checks, before two checks were added on the Mac; not re-run since |
 
-v0.3.0 (unreleased, on the Linux desktop only: 317 C checks) adds embedding models through
-`kiln_embed` and `kiln_embed_media`: text with nomic-embed-text v1.5, text, images and audio
-with EmbeddingGemma 2, text and images with jina-embeddings-v5-omni-nano. It is not in the
-Flutter plugin yet.
+v0.3.0 is not tagged and not on pub.dev yet: `flutter pub add kiln_flutter` still gives 0.2.0,
+which has chat and decision models but no `embed`. Until it is published, use the GitHub
+dependency shown in [getting started](docs/GETTING_STARTED.md) to try embeddings from Flutter.
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
-and the decision model LFM2 d1-omni 600M (C API, and `decide` in the Flutter plugin on the Pixel 8).
+the decision model LFM2 d1-omni 600M, and the embedding models EmbeddingGemma 2 (text, images,
+audio), nomic-embed-text v1.5 (text) and jina-embeddings-v5-omni-nano (text, images). All of
+them through the C API; chat, `decide`, `embed` and `embedMedia` (EmbeddingGemma 2) through the
+Flutter plugin on the Pixel 8.
 **iOS is in progress.** It built and ran on an iPhone at v0.1.0, but it has not been re-run for
 v0.2.0 and is not part of the pub.dev package. Use Android for now.
 
@@ -75,10 +77,10 @@ gen.cancel();                            // from anywhere, any time
 Package: [flutter/kiln_flutter](flutter/kiln_flutter/README.md). Everything blocking runs on a
 background isolate. The example app in `flutter/kiln_flutter/example` is a full chat UI with
 a model downloader, thinking toggle, collapsible reasoning and per-reply stats, plus a Decide
-screen for decision models.
+screen for decision models and a Search screen for embedding models.
 
 <p>
-<img src="docs/img/app_library.png" width="180"> <img src="docs/img/app_chat_thinking.png" width="180"> <img src="docs/img/app_chat_reply.png" width="180"> <img src="docs/img/app_decide.png" width="180"> <img src="docs/img/app_library_light.png" width="180">
+<img src="docs/img/app_library.png" width="180"> <img src="docs/img/app_chat_thinking.png" width="180"> <img src="docs/img/app_chat_reply.png" width="180"> <img src="docs/img/app_decide.png" width="180"> <img src="docs/img/app_search.png" width="180"> <img src="docs/img/app_library_light.png" width="180">
 </p>
 
 ### C
