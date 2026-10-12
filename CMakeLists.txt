@@ -35,6 +35,8 @@ set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_COMMON   ON  CACHE BOOL "" FORCE)   # chat templates (minja) live here
+set(LLAMA_BUILD_MTMD     ON  CACHE BOOL "" FORCE)   # image and audio encoders (kiln_embed_media)
+set(MTMD_VIDEO           OFF CACHE BOOL "" FORCE)   # video needs an ffmpeg binary; not on phones
 set(LLAMA_CURL           OFF CACHE BOOL "" FORCE)
 set(LLAMA_OPENSSL        OFF CACHE BOOL "" FORCE)
 set(LLAMA_SUBPROCESS     OFF CACHE BOOL "" FORCE)
@@ -76,8 +78,9 @@ endif()
 
 target_include_directories(kiln
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    PRIVATE third_party/llama.cpp/include third_party/llama.cpp/ggml/include third_party/llama.cpp/common)
-target_link_libraries(kiln PRIVATE llama-common llama ggml)
+    PRIVATE third_party/llama.cpp/include third_party/llama.cpp/ggml/include third_party/llama.cpp/common
+            third_party/llama.cpp/tools/mtmd)
+target_link_libraries(kiln PRIVATE llama-common mtmd llama ggml)
 target_compile_definitions(kiln PRIVATE KILN_BUILD)
 if(ANDROID)
     target_link_libraries(kiln PRIVATE log)

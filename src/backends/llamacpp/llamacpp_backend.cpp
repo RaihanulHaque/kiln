@@ -6,6 +6,8 @@
 #include "llama.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 #include "chat.h"          // llama.cpp/common: jinja templates via minja
 
 #include <algorithm>
@@ -41,6 +43,7 @@ void ensure_backend_init() {
     static std::once_flag once;
     std::call_once(once, [] {
         llama_log_set(ggml_log_bridge, nullptr);
+        mtmd_helper_log_set(ggml_log_bridge, nullptr);
         llama_backend_init();
         ggml_backend_load_all();
     });
@@ -111,11 +114,11 @@ public:
         return decision_->decide(ctx_, state, q, probs, probs_cap, out);
     }
 
-    kiln_status embed(const char* text, const kiln_embed_options& o,
+    kiln_status embed(const char* text, const kiln_media* media, int32_t n_media, const kiln_embed_options& o,
                       float* out, int32_t out_cap, kiln_embed_stats& stats) override {
         if (!embedding_ || !embedding_->is_embedding_model()) return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not an embedding model");
         cancel_.store(false);
-        return embedding_->embed(ctx_, text, o, out, out_cap, stats);
+        return embedding_->embed(ctx_, text, media, n_media, o, out, out_cap, stats);
     }
 
     kiln_status generate(const kiln::RenderedPrompt& in, const kiln_sampling_params& sp,
@@ -330,7 +333,7 @@ public:
         decision_.init(model_);
         if (!decision_.is_decision_model()) embedding_.init(model_);
     }
-    ~LlamaModel() override { llama_model_free(model_); }
+    ~LlamaModel() override { embedding_.free_projector(); llama_model_free(model_); }
 
     kiln_status info(kiln_model_info& out) const override {
         memset(&out, 0, sizeof out);
@@ -436,6 +439,12 @@ public:
         }
         out = std::move(c);
         return KILN_OK;
+    }
+
+    kiln_status load_projector(const char* path, const kiln_projector_params& p, kiln_projector_info& out) override {
+        if (!embedding_.is_embedding_model())
+            return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "images and audio are supported for embedding models only");
+        return embedding_.load_projector(model_, path, p, kind_ == KILN_BACKEND_GPU, threads_, out);
     }
 
 private:

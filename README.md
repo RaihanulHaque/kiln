@@ -31,9 +31,10 @@ from v0.1.0 (2026-10-10), and the benchmarks were not repeated for v0.2.0:
 | MacBook Pro M4 Pro, v0.2.0 | llama.cpp Metal | 154 C checks; benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.2.0 | llama.cpp CPU | 154 C checks |
 
-v0.3.0 (unreleased, on the Linux desktop only: 222 C checks) adds embedding models through
-`kiln_embed`, tested with EmbeddingGemma 2 and nomic-embed-text v1.5. It is not in the Flutter
-plugin yet.
+v0.3.0 (unreleased, on the Linux desktop only: 317 C checks) adds embedding models through
+`kiln_embed` and `kiln_embed_media`: text with nomic-embed-text v1.5, text, images and audio
+with EmbeddingGemma 2, text and images with jina-embeddings-v5-omni-nano. It is not in the
+Flutter plugin yet.
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
 and the decision model LFM2 d1-omni 600M (C API, and `decide` in the Flutter plugin on the Pixel 8).
@@ -167,8 +168,20 @@ float similarity = 0;                       // vectors have length 1, so the dot
 for (int i = 0; i < 768; ++i) similarity += q[i] * d[i];
 ```
 
+Some embedding models also take images and audio and put them in the same space as text, so
+a text query can find a photo or a voice note. They need a second file, the projector:
+
+```c
+kiln_model_load_projector(model, "mmproj-embeddinggemma-2-Q8_0.gguf", NULL, NULL);
+kiln_media photo = {"holiday.jpg", NULL, 0};          // a path, or the bytes of the file
+kiln_embed_media(ctx, NULL, &photo, 1, NULL, d, 768, NULL);
+// compare d with the vector of the query "a lake between mountains", as above
+```
+
 Storing and searching the vectors is the app's job. C API only for now, measured on a Linux
-desktop: about 15 ms for a short sentence with EmbeddingGemma 2 at 4 bits (176 MB).
+desktop CPU with EmbeddingGemma 2 at 4 bits: about 15 ms for a short sentence, 0.7 s for a
+small image, 0.2 s for a 3-second audio clip, and about 1 GB of memory once the projector is
+loaded (0.4 GB without it).
 
 ## Measured
 
@@ -206,7 +219,7 @@ third_party/llama.cpp        pinned submodule
 ## Tests
 
 ```bash
-scripts/fetch_models.sh                                      # the six test GGUFs into models/ (~1.7 GB)
+scripts/fetch_models.sh                                      # the six test GGUFs into models/ (~1.7 GB); --media adds 0.9 GB
 ./build/host/kiln-tests models                               # C suite on the host
 scripts/android-test.sh                                      # C suite on a phone over adb
 cd flutter/kiln_flutter/example && flutter test integration_test -d <device>

@@ -31,7 +31,8 @@ public:
     virtual void cancel() = 0;
     virtual kiln_status decide(const char* state, const kiln_decision_question& q,
                                float* probs, int32_t probs_cap, kiln_decision_answer& out) = 0;
-    virtual kiln_status embed(const char* text, const kiln_embed_options& o,
+    // text may be null when media are given
+    virtual kiln_status embed(const char* text, const kiln_media* media, int32_t n_media, const kiln_embed_options& o,
                               float* out, int32_t out_cap, kiln_embed_stats& stats) = 0;
 };
 
@@ -44,6 +45,7 @@ public:
     virtual kiln_status render_chat(const kiln_chat_message* msgs, int32_t n, const kiln_chat_options& o,
                                     RenderedPrompt& out) const = 0;
     virtual kiln_status create_context(const kiln_context_params& p, std::unique_ptr<Context>& out) = 0;
+    virtual kiln_status load_projector(const char* path, const kiln_projector_params& p, kiln_projector_info& out) = 0;
 };
 
 class Backend {

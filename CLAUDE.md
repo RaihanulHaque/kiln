@@ -25,8 +25,8 @@ CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desk
 ```bash
 git submodule update --init --recursive      # CMake also does this if the submodule is empty
 cmake --preset host && cmake --build --preset host -j
-scripts/fetch_models.sh                      # six test GGUFs into models/ (~1.7 GB)
-./build/host/kiln-tests models               # 222 checks at 0.3.0; a missing model is skipped
+scripts/fetch_models.sh                      # six test GGUFs into models/ (~1.7 GB); --media adds 0.9 GB
+./build/host/kiln-tests models               # 317 checks at 0.3.0 with --media models; a missing model is skipped
 ./build/host/kiln-cli -m models/<file>.gguf --chat
 ```
 
@@ -54,6 +54,12 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   built with `n_batch = n_ubatch = n_ctx`. To check a change, build `llama-embedding` from the
   submodule and compare with `kiln-cli --embed`; the numbers should be identical. A model's
   task prefixes come from its card and live in `EmbeddingHead::init`.
+- **Images and audio (`kiln_embed_media`) use llama.cpp's `mtmd` library**, built into libkiln
+  (`LLAMA_BUILD_MTMD`). The reference for them is `llama-server`, not `llama-embedding`;
+  `docs/CODEBASE.md` has the request. The server picks a random media marker per run: read
+  it from `/props`.
+- **A large image is slow far beyond its size.** 1080 image tokens took 21.7 s on the desktop;
+  `image_max_tokens` defaults to 280. Test with a phone-sized photo, not only small images.
 - **A GGUF's training context can be wrong.** EmbeddingGemma 2 states 262144 tokens; its card
   says 8192. Do not size a context from that number.
 - **`kiln_bindings_generated.dart` is generated.** After changing `kiln.h`, run
@@ -82,15 +88,18 @@ macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes
 - pub.dev: `kiln_flutter` 0.2.0 was published on 2026-10-12, Android only. A published version
   cannot be changed: any fix needs a new version number. `scripts/publish_flutter.sh` publishes.
 
-0.3.0 (embedding models, `kiln_embed`) was run on Linux x86 only: 222 passed on 2026-10-12.
-Still open for it:
+0.3.0 (embedding models, `kiln_embed` and `kiln_embed_media`) was run on Linux x86 only:
+317 passed on 2026-10-12. Still open for it:
 
-- macOS (Metal) and Android: `kiln-tests models` with the two embedding models.
+- macOS (Metal) and Android: `kiln-tests models` after `scripts/fetch_models.sh --media`.
+  The build now compiles llama.cpp's `mtmd` with stb_image and miniaudio, which has never
+  been built here for Android or iOS. On Metal the projector runs on the GPU
+  (`use_gpu` follows the model), a path not exercised on Linux.
 - Flutter: regenerate the bindings with ffigen, add `KilnContext.embed`, then bump
   `pubspec.yaml` and the podspec to 0.3.0. They were left at 0.2.0 because the Dart side
   could not be built on the Linux PC.
 
-Known gaps: embedding models take text only (no images or audio for EmbeddingGemma 2), one
-text per call. Decision models take a text state only (no images or audio,
+Known gaps: embedding models take one input per call; no video, no raw pixels or samples
+(files or file bytes only); images and audio are for embedding models only, not chat. Decision models take a text state only (no images or audio,
 only the lfm2-d1-omni family); the probe counts hyperthreads as cores and trusts max frequency
 to tell cores apart (`docs/CPU.md` §8).

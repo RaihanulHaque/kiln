@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Download the GGUFs the C test suite and benchmarks expect into models/.
-# Skips files already present. ~1.7 GB total.
-# usage: scripts/fetch_models.sh
+# Skips files already present. ~1.7 GB total; --media adds the image / audio encoders
+# for the kiln_embed_media tests (~0.9 GB more).
+# usage: scripts/fetch_models.sh [--media]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$ROOT/models"
@@ -19,3 +20,11 @@ fetch gemma-3-270m-it-Q8_0.gguf         https://huggingface.co/unsloth/gemma-3-2
 fetch d1-omni-600M-Q8_0.gguf           https://huggingface.co/LiquidAI/d1-omni-600M-GGUF/resolve/main/d1-omni-600M-Q8_0.gguf
 fetch embeddinggemma-2-UD-Q4_K_XL.gguf  https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/embeddinggemma-2-UD-Q4_K_XL.gguf
 fetch nomic-embed-text-v1.5.Q4_K_M.gguf https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf
+
+if [ "${1:-}" = "--media" ]; then
+  J=https://huggingface.co/jinaai/jina-embeddings-v5-omni-nano-retrieval-GGUF/resolve/main
+  fetch mmproj-embeddinggemma-2-Q8_0.gguf https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/mmproj-Q8_0.gguf
+  # Jina v5 omni is CC BY-NC 4.0: fine for testing, not for a commercial app
+  fetch jina-embeddings-v5-omni-nano-retrieval-Q4_K_M.gguf            "$J/jina-embeddings-v5-omni-nano-retrieval-Q4_K_M.gguf"
+  fetch jina-embeddings-v5-omni-nano-retrieval-vision-mmproj-F16.gguf "$J/jina-embeddings-v5-omni-nano-retrieval-vision-mmproj-F16.gguf"
+fi

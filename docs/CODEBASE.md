@@ -16,8 +16,9 @@ src/backends/llamacpp/
     llamacpp_backend.cpp            the one backend: load, template, generate, threadpool pinning
     reasoning_splitter.h            splits streamed text into answer / reasoning by think tags
     decision.h                      decision models: render the systemone template, one pass, scores -> probabilities
-    embedding.h                     embedding models: detect, add the task prefix, one pass, shorten and normalise the vector
-tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query (embedding models)
+    embedding.h                     embedding models: detect, add the task prefix, one pass, shorten and normalise the vector;
+                                    images and audio through llama.cpp's mtmd (projector), mixed with text in one batch
+tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query / --mmproj / --media (embedding models)
 tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark
 tools/barrier-lab/main.cpp          standalone experiment (not in the CMake build): split work + ggml-style barrier
 tests/test_core.cpp                 the C test suite (host and device)
@@ -168,10 +169,28 @@ template.
    The result is divided by its length so that a dot product of two vectors is their cosine
    similarity.
 
+**With images or audio** (`kiln_embed_media`) step 4 changes. The projector is a second
+model file holding an image encoder, an audio encoder, or both. llama.cpp's `mtmd` library
+(`third_party/llama.cpp/tools/mtmd`, linked into libkiln) runs it:
+
+1. `kiln_model_load_projector` creates the `mtmd_context` once per model.
+2. Each file is decoded (stb_image for pictures, miniaudio for sound) into pixels or samples.
+3. `mtmd_tokenize` splits the input at each `<__media__>` marker into chunks: runs of text
+   tokens, and one chunk per media item, wrapped in the model's own begin / end tokens.
+4. `mtmd_encode_chunk` runs the encoder on a media chunk. Out come vectors of the same size
+   the model uses for a text token: 81 for a small image, 25 per second of audio
+   (EmbeddingGemma 2).
+5. Everything goes into one `llama_batch_ext` that mixes token ids and those vectors, and
+   one `llama_process` call. This follows `add_prompt_mixed` in llama.cpp's server, which is
+   how the server handles a non-causal model. Pooling and normalising are the same as for text.
+
 `kiln_chat` on an embedding model, and `kiln_embed` on any other model, return
 `KILN_ERR_NOT_SUPPORTED`. To check a change, compare with llama.cpp's own tool built from the
 submodule: `llama-embedding -m model.gguf -p "text" --embd-output-format json --embd-normalize 2`
-gives the same numbers as `kiln-cli --embed "text"`.
+gives the same numbers as `kiln-cli --embed "text"`. For images and audio, start
+`llama-server -m model.gguf --mmproj projector.gguf --embeddings -c 2048 -b 2048 -ub 2048`,
+read `media_marker` from `/props`, and POST `{"content": {"prompt_string": "<marker>",
+"multimodal_data": ["<base64 of the file>"]}}` to `/embedding`.
 
 ## The generation loop as a state machine
 

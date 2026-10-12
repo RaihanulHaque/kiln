@@ -20,8 +20,12 @@ static void usage() {
         "           or for noul what yes / no mean (yes=..., no=...)\n"
         "embedding models:\n"
         "       kiln-cli -m model.gguf --embed \"text\" [--embed \"text\"]... [--query \"text\"] [--dim N]\n"
+        "       kiln-cli -m model.gguf --mmproj projector.gguf --media file [--media file]... [--query \"text\"]\n"
         "  --embed  a text to turn into a vector; prints its first numbers\n"
-        "  --query  rank the --embed texts by how well they answer this query\n"
+        "  --media  an image (jpg, png) or audio file (wav, mp3, flac) to turn into a vector; needs --mmproj\n"
+        "  --mmproj the model's image / audio encoders\n"
+        "  --image-tokens N  most tokens one image may take (default 280; -1 = the model's own limit)\n"
+        "  --query  rank the --embed texts and --media files by how well they match this query\n"
         "  --dim    keep only the first N numbers of each vector\n");
 }
 
@@ -56,7 +60,9 @@ int main(int argc, char** argv) {
     int think_budget = 0;
     std::string state, ask_type, ask;
     std::vector<std::string> opt_keys, opt_descs;
-    std::vector<std::string> embed_texts;
+    std::vector<std::string> embed_texts, embed_media;
+    std::string mmproj;
+    int image_tokens = 0;
     std::string embed_query;
     int embed_dim = 0;
     kiln_backend_kind backend = KILN_BACKEND_AUTO;
@@ -80,6 +86,9 @@ int main(int argc, char** argv) {
         else if (a == "--ask")   { ask_type = next(); ask = next(); }
         else if (a == "--embed") embed_texts.push_back(next());
         else if (a == "--query") embed_query = next();
+        else if (a == "--media") embed_media.push_back(next());
+        else if (a == "--mmproj") mmproj = next();
+        else if (a == "--image-tokens") image_tokens = atoi(next());
         else if (a == "--dim")   embed_dim = atoi(next());
         else if (a == "-o") {
             std::string o = next(); size_t eq = o.find('=');
@@ -113,7 +122,15 @@ int main(int argc, char** argv) {
     fprintf(stderr, "model:    %s %s, %.2fB params, %.2f GB resident, ctx_train=%d, thinking=%s\n",
             mi.arch, mi.quant, mi.n_params / 1e9, mi.model_bytes / 1e9, mi.n_ctx_train, mi.is_decision_model ? "n/a (decision model)" : mi.is_embedding_model ? "n/a (embedding model)" : mi.supports_thinking ? "yes" : "no");
 
-    if (!embed_texts.empty() || !embed_query.empty()) {
+    if (!mmproj.empty()) {
+        kiln_projector_info pi;
+        kiln_projector_params pp = kiln_projector_params_default();
+        pp.image_max_tokens = image_tokens;
+        if (kiln_model_load_projector(m, mmproj.c_str(), &pp, &pi) != KILN_OK) { fprintf(stderr, "projector failed: %s\n", kiln_last_error()); return 1; }
+        fprintf(stderr, "projector: images=%s audio=%s\n", pi.supports_images ? "yes" : "no", pi.supports_audio ? "yes" : "no");
+    }
+
+    if (!embed_texts.empty() || !embed_media.empty() || !embed_query.empty()) {
         kiln_embed_options eo = kiln_embed_options_default();
         eo.dimensions = embed_dim;
         const int dim = embed_dim > 0 ? embed_dim : mi.n_embd;
@@ -143,6 +160,21 @@ int main(int argc, char** argv) {
                 printf("%s]  %s\n", es.dimensions > 6 ? ", ..." : "", t.c_str());
             }
             fprintf(stderr, "          %d tok in %.1f ms, %d numbers%s\n", es.tokens, es.ms, es.dimensions, es.prefixed ? ", prefix added" : "");
+        }
+        for (const std::string& f : embed_media) {
+            v.assign(dim > 0 ? dim : 1, 0.0f);
+            kiln_media item = {f.c_str(), nullptr, 0};
+            if (kiln_embed_media(c, nullptr, &item, 1, &eo, v.data(), (int32_t)v.size(), &es) != KILN_OK) { fprintf(stderr, "embed failed: %s\n", kiln_last_error()); return 1; }
+            if (ranking) {
+                double sim = 0;
+                for (int i = 0; i < es.dimensions; ++i) sim += (double)qv[i] * v[i];
+                printf("%.3f  %s\n", sim, f.c_str());
+            } else {
+                printf("[");
+                for (int i = 0; i < es.dimensions && i < 6; ++i) printf("%s%.6f", i ? ", " : "", v[i]);
+                printf("%s]  %s\n", es.dimensions > 6 ? ", ..." : "", f.c_str());
+            }
+            fprintf(stderr, "          %d tok (%d media) in %.1f ms (encoder %.1f ms), %d numbers\n", es.tokens, es.media_tokens, es.ms, es.media_ms, es.dimensions);
         }
         kiln_context_free(c); kiln_model_free(m);
         return 0;

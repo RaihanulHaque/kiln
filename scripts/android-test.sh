@@ -16,4 +16,7 @@ adb push "$BUILD/libkiln.so" "$BUILD/kiln-tests" "$LIBCXX" "$DEV/" >/dev/null
 for m in "$ROOT"/models/*.gguf; do
   adb shell "[ -f $DEV/$(basename "$m") ]" || adb push "$m" "$DEV/"
 done
+# small images and audio clips for the kiln_embed_media tests
+adb shell mkdir -p "$DEV/media"
+adb push "$ROOT"/tests/media/. "$DEV/media/" >/dev/null
 adb shell "cd $DEV && chmod +x kiln-tests && LD_LIBRARY_PATH=$DEV ./kiln-tests $DEV"

@@ -157,7 +157,34 @@ kiln_status kiln_embed(kiln_context* c, const char* text, const kiln_embed_optio
     if (!c || !text || !out) return set_error(KILN_ERR_INVALID_ARG, "null handle/text/out");
     kiln_embed_options o = opts ? *opts : kiln_embed_options_default();
     kiln_embed_stats st{};
-    kiln_status s = c->impl->embed(text, o, out, out_cap, st);
+    kiln_status s = c->impl->embed(text, nullptr, 0, o, out, out_cap, st);
+    if (stats) *stats = st;
+    return s;
+}
+
+kiln_projector_params kiln_projector_params_default(void) {
+    kiln_projector_params p{}; p.image_max_tokens = 0; return p;
+}
+
+kiln_status kiln_model_load_projector(kiln_model* m, const char* path, const kiln_projector_params* params, kiln_projector_info* out) {
+    if (!m || !path) return set_error(KILN_ERR_INVALID_ARG, "null handle/path");
+    kiln_projector_params p = params ? *params : kiln_projector_params_default();
+    kiln_projector_info info{};
+    kiln_status s = m->impl->load_projector(path, p, info);
+    if (out) *out = info;
+    return s;
+}
+
+kiln_status kiln_embed_media(kiln_context* c, const char* text, const kiln_media* media, int32_t n_media,
+                             const kiln_embed_options* opts, float* out, int32_t out_cap, kiln_embed_stats* stats) {
+    if (!c || !out) return set_error(KILN_ERR_INVALID_ARG, "null handle/out");
+    if (n_media < 0 || (n_media > 0 && !media)) return set_error(KILN_ERR_INVALID_ARG, "bad media");
+    if (n_media == 0 && !text) return set_error(KILN_ERR_INVALID_ARG, "no text and no media");
+    for (int32_t i = 0; i < n_media; ++i)
+        if (!media[i].path && (!media[i].data || media[i].size == 0)) return set_error(KILN_ERR_INVALID_ARG, "media item without path or data");
+    kiln_embed_options o = opts ? *opts : kiln_embed_options_default();
+    kiln_embed_stats st{};
+    kiln_status s = c->impl->embed(text, media, n_media, o, out, out_cap, st);
     if (stats) *stats = st;
     return s;
 }

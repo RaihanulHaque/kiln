@@ -25,7 +25,10 @@ git -C "$ROOT/third_party/llama.cpp" archive --format=tar HEAD | tar -x -C "$DST
 
 # --- prune what the CPU/Metal/Vulkan build never reads
 L="$DST/third_party/llama.cpp"
-rm -rf "$L"/{examples,tests,docs,models,tools,media,gguf-py,scripts,ci,.github,.devops,.devcontainer,grammars,prompts,pocs,requirements,poetry.lock,pyproject.toml,requirements.txt,convert_*.py,build-xcframework.sh,mypy.ini,pyrightconfig.json,flake.nix,flake.lock,SECURITY.md,CONTRIBUTING.md,AUTHORS} 2>/dev/null || true
+rm -rf "$L"/{examples,tests,docs,models,media,gguf-py,scripts,ci,.github,.devops,.devcontainer,grammars,prompts,pocs,requirements,poetry.lock,pyproject.toml,requirements.txt,convert_*.py,build-xcframework.sh,mypy.ini,pyrightconfig.json,flake.nix,flake.lock,SECURITY.md,CONTRIBUTING.md,AUTHORS} 2>/dev/null || true
+# of tools/ only mtmd is built (image and audio encoders), without its sample media
+find "$L/tools" -mindepth 1 -maxdepth 1 ! -name mtmd -exec rm -rf {} +
+rm -rf "$L"/tools/mtmd/{tests,legacy-models,test-1.jpeg,test-2.mp3,test-3.mp4,tests.sh,requirements.txt} 2>/dev/null || true
 # ggml backends we never enable on Android/Apple
 for b in cuda hip musa sycl cann rpc kompute webgpu zdnn virtgpu openvino et blas hexagon; do rm -rf "$L/ggml/src/ggml-$b"; done
 # tests inside common/vendor
