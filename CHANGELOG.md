@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0
+
+The C ABI changed: `kiln_model_info` has two new fields at the end (its size is unchanged),
+and there is one new function with its two structs.
+
+- Embedding models: `kiln_embed` turns a text into a vector, and
+  `kiln_model_info.is_embedding_model` / `n_embd` say when to use it and how long the vector
+  is. `kiln_embed_options.kind` (query or document) adds the task prefix the model was trained
+  with, `dimensions` shortens the vector, `normalize` scales it to length 1.
+  A text longer than the context returns `KILN_ERR_CONTEXT_FULL`; nothing is cut silently.
+- `kiln_chat` and `kiln_generate` on an embedding model return `KILN_ERR_NOT_SUPPORTED`.
+  Before, kiln ran such a model as a chat model and printed unused tokens.
+- `kiln-cli`: `--embed`, `--query` and `--dim`.
+- `scripts/fetch_models.sh` downloads the two embedding test models (176 MB and 84 MB).
+
+Tested with EmbeddingGemma 2 (`UD-Q4_K_XL`, 176 MB) and nomic-embed-text v1.5 (`Q4_K_M`,
+84 MB), text only. The vectors are identical to the ones llama.cpp's `llama-embedding` tool
+gives at the same commit. On a 16-question search test the 4-bit EmbeddingGemma 2 file picked
+the same answers as the full-precision one (15 of 16).
+
+Verified with `kiln-tests` (222 checks) on Linux x86 (Ryzen 5 8500G, CPU) only. Not run on
+macOS, Android or iOS. The Flutter plugin has no `embed` yet: its bindings have to be
+regenerated with ffigen, and its package version is unchanged until then. Images and audio
+for EmbeddingGemma 2 (the `mmproj` file) are not supported.
+
 ## 0.2.0
 
 The C ABI changed: `kiln_chat_options`, `kiln_gen_stats` and `kiln_model_info` grew, so code

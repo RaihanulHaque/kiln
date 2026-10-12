@@ -31,6 +31,8 @@ public:
     virtual void cancel() = 0;
     virtual kiln_status decide(const char* state, const kiln_decision_question& q,
                                float* probs, int32_t probs_cap, kiln_decision_answer& out) = 0;
+    virtual kiln_status embed(const char* text, const kiln_embed_options& o,
+                              float* out, int32_t out_cap, kiln_embed_stats& stats) = 0;
 };
 
 class Model {

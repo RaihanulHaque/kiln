@@ -16,7 +16,8 @@ src/backends/llamacpp/
     llamacpp_backend.cpp            the one backend: load, template, generate, threadpool pinning
     reasoning_splitter.h            splits streamed text into answer / reasoning by think tags
     decision.h                      decision models: render the systemone template, one pass, scores -> probabilities
-tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models)
+    embedding.h                     embedding models: detect, add the task prefix, one pass, shorten and normalise the vector
+tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query (embedding models)
 tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark
 tools/barrier-lab/main.cpp          standalone experiment (not in the CMake build): split work + ggml-style barrier
 tests/test_core.cpp                 the C test suite (host and device)
@@ -31,7 +32,7 @@ flutter/kiln_flutter/
     example/lib/main.dart           the demo chat app
     example/integration_test/       on-device test suite (+ KILN_SPEED speed group)
 scripts/
-    fetch_models.sh                 download the four test GGUFs into models/
+    fetch_models.sh                 download the six test GGUFs into models/
     android-run.sh, android-test.sh push the CLI / C tests to a phone over adb
     bench.sh, bench_plot.py, bench_compare.py   resource benchmarks and charts
     vendor_flutter.sh               copy the core into the plugin for pub.dev
@@ -146,6 +147,32 @@ A decision model shares none of the loop above: there is no sampling and no KV r
 `kiln_chat` on a decision model, and `kiln_decide` on a chat model, return
 `KILN_ERR_NOT_SUPPORTED`.
 
+## One `kiln_embed` call
+
+An embedding model also skips the generation loop. It has no sampling, no KV reuse and no
+template.
+
+1. **Load.** `EmbeddingHead::init` (`embedding.h`) reads `<arch>.pooling_type` from the GGUF.
+   Mean, cls or last means "embedding model"; chat models have none. It also picks the task
+   prefixes by architecture (`gemma-embedding*`, `nomic-bert*`); unknown families get none.
+2. **Context.** `EmbeddingHead::configure` turns on embeddings output and sets
+   `n_batch = n_ubatch = n_ctx`. These models are not causal: every token looks at every
+   other one, so a text cannot be fed in pieces. `n_ctx` is therefore the longest text
+   accepted (default 2048, never above the model's training context).
+3. **C API** (`kiln.cpp`) fills in default options and forwards to `Context::embed`.
+4. **`EmbeddingHead::embed`** puts the prefix in front of the text (`task: search result |
+   query: ` for an EmbeddingGemma query), tokenizes, and returns `KILN_ERR_CONTEXT_FULL` if
+   it does not fit. Then it clears the memory, decodes the whole text in one batch with every
+   token marked as an output, and reads the pooled vector with `llama_get_embeddings_seq`.
+5. **Shorten and normalise.** With `dimensions = 256` only the first 256 numbers are kept.
+   The result is divided by its length so that a dot product of two vectors is their cosine
+   similarity.
+
+`kiln_chat` on an embedding model, and `kiln_embed` on any other model, return
+`KILN_ERR_NOT_SUPPORTED`. To check a change, compare with llama.cpp's own tool built from the
+submodule: `llama-embedding -m model.gguf -p "text" --embd-output-format json --embd-normalize 2`
+gives the same numbers as `kiln-cli --embed "text"`.
+
 ## The generation loop as a state machine
 
 ```mermaid
@@ -200,6 +227,7 @@ calling thread; the Dart layer turns that into an async stream.
 | change how thinking is detected | `LlamaModel` constructor (empirical on/off render) |
 | change the thinking budget behaviour | the end of the sampling loop in `LlamaContext::generate` |
 | change cache checkpoints for hybrid models | `save_checkpoint` / `restore_checkpoint` in `LlamaContext`; `stable_prefix` in `render_chat` |
+| add the task prefix of another embedding model | `EmbeddingHead::init` in `embedding.h`; take the strings from the model card and add it to `test_embedding` |
 | support another decision model family | `decision.h`; port its path from llama.cpp `tools/server/server-decision.cpp` and compare with `llama-server` |
 | change sampling defaults | `kiln_sampling_params_default` in `kiln.cpp` |
 | change the example app | `flutter/kiln_flutter/example/lib/main.dart` |

@@ -25,8 +25,8 @@ CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desk
 ```bash
 git submodule update --init --recursive      # CMake also does this if the submodule is empty
 cmake --preset host && cmake --build --preset host -j
-scripts/fetch_models.sh                      # four test GGUFs into models/ (~1.4 GB)
-./build/host/kiln-tests models               # 154 checks at 0.2.0; a missing model is skipped
+scripts/fetch_models.sh                      # six test GGUFs into models/ (~1.7 GB)
+./build/host/kiln-tests models               # 222 checks at 0.3.0; a missing model is skipped
 ./build/host/kiln-cli -m models/<file>.gguf --chat
 ```
 
@@ -50,6 +50,12 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 - **Decision models (`kiln_decide`) are a port of llama.cpp's server code**, which the library
   does not contain. To check a change, build `llama-server` from the submodule and compare
   `/v1/systemone` one question per request; the probabilities should match to six decimals.
+- **Embedding models (`kiln_embed`) need the whole text in one batch**, so the context is
+  built with `n_batch = n_ubatch = n_ctx`. To check a change, build `llama-embedding` from the
+  submodule and compare with `kiln-cli --embed`; the numbers should be identical. A model's
+  task prefixes come from its card and live in `EmbeddingHead::init`.
+- **A GGUF's training context can be wrong.** EmbeddingGemma 2 states 262144 tokens; its card
+  says 8192. Do not size a context from that number.
 - **`kiln_bindings_generated.dart` is generated.** After changing `kiln.h`, run
   `dart run ffigen --config ffigen.yaml` in `flutter/kiln_flutter`; do not edit it by hand.
 - **`flutter/kiln_flutter/src/core` wins over the repo source** when it exists (it is the
@@ -76,6 +82,15 @@ macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes
 - pub.dev: `kiln_flutter` 0.2.0 was published on 2026-10-12, Android only. A published version
   cannot be changed: any fix needs a new version number. `scripts/publish_flutter.sh` publishes.
 
-Known gaps: decision models take a text state only (no images or audio,
+0.3.0 (embedding models, `kiln_embed`) was run on Linux x86 only: 222 passed on 2026-10-12.
+Still open for it:
+
+- macOS (Metal) and Android: `kiln-tests models` with the two embedding models.
+- Flutter: regenerate the bindings with ffigen, add `KilnContext.embed`, then bump
+  `pubspec.yaml` and the podspec to 0.3.0. They were left at 0.2.0 because the Dart side
+  could not be built on the Linux PC.
+
+Known gaps: embedding models take text only (no images or audio for EmbeddingGemma 2), one
+text per call. Decision models take a text state only (no images or audio,
 only the lfm2-d1-omni family); the probe counts hyperthreads as cores and trusts max frequency
 to tell cores apart (`docs/CPU.md` §8).

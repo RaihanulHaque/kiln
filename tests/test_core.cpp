@@ -1,5 +1,5 @@
-// Core behaviour tests. Needs real models: pass a directory containing
-//   LiquidAI_LFM2.5-350M_Q4_K_M.gguf, Qwen3.5-0.8B-Q4_K_M.gguf, gemma-3-270m-it-Q8_0.gguf
+// Core behaviour tests. Needs real models: pass a directory containing the files that
+// scripts/fetch_models.sh downloads (three chat models, a decision model, two embedding models).
 // Missing models are skipped, not failed. Runs on host and on Android via scripts/android-test.sh.
 #include "kiln/kiln.h"
 #include <atomic>
@@ -202,6 +202,8 @@ static void test_model(const std::string& path, const char* label, bool expect_t
         float p[2]; kiln_decision_answer a;
         kiln_decision_question q = {"q", KILN_QUESTION_NOUL, "Is this a question?", nullptr, 0};
         CHECK(!mi.is_decision_model && kiln_decide(c, "state", &q, p, 2, &a) == KILN_ERR_NOT_SUPPORTED, "kiln_decide on a chat model");
+        float v[8];
+        CHECK(!mi.is_embedding_model && mi.n_embd == 0 && kiln_embed(c, "text", nullptr, v, 8, nullptr) == KILN_ERR_NOT_SUPPORTED, "kiln_embed on a chat model");
     }
 
     kiln_context_free(c);
@@ -294,6 +296,102 @@ static void test_decision(const std::string& path) {
     kiln_model_free(m);
 }
 
+// Embedding model: text in, vector out. ref = the first numbers llama.cpp's own llama-embedding
+// tool prints for "The cat sat on the mat." (same commit, CPU, normalised).
+static void test_embedding(const std::string& path, const char* label, bool expect_prefix, bool matryoshka, const float ref[3]) {
+    SECTION(label);
+    if (!exists(path)) { fprintf(stderr, "  SKIP (missing %s)\n", path.c_str()); return; }
+    kiln_model* m = nullptr;
+    kiln_model_params mp = kiln_model_params_default();
+    CHECK(kiln_model_load(path.c_str(), &mp, &m) == KILN_OK, "%s", kiln_last_error());
+    if (!m) return;
+    kiln_model_info mi; kiln_model_get_info(m, &mi);
+    CHECK(mi.is_embedding_model && !mi.is_decision_model && !mi.supports_thinking, "arch=%s", mi.arch);
+    CHECK(mi.n_embd == 768, "n_embd=%d", mi.n_embd);
+    kiln_context_params cp = kiln_context_params_default(); cp.n_ctx = 256;
+    kiln_context* c = nullptr;
+    CHECK(kiln_context_create(m, &cp, &c) == KILN_OK, "%s", kiln_last_error());
+    if (!c) { kiln_model_free(m); return; }
+    const int D = mi.n_embd;
+    auto dot = [](const std::vector<float>& a, const std::vector<float>& b, int n) { double s = 0; for (int i = 0; i < n; ++i) s += (double)a[i] * b[i]; return s; };
+
+    // raw text: the numbers llama.cpp gives, length 1, same again on a second call
+    std::vector<float> v(D), v2(D);
+    kiln_embed_stats st;
+    kiln_status s = kiln_embed(c, "The cat sat on the mat.", nullptr, v.data(), D, &st);
+    CHECK(s == KILN_OK, "%s", kiln_last_error());
+    CHECK(st.dimensions == D && st.tokens > 4 && st.tokens < 16 && !st.prefixed, "dims=%d tokens=%d prefixed=%d", st.dimensions, st.tokens, st.prefixed);
+    CHECK(fabs(dot(v, v, D) - 1.0) < 1e-4, "length^2=%.6f", dot(v, v, D));
+    CHECK(fabsf(v[0] - ref[0]) < 5e-3f && fabsf(v[1] - ref[1]) < 5e-3f && fabsf(v[2] - ref[2]) < 5e-3f,
+          "got %.6f %.6f %.6f, llama.cpp gives %.6f %.6f %.6f", v[0], v[1], v[2], ref[0], ref[1], ref[2]);
+    s = kiln_embed(c, "The cat sat on the mat.", nullptr, v2.data(), D, nullptr);
+    CHECK(s == KILN_OK && memcmp(v.data(), v2.data(), D * sizeof(float)) == 0, "not deterministic");
+    fprintf(stderr, "  %d numbers, %d tok in %.1f ms\n", st.dimensions, st.tokens, st.ms);
+
+    // search: the query must land nearer the text that answers it than the one sharing its words
+    kiln_embed_options q = kiln_embed_options_default(); q.kind = KILN_EMBED_QUERY;
+    kiln_embed_options d = kiln_embed_options_default(); d.kind = KILN_EMBED_DOCUMENT;
+    std::vector<float> qv(D), right(D), trap(D), other(D);
+    kiln_embed_stats qst;
+    CHECK(kiln_embed(c, "how do I reset my password", &q, qv.data(), D, &qst) == KILN_OK, "%s", kiln_last_error());
+    CHECK(qst.prefixed == expect_prefix, "prefixed=%d", qst.prefixed);
+    CHECK(kiln_embed(c, "Steps to recover account access: open Settings, choose Security, and tap Forgot credentials.", &d, right.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    CHECK(kiln_embed(c, "Passwords should contain at least twelve characters including a symbol.", &d, trap.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    CHECK(kiln_embed(c, "Soda loaf uses baking soda and buttermilk as the raising agent.", &d, other.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    const double s_right = dot(qv, right, D), s_trap = dot(qv, trap, D), s_other = dot(qv, other, D);
+    CHECK(s_right > s_trap && s_trap > s_other, "right=%.3f trap=%.3f unrelated=%.3f", s_right, s_trap, s_other);
+    fprintf(stderr, "  password query: answer %.3f, trap %.3f, unrelated %.3f\n", s_right, s_trap, s_other);
+
+    // the kind changes the vector only when the model has a prefix
+    std::vector<float> raw(D);
+    CHECK(kiln_embed(c, "how do I reset my password", nullptr, raw.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    CHECK((memcmp(raw.data(), qv.data(), D * sizeof(float)) != 0) == expect_prefix, "query prefix");
+    kiln_embed_options titled = d; titled.title = "Account help";
+    std::vector<float> tv(D);
+    CHECK(kiln_embed(c, "Steps to recover account access: open Settings, choose Security, and tap Forgot credentials.", &titled, tv.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    CHECK(fabs(dot(tv, tv, D) - 1.0) < 1e-4, "titled document");
+
+    // shortened vector: the leading numbers of the full one, scaled back to length 1
+    kiln_embed_options sh = kiln_embed_options_default(); sh.dimensions = 256;
+    std::vector<float> sv(256);
+    s = kiln_embed(c, "The cat sat on the mat.", &sh, sv.data(), 256, &st);
+    CHECK(s == KILN_OK && st.dimensions == 256, "%s", kiln_last_error());
+    CHECK(fabs(dot(sv, sv, 256) - 1.0) < 1e-4, "length^2=%.6f", dot(sv, sv, 256));
+    const double head = sqrt(dot(v, v, 256));
+    CHECK(fabs(sv[0] * head - v[0]) < 1e-5 && fabs(sv[255] * head - v[255]) < 1e-5, "not the leading part of the full vector");
+    if (matryoshka) {
+        std::vector<float> a(256), b(256), t2(256);
+        kiln_embed_options q2 = q, d2 = d; q2.dimensions = d2.dimensions = 256;
+        kiln_embed(c, "how do I reset my password", &q2, a.data(), 256, nullptr);
+        kiln_embed(c, "Steps to recover account access: open Settings, choose Security, and tap Forgot credentials.", &d2, b.data(), 256, nullptr);
+        kiln_embed(c, "Passwords should contain at least twelve characters including a symbol.", &d2, t2.data(), 256, nullptr);
+        CHECK(dot(a, b, 256) > dot(a, t2, 256), "256 numbers: right=%.3f trap=%.3f", dot(a, b, 256), dot(a, t2, 256));
+    }
+    kiln_embed_options un = kiln_embed_options_default(); un.normalize = false;
+    CHECK(kiln_embed(c, "The cat sat on the mat.", &un, v2.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    const double len = sqrt(dot(v2, v2, D));
+    CHECK(len > 0 && fabs(v2[0] / len - v[0]) < 1e-5, "normalize=false, length=%.4f", len);
+
+    // bad input, text too long, wrong kind of call
+    CHECK(kiln_embed(c, "text", nullptr, v.data(), D - 1, nullptr) == KILN_ERR_INVALID_ARG, "out too small accepted");
+    kiln_embed_options big = kiln_embed_options_default(); big.dimensions = D + 1;
+    CHECK(kiln_embed(c, "text", &big, v.data(), D, nullptr) == KILN_ERR_INVALID_ARG, "dimensions above n_embd accepted");
+    CHECK(kiln_embed(c, nullptr, nullptr, v.data(), D, nullptr) == KILN_ERR_INVALID_ARG, "null text accepted");
+    std::string longtext;
+    for (int i = 0; i < 200; ++i) longtext += "The quick brown fox jumps over the lazy dog. ";
+    CHECK(kiln_embed(c, longtext.c_str(), nullptr, v.data(), D, &st) == KILN_ERR_CONTEXT_FULL && st.tokens > 256, "long text: tokens=%d", st.tokens);
+    CHECK(kiln_embed(c, "The cat sat on the mat.", nullptr, v2.data(), D, nullptr) == KILN_OK && fabsf(v2[0] - ref[0]) < 5e-3f, "embed after an error");
+    kiln_chat_message msg[] = { {"user", "hi"} }; kiln_gen_stats gst;
+    CHECK(kiln_chat(c, msg, 1, nullptr, nullptr, nullptr, nullptr, &gst) == KILN_ERR_NOT_SUPPORTED, "chat on an embedding model");
+    CHECK(kiln_generate(c, "hi", nullptr, nullptr, nullptr, &gst) == KILN_ERR_NOT_SUPPORTED, "generate on an embedding model");
+    float p[2]; kiln_decision_answer da;
+    kiln_decision_question dq = {"q", KILN_QUESTION_NOUL, "Is this a question?", nullptr, 0};
+    CHECK(kiln_decide(c, "state", &dq, p, 2, &da) == KILN_ERR_NOT_SUPPORTED, "decide on an embedding model");
+
+    kiln_context_free(c);
+    kiln_model_free(m);
+}
+
 int main(int argc, char** argv) {
     std::string dir = argc > 1 ? argv[1] : "models";
     kiln_set_log_level(KILN_LOG_ERROR);
@@ -304,6 +402,10 @@ int main(int argc, char** argv) {
     test_model(dir + "/Qwen3.5-0.8B-Q4_K_M.gguf",         "Qwen3.5-0.8B", true);
     test_model(dir + "/gemma-3-270m-it-Q8_0.gguf",         "Gemma3-270M",  false);
     test_decision(dir + "/d1-omni-600M-Q8_0.gguf");
+    const float gemma_ref[3] = {-0.001069f, -0.025002f, 0.020770f};
+    const float nomic_ref[3] = {0.047576f, 0.061704f, -0.118842f};
+    test_embedding(dir + "/embeddinggemma-2-UD-Q4_K_XL.gguf", "EmbeddingGemma 2 (embedding model)", true, true, gemma_ref);
+    test_embedding(dir + "/nomic-embed-text-v1.5.Q4_K_M.gguf", "nomic-embed-text v1.5 (embedding model)", true, false, nomic_ref);
     fprintf(stderr, "\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

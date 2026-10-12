@@ -17,7 +17,12 @@ static void usage() {
         "decision models:\n"
         "       kiln-cli -m model.gguf --state \"text\" --ask noul|choice|score \"question\" [-o \"key=description\"]...\n"
         "  -o       one option: a choice (key=description), a score level (description, lowest first),\n"
-        "           or for noul what yes / no mean (yes=..., no=...)\n");
+        "           or for noul what yes / no mean (yes=..., no=...)\n"
+        "embedding models:\n"
+        "       kiln-cli -m model.gguf --embed \"text\" [--embed \"text\"]... [--query \"text\"] [--dim N]\n"
+        "  --embed  a text to turn into a vector; prints its first numbers\n"
+        "  --query  rank the --embed texts by how well they answer this query\n"
+        "  --dim    keep only the first N numbers of each vector\n");
 }
 
 static bool on_piece(kiln_channel ch, const char* piece, int32_t, void*) {
@@ -51,6 +56,9 @@ int main(int argc, char** argv) {
     int think_budget = 0;
     std::string state, ask_type, ask;
     std::vector<std::string> opt_keys, opt_descs;
+    std::vector<std::string> embed_texts;
+    std::string embed_query;
+    int embed_dim = 0;
     kiln_backend_kind backend = KILN_BACKEND_AUTO;
 
     for (int i = 1; i < argc; ++i) {
@@ -70,6 +78,9 @@ int main(int argc, char** argv) {
         else if (a == "--chat")  chat = true;
         else if (a == "--state") state = next();
         else if (a == "--ask")   { ask_type = next(); ask = next(); }
+        else if (a == "--embed") embed_texts.push_back(next());
+        else if (a == "--query") embed_query = next();
+        else if (a == "--dim")   embed_dim = atoi(next());
         else if (a == "-o") {
             std::string o = next(); size_t eq = o.find('=');
             opt_keys.push_back(eq == std::string::npos ? "" : o.substr(0, eq));
@@ -100,7 +111,42 @@ int main(int argc, char** argv) {
     fprintf(stderr, "device:   %s | %s | %d cores | %.1f GB RAM\n", dev.soc, dev.abi, dev.cpu_cores, dev.ram_total_bytes / 1e9);
     fprintf(stderr, "backend:  %s (gpu layers: %d)\n", mi.backend_name, mi.n_gpu_layers_used);
     fprintf(stderr, "model:    %s %s, %.2fB params, %.2f GB resident, ctx_train=%d, thinking=%s\n",
-            mi.arch, mi.quant, mi.n_params / 1e9, mi.model_bytes / 1e9, mi.n_ctx_train, mi.is_decision_model ? "n/a (decision model)" : mi.supports_thinking ? "yes" : "no");
+            mi.arch, mi.quant, mi.n_params / 1e9, mi.model_bytes / 1e9, mi.n_ctx_train, mi.is_decision_model ? "n/a (decision model)" : mi.is_embedding_model ? "n/a (embedding model)" : mi.supports_thinking ? "yes" : "no");
+
+    if (!embed_texts.empty() || !embed_query.empty()) {
+        kiln_embed_options eo = kiln_embed_options_default();
+        eo.dimensions = embed_dim;
+        const int dim = embed_dim > 0 ? embed_dim : mi.n_embd;
+        auto run = [&](const std::string& text, kiln_embed_kind kind, std::vector<float>& v, kiln_embed_stats& es) {
+            v.assign(dim > 0 ? dim : 1, 0.0f);
+            eo.kind = kind;
+            if (kiln_embed(c, text.c_str(), &eo, v.data(), (int32_t)v.size(), &es) == KILN_OK) return true;
+            fprintf(stderr, "embed failed: %s\n", kiln_last_error());
+            return false;
+        };
+        std::vector<float> qv, v;
+        kiln_embed_stats es;
+        const bool ranking = !embed_query.empty();
+        if (ranking) {
+            if (!run(embed_query, KILN_EMBED_QUERY, qv, es)) return 1;
+            fprintf(stderr, "query:    %d tok in %.1f ms, %d numbers%s\n", es.tokens, es.ms, es.dimensions, es.prefixed ? ", prefix added" : "");
+        }
+        for (const std::string& t : embed_texts) {
+            if (!run(t, ranking ? KILN_EMBED_DOCUMENT : KILN_EMBED_RAW, v, es)) return 1;
+            if (ranking) {
+                double sim = 0;
+                for (int i = 0; i < es.dimensions; ++i) sim += (double)qv[i] * v[i];
+                printf("%.3f  %s\n", sim, t.c_str());
+            } else {
+                printf("[");
+                for (int i = 0; i < es.dimensions && i < 6; ++i) printf("%s%.6f", i ? ", " : "", v[i]);
+                printf("%s]  %s\n", es.dimensions > 6 ? ", ..." : "", t.c_str());
+            }
+            fprintf(stderr, "          %d tok in %.1f ms, %d numbers%s\n", es.tokens, es.ms, es.dimensions, es.prefixed ? ", prefix added" : "");
+        }
+        kiln_context_free(c); kiln_model_free(m);
+        return 0;
+    }
 
     if (!ask.empty()) {
         kiln_question_type qt = ask_type == "noul" ? KILN_QUESTION_NOUL : ask_type == "choice" ? KILN_QUESTION_CHOICE : KILN_QUESTION_SCORE;

@@ -148,4 +148,18 @@ kiln_status kiln_decide(kiln_context* c, const char* state, const kiln_decision_
     return s;
 }
 
+kiln_embed_options kiln_embed_options_default(void) {
+    kiln_embed_options o{}; o.kind = KILN_EMBED_RAW; o.title = nullptr; o.dimensions = 0; o.normalize = true; return o;
+}
+
+kiln_status kiln_embed(kiln_context* c, const char* text, const kiln_embed_options* opts,
+                       float* out, int32_t out_cap, kiln_embed_stats* stats) {
+    if (!c || !text || !out) return set_error(KILN_ERR_INVALID_ARG, "null handle/text/out");
+    kiln_embed_options o = opts ? *opts : kiln_embed_options_default();
+    kiln_embed_stats st{};
+    kiln_status s = c->impl->embed(text, o, out, out_cap, st);
+    if (stats) *stats = st;
+    return s;
+}
+
 }

@@ -104,6 +104,8 @@ One source tree, three outputs, no copies.
 - [x] v0.2.0: ABI changed (chat options, gen stats, model info); see CHANGELOG.md
 - [x] Decision models (LFM2 d1-omni, text state): `kiln_decide`, ported from llama.cpp's server
 - [ ] Decision models: images and audio (mtmd + mmproj), other families
+- [x] v0.3.0: embedding models (`kiln_embed`): EmbeddingGemma 2 and nomic-embed-text v1.5, text only, Linux x86 only so far
+- [ ] Embeddings: Flutter binding, several texts per call, images and audio for EmbeddingGemma 2 (mmproj), rerankers
 - [ ] Tool calling: common already parses it; expose `kiln_tool` + a TOOL_CALL channel
 - [ ] Runtime ISA dispatch (i8mm / sve) instead of one baseline build
 - [ ] Context-length auto-cap from available RAM in the probe

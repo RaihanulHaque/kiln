@@ -31,6 +31,10 @@ from v0.1.0 (2026-10-10), and the benchmarks were not repeated for v0.2.0:
 | MacBook Pro M4 Pro, v0.2.0 | llama.cpp Metal | 154 C checks; benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.2.0 | llama.cpp CPU | 154 C checks |
 
+v0.3.0 (unreleased, on the Linux desktop only: 222 C checks) adds embedding models through
+`kiln_embed`, tested with EmbeddingGemma 2 and nomic-embed-text v1.5. It is not in the Flutter
+plugin yet.
+
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
 and the decision model LFM2 d1-omni 600M (C API, and `decide` in the Flutter plugin on the Pixel 8).
 **iOS is in progress.** It built and ran on an iPhone at v0.1.0, but it has not been re-run for
@@ -146,6 +150,26 @@ float probs[2]; kiln_decision_answer a;
 kiln_decide(ctx, "My parcel never arrived.", &q, probs, 2, &a);   // teams[a.best], probs[], a.confidence
 ```
 
+**Embedding models turn text into a vector.** Texts with a similar meaning get similar
+vectors, which is what search over the user's own notes or documents needs. `kiln_embed` runs
+one; `kiln_model_info.is_embedding_model` says when to use it and `n_embd` how long the vector
+is. Tell kiln whether a text is the query or a document and it adds the prefix the model was
+trained with:
+
+```c
+float q[768], d[768];
+kiln_embed_options o = kiln_embed_options_default();
+o.kind = KILN_EMBED_QUERY;
+kiln_embed(ctx, "how do I reset my password", &o, q, 768, NULL);
+o.kind = KILN_EMBED_DOCUMENT;
+kiln_embed(ctx, "Steps to recover account access: open Settings, then Security.", &o, d, 768, NULL);
+float similarity = 0;                       // vectors have length 1, so the dot product is the cosine
+for (int i = 0; i < 768; ++i) similarity += q[i] * d[i];
+```
+
+Storing and searching the vectors is the app's job. C API only for now, measured on a Linux
+desktop: about 15 ms for a short sentence with EmbeddingGemma 2 at 4 bits (176 MB).
+
 ## Measured
 
 Generation tok/s, 3 to 8 runs back to back of the same job. "cold" is the first run,
@@ -182,13 +206,13 @@ third_party/llama.cpp        pinned submodule
 ## Tests
 
 ```bash
-scripts/fetch_models.sh                                      # the four test GGUFs into models/ (~1.4 GB)
+scripts/fetch_models.sh                                      # the six test GGUFs into models/ (~1.7 GB)
 ./build/host/kiln-tests models                               # C suite on the host
 scripts/android-test.sh                                      # C suite on a phone over adb
 cd flutter/kiln_flutter/example && flutter test integration_test -d <device>
 ```
 
-The C suite needs the four test GGUFs in `models/` (`scripts/fetch_models.sh`); missing ones are skipped. The Flutter
+The C suite needs the six test GGUFs in `models/` (`scripts/fetch_models.sh`); missing ones are skipped. The Flutter
 integration test downloads what it needs. Add `--dart-define=KILN_SPEED=true` for a
 per-model speed run through the plugin.
 
