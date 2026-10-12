@@ -86,7 +86,9 @@ def letters_layer(size, t, start, stagger=0.16, dur=1.1):
         a = ease_out((t - start - i * stagger) / dur)
         if a > 0:
             layer = Image.new("RGBA", out.size, (0, 0, 0, 0))
-            ImageDraw.Draw(layer).text((x + (1 - a) * 6, pad - bb[1]), ch, font=f, fill=INK + (int(255 * a),))
+            # fixed integer position: PIL draws text on whole pixels, so any drift makes the
+            # word step by a pixel each frame and the whole word looks like it shakes
+            ImageDraw.Draw(layer).text((int(round(x)), pad - bb[1]), ch, font=f, fill=INK + (int(255 * a),))
             blur = (1 - a) * 5
             if blur > 0.2:
                 layer = layer.filter(ImageFilter.GaussianBlur(blur))
