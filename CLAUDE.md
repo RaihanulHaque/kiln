@@ -25,9 +25,18 @@ CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desk
 ```bash
 git submodule update --init --recursive      # CMake also does this if the submodule is empty
 cmake --preset host && cmake --build --preset host -j
-scripts/fetch_models.sh                      # four test GGUFs into models/ (~1.4 GB)
-./build/host/kiln-tests models               # 154 checks at 0.2.0; a missing model is skipped
+scripts/fetch_models.sh --media              # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders)
+./build/host/kiln-tests models               # 319 checks at 0.3.0; without --media the image / audio tests are skipped
 ./build/host/kiln-cli -m models/<file>.gguf --chat
+```
+
+Linux from the Mac (arm64, GCC, OpenMP), with Docker Desktop running:
+
+```bash
+docker run --rm -v "$PWD":/kiln -w /kiln ubuntu:24.04 bash -c 'apt-get update -qq && \
+  apt-get install -y -qq cmake g++ make git ca-certificates >/dev/null && \
+  cmake -S . -B build/linux-arm64 -DCMAKE_BUILD_TYPE=Release >/dev/null && \
+  cmake --build build/linux-arm64 -j 10 | tail -1 && ./build/linux-arm64/kiln-tests models | tail -1'
 ```
 
 Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `scripts/build_ios.sh`
@@ -50,6 +59,18 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 - **Decision models (`kiln_decide`) are a port of llama.cpp's server code**, which the library
   does not contain. To check a change, build `llama-server` from the submodule and compare
   `/v1/systemone` one question per request; the probabilities should match to six decimals.
+- **Embedding models (`kiln_embed`) need the whole text in one batch**, so the context is
+  built with `n_batch = n_ubatch = n_ctx`. To check a change, build `llama-embedding` from the
+  submodule and compare with `kiln-cli --embed`; the numbers should be identical. A model's
+  task prefixes come from its card and live in `EmbeddingHead::init`.
+- **Images and audio (`kiln_embed_media`) use llama.cpp's `mtmd` library**, built into libkiln
+  (`LLAMA_BUILD_MTMD`). The reference for them is `llama-server`, not `llama-embedding`;
+  `docs/CODEBASE.md` has the request. The server picks a random media marker per run: read
+  it from `/props`.
+- **A large image is slow far beyond its size.** 1080 image tokens took 21.7 s on the desktop;
+  `image_max_tokens` defaults to 280. Test with a phone-sized photo, not only small images.
+- **A GGUF's training context can be wrong.** EmbeddingGemma 2 states 262144 tokens; its card
+  says 8192. Do not size a context from that number.
 - **`kiln_bindings_generated.dart` is generated.** After changing `kiln.h`, run
   `dart run ffigen --config ffigen.yaml` in `flutter/kiln_flutter`; do not edit it by hand.
 - **`flutter/kiln_flutter/src/core` wins over the repo source** when it exists (it is the
@@ -60,11 +81,20 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   that file for pub so they are uploaded. A rule in the root `.gitignore` still applies to pub:
   an unanchored `models/` there once hid llama.cpp's `src/models`. `scripts/pub_files.py`
   lists what pub would upload.
+- **Threads started inside a kiln call inherit one core.** The pinned threadpool ties the
+  calling thread to a single core (it is worker 0). Anything that starts its own threads from
+  that thread, as the mtmd image / audio encoders do, lands on that one core unless the caller
+  is widened first: see `AffinityScope` in `embedding.h`. `top -H` on the device shows it.
+- **Reference numbers from one processor are not exact on another.** A 4-bit model's vectors
+  differ by up to 0.009 per number between x86, the Pixel 8 and the M4 GPU. Tests that compare
+  with llama.cpp's numbers allow 0.015; tests that rank two texts need a real margin.
+- **The Pixel 8's screen is damaged (2026-10).** adb, `scripts/android-test.sh`, the Flutter
+  integration test and `adb exec-out screencap` all still work; only physical taps do not.
 - **A shell glob that matches nothing makes `ls` fail**, and with `set -o pipefail` that ends
   the script without a message. This broke the Android scripts on macOS once.
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
 
-## Not yet verified (as of 0.2.0)
+## Not yet verified (as of 0.3.0)
 
 Checked on 2026-10-11: `kiln-tests models` gives 154 passed on Linux x86 (Ryzen 5 8500G),
 macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes on the Pixel 8
@@ -73,9 +103,21 @@ macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes
 - iOS: the items already listed in `docs/RELEASE.md`.
 - Benchmarks on 0.2.0. Run them on a cool phone: after the test suites the Pixel 8 capped its
   fast cores at 1.07 of 2.37 GHz and LFM2.5 ran at 55 tok/s instead of about 105.
-- pub.dev: `kiln_flutter` 0.2.0 was published on 2026-10-12, Android only. A published version
+- pub.dev: `kiln_flutter` 0.3.0 was published on 2026-10-13 (0.2.0 on 2026-10-12), Android only. A published version
   cannot be changed: any fix needs a new version number. `scripts/publish_flutter.sh` publishes.
 
-Known gaps: decision models take a text state only (no images or audio,
+0.3.0 (embedding models, `kiln_embed` and `kiln_embed_media`): `kiln-tests models` gives 319
+passed on macOS (M4 Pro, Metal) and Android (Pixel 8) on 2026-10-13, after
+`scripts/fetch_models.sh --media`; 317 on Linux x86 before two checks were added. The Flutter
+plugin has `embed` / `embedMedia` / `loadProjector` and is at 0.3.0: 23 integration tests on
+the Pixel 8 (`--dart-define=KILN_MEDIA=true` for the image and audio test). Still open for it:
+
+- Linux x86: re-run `kiln-tests models` on the Ryzen (the test tolerances and two checks
+  changed on the Mac). Linux arm64 in Docker on the Mac gives 319 passed, and so does emulated x86_64
+  (add `--platform linux/amd64`, about four times slower); see the command above.
+- iOS, as for everything else.
+
+Known gaps: embedding models take one input per call; no video, no raw pixels or samples
+(files or file bytes only); images and audio are for embedding models only, not chat. Decision models take a text state only (no images or audio,
 only the lfm2-d1-omni family); the probe counts hyperthreads as cores and trusts max frequency
 to tell cores apart (`docs/CPU.md` §8).

@@ -471,6 +471,159 @@ class KilnBindings {
         )
       >();
 
+  kiln_embed_options kiln_embed_options_default() {
+    return _kiln_embed_options_default();
+  }
+
+  late final _kiln_embed_options_defaultPtr =
+      _lookup<ffi.NativeFunction<kiln_embed_options Function()>>(
+        'kiln_embed_options_default',
+      );
+  late final _kiln_embed_options_default = _kiln_embed_options_defaultPtr
+      .asFunction<kiln_embed_options Function()>();
+
+  /// out must hold opts->dimensions floats, or kiln_model_info.n_embd for the full vector.
+  /// Each call is independent; the context keeps nothing between texts. Blocking.
+  /// A text longer than the context returns KILN_ERR_CONTEXT_FULL (nothing is cut silently):
+  /// split long documents into pieces. For an embedding model kiln_context_params.n_ctx is the
+  /// longest text in tokens (0 = 2048). The context is never larger than the model's training
+  /// context (kiln_model_info.n_ctx_train), whatever is asked for. opts and stats may be NULL.
+  /// Returns KILN_ERR_NOT_SUPPORTED on a model that is not an embedding model.
+  kiln_status kiln_embed(
+    ffi.Pointer<kiln_context> c,
+    ffi.Pointer<ffi.Char> text,
+    ffi.Pointer<kiln_embed_options> opts,
+    ffi.Pointer<ffi.Float> out,
+    int out_cap,
+    ffi.Pointer<kiln_embed_stats> stats,
+  ) {
+    return kiln_status.fromValue(
+      _kiln_embed(c, text, opts, out, out_cap, stats),
+    );
+  }
+
+  late final _kiln_embedPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<kiln_context>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<kiln_embed_options>,
+            ffi.Pointer<ffi.Float>,
+            ffi.Int32,
+            ffi.Pointer<kiln_embed_stats>,
+          )
+        >
+      >('kiln_embed');
+  late final _kiln_embed = _kiln_embedPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<kiln_context>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<kiln_embed_options>,
+          ffi.Pointer<ffi.Float>,
+          int,
+          ffi.Pointer<kiln_embed_stats>,
+        )
+      >();
+
+  kiln_projector_params kiln_projector_params_default() {
+    return _kiln_projector_params_default();
+  }
+
+  late final _kiln_projector_params_defaultPtr =
+      _lookup<ffi.NativeFunction<kiln_projector_params Function()>>(
+        'kiln_projector_params_default',
+      );
+  late final _kiln_projector_params_default = _kiln_projector_params_defaultPtr
+      .asFunction<kiln_projector_params Function()>();
+
+  /// Loads the image / audio encoders that belong to an embedding model (its mmproj GGUF).
+  /// Call once after kiln_model_load, before embedding media; freed with the model. The
+  /// encoders stay in memory, often more than the text model itself. params and out may be NULL.
+  /// Returns KILN_ERR_NOT_SUPPORTED on a model that is not an embedding model.
+  kiln_status kiln_model_load_projector(
+    ffi.Pointer<kiln_model> m,
+    ffi.Pointer<ffi.Char> path,
+    ffi.Pointer<kiln_projector_params> params,
+    ffi.Pointer<kiln_projector_info> out,
+  ) {
+    return kiln_status.fromValue(
+      _kiln_model_load_projector(m, path, params, out),
+    );
+  }
+
+  late final _kiln_model_load_projectorPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<kiln_model>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<kiln_projector_params>,
+            ffi.Pointer<kiln_projector_info>,
+          )
+        >
+      >('kiln_model_load_projector');
+  late final _kiln_model_load_projector = _kiln_model_load_projectorPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<kiln_model>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<kiln_projector_params>,
+          ffi.Pointer<kiln_projector_info>,
+        )
+      >();
+
+  /// Like kiln_embed, for a text with images and / or audio, or for media alone (text NULL).
+  /// The result is one vector in the same space as kiln_embed's, so the two can be compared.
+  /// Each KILN_MEDIA_MARKER in text is replaced by the next media item; with no marker in the
+  /// text the items follow it in order. No task prefix is added when media are present.
+  /// An image costs a few hundred tokens of the context, audio a few dozen per second.
+  /// Needs kiln_model_load_projector first, else KILN_ERR_NOT_SUPPORTED.
+  kiln_status kiln_embed_media(
+    ffi.Pointer<kiln_context> c,
+    ffi.Pointer<ffi.Char> text,
+    ffi.Pointer<kiln_media> media,
+    int n_media,
+    ffi.Pointer<kiln_embed_options> opts,
+    ffi.Pointer<ffi.Float> out,
+    int out_cap,
+    ffi.Pointer<kiln_embed_stats> stats,
+  ) {
+    return kiln_status.fromValue(
+      _kiln_embed_media(c, text, media, n_media, opts, out, out_cap, stats),
+    );
+  }
+
+  late final _kiln_embed_mediaPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<kiln_context>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<kiln_media>,
+            ffi.Int32,
+            ffi.Pointer<kiln_embed_options>,
+            ffi.Pointer<ffi.Float>,
+            ffi.Int32,
+            ffi.Pointer<kiln_embed_stats>,
+          )
+        >
+      >('kiln_embed_media');
+  late final _kiln_embed_media = _kiln_embed_mediaPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<kiln_context>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<kiln_media>,
+          int,
+          ffi.Pointer<kiln_embed_options>,
+          ffi.Pointer<ffi.Float>,
+          int,
+          ffi.Pointer<kiln_embed_stats>,
+        )
+      >();
+
   void kiln_set_log_callback(kiln_log_cb cb, ffi.Pointer<ffi.Void> user) {
     return _kiln_set_log_callback(cb, user);
   }
@@ -687,6 +840,14 @@ final class kiln_model_info extends ffi.Struct {
   /// answers typed questions with kiln_decide; cannot generate text
   @ffi.Bool()
   external bool is_decision_model;
+
+  /// turns text into a vector with kiln_embed; cannot generate text
+  @ffi.Bool()
+  external bool is_embedding_model;
+
+  /// embedding models: length of the vector kiln_embed returns; else 0
+  @ffi.Int32()
+  external int n_embd;
 }
 
 final class kiln_context extends ffi.Opaque {}
@@ -907,6 +1068,110 @@ final class kiln_decision_answer extends ffi.Struct {
   external double ms;
 }
 
+/// An embedding model (kiln_model_info.is_embedding_model) does not write text. It turns a
+/// text into a list of numbers; texts with a similar meaning get similar lists. With
+/// normalised vectors the similarity of two texts is their dot product (1 = same meaning).
+/// Tested with EmbeddingGemma 2 and nomic-embed-text v1.5.
+/// Some embedding models also take images and audio and put them in the same space as text,
+/// so a text query can find a photo. Those need a second file, the projector (an "mmproj"
+/// GGUF): see kiln_model_load_projector and kiln_embed_media.
+enum kiln_embed_kind {
+  /// embed the text exactly as given
+  KILN_EMBED_RAW(0),
+
+  /// a search query: kiln adds the model's query prefix
+  KILN_EMBED_QUERY(1),
+
+  /// a text to be searched: kiln adds the model's document prefix
+  KILN_EMBED_DOCUMENT(2);
+
+  final int value;
+  const kiln_embed_kind(this.value);
+
+  static kiln_embed_kind fromValue(int value) => switch (value) {
+    0 => KILN_EMBED_RAW,
+    1 => KILN_EMBED_QUERY,
+    2 => KILN_EMBED_DOCUMENT,
+    _ => throw ArgumentError('Unknown value for kiln_embed_kind: $value'),
+  };
+}
+
+final class kiln_embed_options extends ffi.Struct {
+  /// use QUERY and DOCUMENT for search; a model with no known prefix treats all as RAW
+  @ffi.UnsignedInt()
+  external int kindAsInt;
+
+  kiln_embed_kind get kind => kiln_embed_kind.fromValue(kindAsInt);
+
+  /// DOCUMENT only, optional: the document's title, for models that take one
+  external ffi.Pointer<ffi.Char> title;
+
+  /// keep only the first N numbers (smaller to store). <= 0 = the full vector.
+  /// Only models trained for it stay accurate (EmbeddingGemma: 512, 256, 128)
+  @ffi.Int32()
+  external int dimensions;
+
+  /// scale the vector to length 1
+  @ffi.Bool()
+  external bool normalize;
+}
+
+final class kiln_embed_stats extends ffi.Struct {
+  /// tokens the model read: text, prefix and media together
+  @ffi.Int32()
+  external int tokens;
+
+  /// of those, how many came from images and audio
+  @ffi.Int32()
+  external int media_tokens;
+
+  /// numbers written to out
+  @ffi.Int32()
+  external int dimensions;
+
+  /// a task prefix was added
+  @ffi.Bool()
+  external bool prefixed;
+
+  /// time inside the image / audio encoders only
+  @ffi.Double()
+  external double media_ms;
+
+  /// total, media_ms included
+  @ffi.Double()
+  external double ms;
+}
+
+/// ---- images and audio ----
+final class kiln_projector_params extends ffi.Struct {
+  /// most tokens one image may take. A large photo is scaled down to fit.
+  /// Time grows much faster than this number. 0 = 280, < 0 = the model's own limit
+  @ffi.Int32()
+  external int image_max_tokens;
+}
+
+final class kiln_projector_info extends ffi.Struct {
+  @ffi.Bool()
+  external bool supports_images;
+
+  @ffi.Bool()
+  external bool supports_audio;
+}
+
+/// One image or one audio clip: either a file path, or the bytes of such a file.
+/// Images: jpg, png, bmp, gif. Audio: wav, mp3, flac. The kind is read from the content.
+final class kiln_media extends ffi.Struct {
+  /// file to read, or NULL to use data
+  external ffi.Pointer<ffi.Char> path;
+
+  /// contents of an image / audio file, when path is NULL
+  external ffi.Pointer<ffi.Uint8> data;
+
+  /// bytes in data
+  @ffi.Size()
+  external int size;
+}
+
 /// ------------------------------------------------------------------ */
 /// /* Logging                                                             */
 /// /* ------------------------------------------------------------------
@@ -944,6 +1209,8 @@ typedef kiln_log_cb = ffi.Pointer<ffi.NativeFunction<kiln_log_cbFunction>>;
 
 const int KILN_VERSION_MAJOR = 0;
 
-const int KILN_VERSION_MINOR = 2;
+const int KILN_VERSION_MINOR = 3;
 
 const int KILN_VERSION_PATCH = 0;
+
+const String KILN_MEDIA_MARKER = '<__media__>';

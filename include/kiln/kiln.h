@@ -25,7 +25,7 @@ extern "C" {
 #endif
 
 #define KILN_VERSION_MAJOR 0
-#define KILN_VERSION_MINOR 2
+#define KILN_VERSION_MINOR 3
 #define KILN_VERSION_PATCH 0
 
 /* ------------------------------------------------------------------ */
@@ -120,6 +120,8 @@ typedef struct kiln_model_info {
     uint64_t model_bytes;         /* resident weight memory */
     bool     supports_thinking;   /* chat template has a reasoning switch (Qwen3.x, Gemma 4, ...) */
     bool     is_decision_model;   /* answers typed questions with kiln_decide; cannot generate text */
+    bool     is_embedding_model;  /* turns text into a vector with kiln_embed; cannot generate text */
+    int32_t  n_embd;              /* embedding models: length of the vector kiln_embed returns; else 0 */
 } kiln_model_info;
 
 KILN_API kiln_status kiln_model_get_info(const kiln_model* m, kiln_model_info* out);
@@ -285,6 +287,100 @@ KILN_API kiln_status kiln_decide(kiln_context* c, const char* state,
                                  const kiln_decision_question* question,
                                  float* probs, int32_t probs_cap,
                                  kiln_decision_answer* answer);
+
+/* ------------------------------------------------------------------ */
+/* Embedding models                                                    */
+/* ------------------------------------------------------------------ */
+
+/* An embedding model (kiln_model_info.is_embedding_model) does not write text. It turns a
+ * text into a list of numbers; texts with a similar meaning get similar lists. With
+ * normalised vectors the similarity of two texts is their dot product (1 = same meaning).
+ * Tested with EmbeddingGemma 2 and nomic-embed-text v1.5.
+ * Some embedding models also take images and audio and put them in the same space as text,
+ * so a text query can find a photo. Those need a second file, the projector (an "mmproj"
+ * GGUF): see kiln_model_load_projector and kiln_embed_media. */
+
+typedef enum kiln_embed_kind {
+    KILN_EMBED_RAW      = 0,   /* embed the text exactly as given */
+    KILN_EMBED_QUERY    = 1,   /* a search query: kiln adds the model's query prefix */
+    KILN_EMBED_DOCUMENT = 2    /* a text to be searched: kiln adds the model's document prefix */
+} kiln_embed_kind;
+
+typedef struct kiln_embed_options {
+    kiln_embed_kind kind;         /* use QUERY and DOCUMENT for search; a model with no known prefix treats all as RAW */
+    const char* title;            /* DOCUMENT only, optional: the document's title, for models that take one */
+    int32_t     dimensions;       /* keep only the first N numbers (smaller to store). <= 0 = the full vector.
+                                     Only models trained for it stay accurate (EmbeddingGemma: 512, 256, 128) */
+    bool        normalize;        /* scale the vector to length 1 */
+} kiln_embed_options;
+
+KILN_API kiln_embed_options kiln_embed_options_default(void);   /* RAW, full vector, normalised */
+
+typedef struct kiln_embed_stats {
+    int32_t tokens;               /* tokens the model read: text, prefix and media together */
+    int32_t media_tokens;         /* of those, how many came from images and audio */
+    int32_t dimensions;           /* numbers written to out */
+    bool    prefixed;             /* a task prefix was added */
+    double  media_ms;             /* time inside the image / audio encoders only */
+    double  ms;                   /* total, media_ms included */
+} kiln_embed_stats;
+
+/* out must hold opts->dimensions floats, or kiln_model_info.n_embd for the full vector.
+ * Each call is independent; the context keeps nothing between texts. Blocking.
+ * A text longer than the context returns KILN_ERR_CONTEXT_FULL (nothing is cut silently):
+ * split long documents into pieces. For an embedding model kiln_context_params.n_ctx is the
+ * longest text in tokens (0 = 2048). The context is never larger than the model's training
+ * context (kiln_model_info.n_ctx_train), whatever is asked for. opts and stats may be NULL.
+ * Returns KILN_ERR_NOT_SUPPORTED on a model that is not an embedding model. */
+KILN_API kiln_status kiln_embed(kiln_context* c, const char* text,
+                                const kiln_embed_options* opts,
+                                float* out, int32_t out_cap,
+                                kiln_embed_stats* stats);
+
+/* ---- images and audio ---- */
+
+typedef struct kiln_projector_params {
+    int32_t image_max_tokens;     /* most tokens one image may take. A large photo is scaled down to fit.
+                                     Time grows much faster than this number. 0 = 280, < 0 = the model's own limit */
+} kiln_projector_params;
+
+KILN_API kiln_projector_params kiln_projector_params_default(void);
+
+typedef struct kiln_projector_info {
+    bool supports_images;
+    bool supports_audio;
+} kiln_projector_info;
+
+/* Loads the image / audio encoders that belong to an embedding model (its mmproj GGUF).
+ * Call once after kiln_model_load, before embedding media; freed with the model. The
+ * encoders stay in memory, often more than the text model itself. params and out may be NULL.
+ * Returns KILN_ERR_NOT_SUPPORTED on a model that is not an embedding model. */
+KILN_API kiln_status kiln_model_load_projector(kiln_model* m, const char* path,
+                                               const kiln_projector_params* params,
+                                               kiln_projector_info* out);
+
+/* One image or one audio clip: either a file path, or the bytes of such a file.
+ * Images: jpg, png, bmp, gif. Audio: wav, mp3, flac. The kind is read from the content. */
+typedef struct kiln_media {
+    const char*    path;          /* file to read, or NULL to use data */
+    const uint8_t* data;          /* contents of an image / audio file, when path is NULL */
+    size_t         size;          /* bytes in data */
+} kiln_media;
+
+/* Where a media item goes inside the text. "A red shoe <__media__> seen from the side". */
+#define KILN_MEDIA_MARKER "<__media__>"
+
+/* Like kiln_embed, for a text with images and / or audio, or for media alone (text NULL).
+ * The result is one vector in the same space as kiln_embed's, so the two can be compared.
+ * Each KILN_MEDIA_MARKER in text is replaced by the next media item; with no marker in the
+ * text the items follow it in order. No task prefix is added when media are present.
+ * An image costs a few hundred tokens of the context, audio a few dozen per second.
+ * Needs kiln_model_load_projector first, else KILN_ERR_NOT_SUPPORTED. */
+KILN_API kiln_status kiln_embed_media(kiln_context* c, const char* text,
+                                      const kiln_media* media, int32_t n_media,
+                                      const kiln_embed_options* opts,
+                                      float* out, int32_t out_cap,
+                                      kiln_embed_stats* stats);
 
 /* ------------------------------------------------------------------ */
 /* Logging                                                             */

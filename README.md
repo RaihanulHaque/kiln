@@ -20,24 +20,28 @@ maintainers happened to own. kiln is built the other way round:
 
 ## Status
 
-v0.2.0 adds cache reuse for hybrid models, a thinking budget and decision models. It was
-re-run on 2026-10-11 on the Pixel 8, the MacBook and the Linux desktop. The iPhone row is still
-from v0.1.0 (2026-10-10), and the benchmarks were not repeated for v0.2.0:
+v0.3.0 adds embedding models (text, images and audio). It was run on 2026-10-12 and
+2026-10-13 on the Linux desktop, the MacBook, a Linux container and the Pixel 8. The iPhone row is still from
+v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 
 | platform | backend | what passed |
 |---|---|---|
-| Pixel 8 (Tensor G3, Android 16), v0.2.0 | llama.cpp CPU, 5 threads pinned | 154 C checks, 16 Flutter integration tests; benchmarks at v0.1.0 |
+| Pixel 8 (Tensor G3, Android 16), v0.3.0 | llama.cpp CPU, 5 threads pinned | 319 C checks, 23 Flutter integration tests; benchmarks at v0.1.0 |
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
-| MacBook Pro M4 Pro, v0.2.0 | llama.cpp Metal | 154 C checks; benchmarks at v0.1.0 |
-| Ryzen 5 8500G desktop (Linux x86_64), v0.2.0 | llama.cpp CPU | 154 C checks |
+| MacBook Pro M4 Pro, v0.3.0 | llama.cpp Metal | 319 C checks; benchmarks at v0.1.0 |
+| Ryzen 5 8500G desktop (Linux x86_64), v0.3.0 | llama.cpp CPU | 317 C checks, before two checks were added on the Mac; not re-run since |
+| Linux arm64 and emulated x86_64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.3.0 | llama.cpp CPU, OpenMP | 319 C checks on each; arm64 also with `KILN_CPU_MASK=3` |
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
-and the decision model LFM2 d1-omni 600M (C API, and `decide` in the Flutter plugin on the Pixel 8).
+the decision model LFM2 d1-omni 600M, and the embedding models EmbeddingGemma 2 (text, images,
+audio), nomic-embed-text v1.5 (text) and jina-embeddings-v5-omni-nano (text, images). All of
+them through the C API; chat, `decide`, `embed` and `embedMedia` (EmbeddingGemma 2) through the
+Flutter plugin on the Pixel 8.
 **iOS is in progress.** It built and ran on an iPhone at v0.1.0, but it has not been re-run for
 v0.2.0 and is not part of the pub.dev package. Use Android for now.
 
 Not yet: Snapdragon or MediaTek phones, 4 GB RAM devices, x86 emulators.
-`kiln_flutter` 0.2.0 is on pub.dev as an Android-only package. The
+`kiln_flutter` 0.3.0 is on pub.dev as an Android-only package. The
 [release checklist](docs/RELEASE.md) lists what is still open.
 
 ## Quick start
@@ -70,10 +74,10 @@ gen.cancel();                            // from anywhere, any time
 Package: [flutter/kiln_flutter](flutter/kiln_flutter/README.md). Everything blocking runs on a
 background isolate. The example app in `flutter/kiln_flutter/example` is a full chat UI with
 a model downloader, thinking toggle, collapsible reasoning and per-reply stats, plus a Decide
-screen for decision models.
+screen for decision models and a Search screen for embedding models.
 
 <p>
-<img src="docs/img/app_library.png" width="180"> <img src="docs/img/app_chat_thinking.png" width="180"> <img src="docs/img/app_chat_reply.png" width="180"> <img src="docs/img/app_decide.png" width="180"> <img src="docs/img/app_library_light.png" width="180">
+<img src="docs/img/app_library.png" width="180"> <img src="docs/img/app_chat_thinking.png" width="180"> <img src="docs/img/app_chat_reply.png" width="180"> <img src="docs/img/app_decide.png" width="180"> <img src="docs/img/app_search.png" width="180"> <img src="docs/img/app_library_light.png" width="180">
 </p>
 
 ### C
@@ -146,6 +150,38 @@ float probs[2]; kiln_decision_answer a;
 kiln_decide(ctx, "My parcel never arrived.", &q, probs, 2, &a);   // teams[a.best], probs[], a.confidence
 ```
 
+**Embedding models turn text into a vector.** Texts with a similar meaning get similar
+vectors, which is what search over the user's own notes or documents needs. `kiln_embed` runs
+one; `kiln_model_info.is_embedding_model` says when to use it and `n_embd` how long the vector
+is. Tell kiln whether a text is the query or a document and it adds the prefix the model was
+trained with:
+
+```c
+float q[768], d[768];
+kiln_embed_options o = kiln_embed_options_default();
+o.kind = KILN_EMBED_QUERY;
+kiln_embed(ctx, "how do I reset my password", &o, q, 768, NULL);
+o.kind = KILN_EMBED_DOCUMENT;
+kiln_embed(ctx, "Steps to recover account access: open Settings, then Security.", &o, d, 768, NULL);
+float similarity = 0;                       // vectors have length 1, so the dot product is the cosine
+for (int i = 0; i < 768; ++i) similarity += q[i] * d[i];
+```
+
+Some embedding models also take images and audio and put them in the same space as text, so
+a text query can find a photo or a voice note. They need a second file, the projector:
+
+```c
+kiln_model_load_projector(m, "mmproj-embeddinggemma-2-Q8_0.gguf", NULL, NULL);
+kiln_media photo = {"holiday.jpg", NULL, 0};          // a path, or the bytes of the file
+kiln_embed_media(ctx, NULL, &photo, 1, NULL, d, 768, NULL);
+// compare d with the vector of the query "a lake between mountains", as above
+```
+
+Storing and searching the vectors is the app's job. C API only for now, measured on a Linux
+desktop CPU with EmbeddingGemma 2 at 4 bits: about 15 ms for a short sentence, 0.7 s for a
+small image, 0.2 s for a 3-second audio clip, and about 1 GB of memory once the projector is
+loaded (0.4 GB without it).
+
 ## Measured
 
 Generation tok/s, 3 to 8 runs back to back of the same job. "cold" is the first run,
@@ -182,13 +218,13 @@ third_party/llama.cpp        pinned submodule
 ## Tests
 
 ```bash
-scripts/fetch_models.sh                                      # the four test GGUFs into models/ (~1.4 GB)
+scripts/fetch_models.sh                                      # the six test GGUFs into models/ (~1.7 GB); --media adds 0.9 GB
 ./build/host/kiln-tests models                               # C suite on the host
 scripts/android-test.sh                                      # C suite on a phone over adb
 cd flutter/kiln_flutter/example && flutter test integration_test -d <device>
 ```
 
-The C suite needs the four test GGUFs in `models/` (`scripts/fetch_models.sh`); missing ones are skipped. The Flutter
+The C suite needs the six test GGUFs in `models/` (`scripts/fetch_models.sh`); missing ones are skipped. The Flutter
 integration test downloads what it needs. Add `--dart-define=KILN_SPEED=true` for a
 per-model speed run through the plugin.
 

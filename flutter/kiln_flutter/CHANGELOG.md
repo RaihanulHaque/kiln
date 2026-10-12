@@ -1,3 +1,22 @@
+## 0.3.0
+
+Embedding models. Verified on a Pixel 8 (Tensor G3): 23 integration tests, including images
+and audio. Android arm64 only, as before.
+
+- `KilnContext.embed`: turn a text into a vector with an embedding model, for search by
+  meaning. `kind` (query or document) adds the prefix the model was trained with, `dimensions`
+  keeps a shorter vector, `normalize: false` returns the raw one.
+- `KilnModel.loadProjector` and `KilnContext.embedMedia`: images and audio, alone or mixed
+  with text, into the same space as text. `KilnMedia.file` or `KilnMedia.bytes`.
+- `KilnEmbedding` holds the vector (`Float32List`) and the stats; `similarity` and
+  `KilnEmbedding.cosine` compare two.
+- `KilnModelInfo.isEmbeddingModel` and `nEmbd`.
+- `chat` and `decide` on an embedding model throw `KILN_ERR_NOT_SUPPORTED`, as `embed` does on
+  the other kinds.
+- The native library now includes llama.cpp's image and audio encoders (`libkiln.so` grows
+  from about 6 MB to about 7 MB).
+- Example app: a Search screen for embedding models, with a picker for photos and audio.
+
 ## 0.2.0
 
 First version on pub.dev. Android arm64 only; iOS is in progress and not part of the package.

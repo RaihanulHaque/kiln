@@ -164,6 +164,100 @@ probabilities to six decimal places. Other decision families, images and audio a
 A decision model cannot chat: `kiln_chat` returns `KILN_ERR_NOT_SUPPORTED` on it, and
 `kiln_decide` returns the same on a chat model.
 
+## Embedding models
+
+An embedding model does not write text either. It reads a text and returns a list of numbers,
+called a vector: 768 numbers for the two models tested here. The numbers mean nothing one by
+one. What matters is that two texts with a similar meaning get similar vectors.
+
+Example: a notes app stores one vector per note. The user searches "how do I reset my
+password". The app turns that sentence into a vector and compares it with the stored ones:
+
+| note | similarity to the query |
+|---|---|
+| Steps to recover account access: open Settings, choose Security, ... | 0.738 |
+| Passwords should contain at least twelve characters including a symbol. | 0.693 |
+| Soda loaf uses baking soda and buttermilk. | 0.546 |
+
+The first note wins although it shares no word with the query. The second shares the word
+"password" but does not answer the question, and scores lower. (Numbers from EmbeddingGemma 2
+at 4 bits through `kiln-cli --query ... --embed ...`.)
+
+**Similarity** is the dot product: multiply the two vectors number by number and add up.
+kiln returns vectors of length 1 by default, so the result is between -1 and 1. This is the
+cosine similarity: 1 means the two vectors point the same way, which the model produces for
+texts it reads as meaning the same. (With `normalize = false` the vectors keep the model's own
+length, and you have to divide by both lengths yourself to get a cosine.)
+
+**Pooling.** The model produces one vector per token. To get one vector for the whole text
+they are combined, usually by averaging. The model file says which way; llama.cpp does it.
+
+**Prefixes.** These models are trained with a short label in front of each text that says
+what the text is for. EmbeddingGemma expects `task: search result | query: ` before a query
+and `title: none | text: ` before a document; nomic expects `search_query: ` and
+`search_document: `. Leave them out and the vectors still come out, but search gets worse and
+nothing tells you. So `kiln_embed` takes a `kind` (query or document) and adds the right one.
+A query and the documents it is compared with must come from the same model.
+
+**Shorter vectors.** EmbeddingGemma is trained so that the first 512, 256 or 128 numbers
+still work as a vector by themselves (called Matryoshka, after the nested dolls). 256 numbers
+take a third of the storage. On the 16-question test here, 512 numbers gave the same 15 right
+answers as 768, 256 gave 14 and 128 gave 13.
+
+**Long texts cost more than their length.** Every token looks at every other token, so a text
+twice as long takes more than twice the time. On the desktop CPU EmbeddingGemma 2 took 15 ms
+for a 20-token sentence and 1.7 s for 1400 tokens. Split documents into pieces of a few
+hundred tokens and store one vector per piece. A text longer than the context is refused with
+`KILN_ERR_CONTEXT_FULL`, not cut.
+
+**4 bits is enough for this model.** The 176 MB `UD-Q4_K_XL` file picked the same answers as
+the 558 MB full-precision file on that test, and its vectors point almost the same way
+(cosine 0.994 on average). The test is small; it shows the small file is not broken, not that
+it is equal on every task.
+
+**Images and audio.** Some embedding models put pictures and sound into the same space as
+text. "Same space" means the vector of a photo of a lake lands near the vector of the
+sentence "a lake between mountains", so a typed query can find a photo, a screenshot or a
+voice note. Example, EmbeddingGemma 2, ten files (six images, four audio clips), top results:
+
+| typed query | best match | score | runner-up |
+|---|---|---|---|
+| a lake between mountains | the fjord photo | 0.722 | 0.587 |
+| newspaper front page about the moon landing | the newspaper photo | 0.799 | 0.728 |
+| an invoice showing the total amount to pay | the invoice image | 0.720 | 0.600 |
+| when does the train to London leave | the spoken clip about the train | 0.835 | 0.565 |
+
+How it works: the model itself only understands token vectors. A second file, the
+**projector** (named `mmproj-...gguf`), holds an encoder that turns an image or a sound into
+a row of such vectors, as if it were a run of words. They are fed in next to the text and
+pooled the same way. With EmbeddingGemma 2 a small image becomes 81 vectors and each second
+of audio 25.
+
+What it costs, on the desktop CPU with EmbeddingGemma 2:
+
+| | time | of which encoder |
+|---|---|---|
+| a short sentence | 15 ms | none |
+| a 448 x 448 image | 0.7 s | 0.6 s |
+| a 3-second audio clip | 0.2 s | 0.1 s |
+| a 17-second audio clip | 1.2 s | 0.7 s |
+
+Memory goes from 0.4 GB to about 1.0 GB when the projector is loaded, because the projector
+(555 MB) is larger than the 4-bit text model (176 MB). Load it only if the app needs media.
+
+**Big photos are the trap.** The encoder cuts an image into patches, and a bigger image makes
+more of them. A 2000-pixel screenshot became 1080 vectors and took 21.7 s; limited to 280 it
+took 3.2 s, and to 70 it took 0.7 s, and it was still the top result for its query each time.
+kiln limits an image to 280 by default (`kiln_projector_params.image_max_tokens`).
+
+Models differ in what they take. Of the three tested: nomic-embed-text is text only;
+jina-embeddings-v5-omni-nano takes text and images with its small vision projector (203 MB;
+its audio projector is 1.3 GB and was not tried); EmbeddingGemma 2 takes text, images and
+audio with one projector. Vectors from different models cannot be compared with each other.
+
+kiln stores nothing: it returns the vector and the app keeps it. This was run on Linux x86,
+on a Mac (Metal) and on a Pixel 8, and from Flutter on the Pixel 8.
+
 ## Chat templates
 
 Each model was trained on conversations formatted a specific way: special tokens around

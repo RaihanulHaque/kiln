@@ -1,10 +1,13 @@
 // llama.cpp backend. This is the guaranteed tier: CPU everywhere, GPU where ggml has a device.
 #include "../../core/internal.h"
 #include "decision.h"
+#include "embedding.h"
 #include "reasoning_splitter.h"
 #include "llama.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 #include "chat.h"          // llama.cpp/common: jinja templates via minja
 
 #include <algorithm>
@@ -40,6 +43,7 @@ void ensure_backend_init() {
     static std::once_flag once;
     std::call_once(once, [] {
         llama_log_set(ggml_log_bridge, nullptr);
+        mtmd_helper_log_set(ggml_log_bridge, nullptr);
         llama_backend_init();
         ggml_backend_load_all();
     });
@@ -90,6 +94,7 @@ public:
     int               n_batch_ = 512;
     std::atomic<bool> cancel_{false};
     const kiln::DecisionHead* decision_ = nullptr;   // owned by the model; set for decision models
+    const kiln::EmbeddingHead* embedding_ = nullptr; // owned by the model; set for embedding models
 
     static bool abort_cb(void* user) { return static_cast<LlamaContext*>(user)->cancel_.load(); }
 
@@ -109,6 +114,13 @@ public:
         return decision_->decide(ctx_, state, q, probs, probs_cap, out);
     }
 
+    kiln_status embed(const char* text, const kiln_media* media, int32_t n_media, const kiln_embed_options& o,
+                      float* out, int32_t out_cap, kiln_embed_stats& stats) override {
+        if (!embedding_ || !embedding_->is_embedding_model()) return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not an embedding model");
+        cancel_.store(false);
+        return embedding_->embed(ctx_, text, media, n_media, o, out, out_cap, stats);
+    }
+
     kiln_status generate(const kiln::RenderedPrompt& in, const kiln_sampling_params& sp,
                          kiln_token_cb cb, void* user, kiln_gen_stats* stats) override {
         cancel_.store(false);
@@ -116,6 +128,8 @@ public:
         auto done = [&](kiln_status s) { if (stats) *stats = st; return s; };
         if (decision_ && decision_->is_decision_model())
             return done(kiln::set_error(KILN_ERR_NOT_SUPPORTED, "decision models do not generate text; use kiln_decide"));
+        if (embedding_ && embedding_->is_embedding_model())
+            return done(kiln::set_error(KILN_ERR_NOT_SUPPORTED, "embedding models do not generate text; use kiln_embed"));
 
         // ---- tokenize
         const char* text = in.prompt.c_str();
@@ -317,8 +331,9 @@ public:
         }
         if (tags_.start.empty() && tags_.ends.empty()) { tags_.start = "<think>"; tags_.ends = {"</think>"}; }
         decision_.init(model_);
+        if (!decision_.is_decision_model()) embedding_.init(model_);
     }
-    ~LlamaModel() override { llama_model_free(model_); }
+    ~LlamaModel() override { embedding_.free_projector(); llama_model_free(model_); }
 
     kiln_status info(kiln_model_info& out) const override {
         memset(&out, 0, sizeof out);
@@ -337,6 +352,8 @@ public:
         out.model_bytes       = llama_model_size(model_);
         out.supports_thinking = tags_.supported;
         out.is_decision_model = decision_.is_decision_model();
+        out.is_embedding_model = embedding_.is_embedding_model();
+        out.n_embd            = embedding_.n_embd();
         return KILN_OK;
     }
 
@@ -382,14 +399,8 @@ public:
         // little cores and every barrier waits for the slowest one: measured 1 thread > 5 threads on Pixel 8.
         // Benchmarking escape hatches: KILN_NO_AFFINITY=1 disables pinning,
         // KILN_CPU_MASK=<hex> forces an exact core set (thread count follows the mask).
-        const char* no_aff = getenv("KILN_NO_AFFINITY");
-        const char* mask_s = getenv("KILN_CPU_MASK");
-        uint64_t mask = fast_mask_;
-        int n_threads = threads_;
-        if (mask_s && *mask_s) {
-            mask = strtoull(mask_s, nullptr, 16);
-            if (mask) n_threads = __builtin_popcountll(mask);
-        }
+        uint64_t mask; int n_threads;
+        const bool pin = affinity(mask, n_threads);
 
         llama_context_params cp = llama_context_default_params();
         cp.n_ctx           = p.n_ctx > 0 ? (uint32_t)p.n_ctx : 4096;
@@ -399,6 +410,7 @@ public:
         cp.n_threads       = n_threads;
         cp.n_threads_batch = n_threads;
         if (decision_.is_decision_model()) kiln::DecisionHead::configure(cp);
+        if (embedding_.is_embedding_model()) embedding_.configure(cp, p.n_ctx);
         cp.flash_attn_type = p.flash_attn ? LLAMA_FLASH_ATTN_TYPE_AUTO : LLAMA_FLASH_ATTN_TYPE_DISABLED;
         cp.abort_callback      = LlamaContext::abort_cb;
         cp.abort_callback_data = c.get();
@@ -407,8 +419,9 @@ public:
         if (!c->ctx_) return kiln::set_error(KILN_ERR_OUT_OF_MEMORY, "llama_init_from_model failed (n_ctx=" + std::to_string(cp.n_ctx) + ")");
         c->n_batch_ = (int)cp.n_batch;
         c->decision_ = &decision_;
+        c->embedding_ = &embedding_;
 
-        if (mask && !(no_aff && *no_aff == '1')) {
+        if (pin) {
             ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
             int set = 0;
             for (int i = 63; i >= 0 && set < n_threads; --i)      // highest-index cores are usually the biggest
@@ -422,7 +435,31 @@ public:
         return KILN_OK;
     }
 
+    kiln_status load_projector(const char* path, const kiln_projector_params& p, kiln_projector_info& out) override {
+        if (!embedding_.is_embedding_model())
+            return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "images and audio are supported for embedding models only");
+        // same cores and thread count as text; see AffinityScope in embedding.h for why the mask is needed
+        uint64_t mask; int n_threads;
+        const bool pin = affinity(mask, n_threads);
+        return embedding_.load_projector(model_, path, p, kind_ == KILN_BACKEND_GPU, n_threads, pin ? mask : 0, out);
+    }
+
 private:
+    // Which cores to use and how many threads. Returns whether threads are pinned to `mask`.
+    // Benchmarking escape hatches: KILN_NO_AFFINITY=1 disables pinning,
+    // KILN_CPU_MASK=<hex> forces an exact core set (thread count follows the mask).
+    bool affinity(uint64_t& mask, int& n_threads) const {
+        const char* no_aff = getenv("KILN_NO_AFFINITY");
+        const char* mask_s = getenv("KILN_CPU_MASK");
+        mask      = fast_mask_;
+        n_threads = threads_;
+        if (mask_s && *mask_s) {
+            mask = strtoull(mask_s, nullptr, 16);
+            if (mask) n_threads = __builtin_popcountll(mask);
+        }
+        return mask && !(no_aff && *no_aff == '1');
+    }
+
     llama_model*              model_;
     const llama_vocab*        vocab_;
     std::string               backend_name_;
@@ -433,6 +470,7 @@ private:
     common_chat_templates_ptr tmpls_;
     ThinkTags                 tags_;
     kiln::DecisionHead        decision_;
+    kiln::EmbeddingHead       embedding_;
 };
 
 // ------------------------------------------------------------------ Backend

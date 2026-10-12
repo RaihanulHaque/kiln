@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.3.0
+
+The C ABI changed: `kiln_model_info` has two new fields at the end (its size is unchanged),
+and there are four new functions (`kiln_embed`, `kiln_embed_media`, `kiln_model_load_projector`,
+and the `kiln_*_default` helpers for their options) with their structs and the
+`kiln_embed_kind` enum.
+
+- Embedding models: `kiln_embed` turns a text into a vector, and
+  `kiln_model_info.is_embedding_model` / `n_embd` say when to use it and how long the vector
+  is. `kiln_embed_options.kind` (query or document) adds the task prefix the model was trained
+  with, `dimensions` shortens the vector, `normalize` scales it to length 1.
+  A text longer than the context returns `KILN_ERR_CONTEXT_FULL`; nothing is cut silently.
+- Images and audio: `kiln_model_load_projector` loads a model's image / audio encoders (its
+  `mmproj` file) and `kiln_embed_media` embeds an image, an audio clip, or text mixed with
+  them, into the same space as text. A text query can then find a photo or a voice note.
+  Images: jpg, png, bmp, gif. Audio: wav, mp3, flac. No video.
+  `kiln_projector_params.image_max_tokens` (default 280) scales large photos down: a
+  2000-pixel screenshot took 21.7 s at the model's own limit and 3.2 s at 280.
+- The library now includes llama.cpp's `mtmd` (libkiln.so on Linux: 10.7 MB to 12.5 MB).
+- `kiln_chat` and `kiln_generate` on an embedding model return `KILN_ERR_NOT_SUPPORTED`.
+  Before, kiln ran such a model as a chat model and printed unused tokens.
+- `kiln-cli`: `--embed`, `--query`, `--dim`, and `--mmproj`, `--media`, `--image-tokens`.
+- `scripts/fetch_models.sh` downloads the two text embedding test models (176 MB and 84 MB);
+  `--media` adds the encoders for the image and audio tests (0.9 GB). `tests/media` holds
+  small generated test images and speech clips.
+
+Tested models:
+
+| model | inputs | files |
+|---|---|---|
+| nomic-embed-text v1.5 | text | 84 MB (`Q4_K_M`) |
+| EmbeddingGemma 2 | text, images, audio | 176 MB (`UD-Q4_K_XL`) + 555 MB projector (`Q8_0`) |
+| jina-embeddings-v5-omni-nano | text, images | 157 MB (`Q4_K_M`) + 203 MB vision projector (`F16`) |
+
+For all three the vectors are identical to the ones llama.cpp gives at the same commit
+(`llama-embedding` for text, `llama-server` for images, audio and mixed input). On a
+16-question search test the 4-bit EmbeddingGemma 2 file picked the same answers as the
+full-precision one (15 of 16). Text queries found the right one of ten images and audio clips
+in 8 of 8 tries with EmbeddingGemma 2, and the right one of six images in 5 of 5 with Jina.
+
+Limits to know: Jina's card says exact agreement with its PyTorch version needs Jina's fork
+of llama.cpp; kiln matches upstream llama.cpp and was not compared with PyTorch. Jina's audio
+projector (1.3 GB) was not tried. Jina v5 omni is licensed CC BY-NC 4.0 (non-commercial);
+EmbeddingGemma 2 and nomic are Apache 2.0.
+
+Fixed before release: on Android the image and audio encoders ran on a single core. kiln pins
+the thread that calls it to one core, and the encoder's own threads inherited that. A small
+image took 14.3 s on a Pixel 8 and now takes about 2.5 s; a 3-second audio clip went from 9.6 s
+to about 0.5 s. Text was not affected.
+
+Verified with `kiln-tests`: 319 checks on macOS (M4 Pro, Metal) and on Android (Pixel 8, CPU);
+319 on Linux arm64 (Ubuntu 24.04 in Docker, GCC 13, OpenMP), also with `KILN_CPU_MASK=3`, and
+319 on Linux x86_64 in the same container emulated on the Mac (AVX2);
+317 on Linux x86 (Ryzen 5 8500G, CPU) before two checks were added, not re-run there since.
+The Flutter plugin has `embed`, `embedMedia` and `loadProjector` with regenerated bindings:
+23 integration tests on the Pixel 8, including images and audio. Not run on iOS.
+
+Speed with EmbeddingGemma 2 at 4 bits:
+
+| input | Ryzen 5 8500G | Pixel 8 | M4 Pro (Metal) |
+|---|---|---|---|
+| short sentence | 15 ms | 30 to 80 ms | 13 ms |
+| small image (81 media tokens) | 0.7 s | about 2.5 s | 0.2 s |
+| 3-second audio clip | 0.2 s | about 0.5 s | 0.15 s |
+
 ## 0.2.0
 
 The C ABI changed: `kiln_chat_options`, `kiln_gen_stats` and `kiln_model_info` grew, so code

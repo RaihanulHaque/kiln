@@ -16,7 +16,9 @@ src/backends/llamacpp/
     llamacpp_backend.cpp            the one backend: load, template, generate, threadpool pinning
     reasoning_splitter.h            splits streamed text into answer / reasoning by think tags
     decision.h                      decision models: render the systemone template, one pass, scores -> probabilities
-tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models)
+    embedding.h                     embedding models: detect, add the task prefix, one pass, shorten and normalise the vector;
+                                    images and audio through llama.cpp's mtmd (projector), mixed with text in one batch
+tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query / --mmproj / --media (embedding models)
 tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark
 tools/barrier-lab/main.cpp          standalone experiment (not in the CMake build): split work + ggml-style barrier
 tests/test_core.cpp                 the C test suite (host and device)
@@ -31,7 +33,7 @@ flutter/kiln_flutter/
     example/lib/main.dart           the demo chat app
     example/integration_test/       on-device test suite (+ KILN_SPEED speed group)
 scripts/
-    fetch_models.sh                 download the four test GGUFs into models/
+    fetch_models.sh                 download the six test GGUFs into models/
     android-run.sh, android-test.sh push the CLI / C tests to a phone over adb
     bench.sh, bench_plot.py, bench_compare.py   resource benchmarks and charts
     vendor_flutter.sh               copy the core into the plugin for pub.dev
@@ -146,6 +148,52 @@ A decision model shares none of the loop above: there is no sampling and no KV r
 `kiln_chat` on a decision model, and `kiln_decide` on a chat model, return
 `KILN_ERR_NOT_SUPPORTED`.
 
+## One `kiln_embed` call
+
+An embedding model also skips the generation loop. It has no sampling, no KV reuse and no
+template.
+
+1. **Load.** `EmbeddingHead::init` (`embedding.h`) reads `<arch>.pooling_type` from the GGUF.
+   Mean, cls or last means "embedding model"; chat models have none. It also picks the task
+   prefixes by architecture (`gemma-embedding*`, `nomic-bert*`); unknown families get none.
+2. **Context.** `EmbeddingHead::configure` turns on embeddings output and sets
+   `n_batch = n_ubatch = n_ctx`. These models are not causal: every token looks at every
+   other one, so a text cannot be fed in pieces. `n_ctx` is therefore the longest text
+   accepted (default 2048, never above the model's training context).
+3. **C API** (`kiln.cpp`) fills in default options and forwards to `Context::embed`.
+4. **`EmbeddingHead::embed`** puts the prefix in front of the text (`task: search result |
+   query: ` for an EmbeddingGemma query), tokenizes, and returns `KILN_ERR_CONTEXT_FULL` if
+   it does not fit. Then it clears the memory, decodes the whole text in one batch with every
+   token marked as an output, and reads the pooled vector with `llama_get_embeddings_seq`.
+5. **Shorten and normalise.** With `dimensions = 256` only the first 256 numbers are kept.
+   Unless `normalize` is switched off, the result is divided by its length so that a dot
+   product of two vectors is their cosine similarity. With `normalize = false` the vector keeps
+   the model's own length and a dot product is no longer a cosine.
+
+**With images or audio** (`kiln_embed_media`) step 4 changes. The projector is a second
+model file holding an image encoder, an audio encoder, or both. llama.cpp's `mtmd` library
+(`third_party/llama.cpp/tools/mtmd`, linked into libkiln) runs it:
+
+1. `kiln_model_load_projector` creates the `mtmd_context` once per model.
+2. Each file is decoded (stb_image for pictures, miniaudio for sound) into pixels or samples.
+3. `mtmd_tokenize` splits the input at each `<__media__>` marker into chunks: runs of text
+   tokens, and one chunk per media item, wrapped in the model's own begin / end tokens.
+4. `mtmd_encode_chunk` runs the encoder on a media chunk. Out come vectors of the same size
+   the model uses for a text token. How many vectors depends on the input: 81 of them for a
+   small image, 25 for each second of audio (EmbeddingGemma 2). Each one takes a place in the
+   context, like a token.
+5. Everything goes into one `llama_batch_ext` that mixes token ids and those vectors, and
+   one `llama_process` call. This follows `add_prompt_mixed` in llama.cpp's server, which is
+   how the server handles a non-causal model. Pooling and normalising are the same as for text.
+
+`kiln_chat` on an embedding model, and `kiln_embed` on any other model, return
+`KILN_ERR_NOT_SUPPORTED`. To check a change, compare with llama.cpp's own tool built from the
+submodule: `llama-embedding -m model.gguf -p "text" --embd-output-format json --embd-normalize 2`
+gives the same numbers as `kiln-cli --embed "text"`. For images and audio, start
+`llama-server -m model.gguf --mmproj projector.gguf --embeddings -c 2048 -b 2048 -ub 2048`,
+read `media_marker` from `/props`, and POST `{"content": {"prompt_string": "<marker>",
+"multimodal_data": ["<base64 of the file>"]}}` to `/embedding`.
+
 ## The generation loop as a state machine
 
 ```mermaid
@@ -200,6 +248,7 @@ calling thread; the Dart layer turns that into an async stream.
 | change how thinking is detected | `LlamaModel` constructor (empirical on/off render) |
 | change the thinking budget behaviour | the end of the sampling loop in `LlamaContext::generate` |
 | change cache checkpoints for hybrid models | `save_checkpoint` / `restore_checkpoint` in `LlamaContext`; `stable_prefix` in `render_chat` |
+| add the task prefix of another embedding model | `EmbeddingHead::init` in `embedding.h`; take the strings from the model card and add it to `test_embedding` |
 | support another decision model family | `decision.h`; port its path from llama.cpp `tools/server/server-decision.cpp` and compare with `llama-server` |
 | change sampling defaults | `kiln_sampling_params_default` in `kiln.cpp` |
 | change the example app | `flutter/kiln_flutter/example/lib/main.dart` |

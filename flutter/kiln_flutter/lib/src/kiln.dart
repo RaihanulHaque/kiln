@@ -58,6 +58,18 @@ class KilnModel {
         'enableThinking': enableThinking,
       });
 
+  /// Loads the image / audio encoders that belong to an embedding model: its projector file,
+  /// an "mmproj" GGUF published next to the model. Call it once after loading the model and
+  /// before [KilnContext.embedMedia]. The encoders stay in memory until the model is disposed,
+  /// and are often larger than the text model itself.
+  ///
+  /// [imageMaxTokens] is the most tokens one image may take; a large photo is scaled down to
+  /// fit. Time grows much faster than this number. 0 means 280, a negative value means the
+  /// model's own limit.
+  Future<KilnProjectorInfo> loadProjector(String path, {int imageMaxTokens = 0}) async =>
+      KilnProjectorInfo.fromMap(await _kiln._worker
+          .call<Map>('loadProjector', {'model': _handle, 'path': path, 'imageMaxTokens': imageMaxTokens}));
+
   Future<void> dispose() => _kiln._worker.call<void>('freeModel', {'handle': _handle});
 }
 
@@ -158,6 +170,74 @@ class KilnContext {
     if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
     return KilnDecision.fromMap(await model._kiln._worker
         .call<Map>('decide', {'context': _handle, 'question': question.toMap(), 'state': state}));
+  }
+
+  /// Turn a text into a vector with an embedding model. Texts with a similar meaning get
+  /// similar vectors, which is what search over the user's own notes needs.
+  ///
+  /// ```dart
+  /// final note  = await ctx.embed('Knead the dough and let it rise.', kind: KilnEmbedKind.document);
+  /// final query = await ctx.embed('how do I bake bread', kind: KilnEmbedKind.query);
+  /// print(query.similarity(note));   // about 0.7; an unrelated note scores lower
+  /// ```
+  ///
+  /// Use [KilnEmbedKind.query] for what the user types and [KilnEmbedKind.document] for what
+  /// is searched. [title] is an optional document title, for models that take one.
+  /// [dimensions] keeps only the first N numbers, which is smaller to store; only models
+  /// trained for it stay accurate (EmbeddingGemma: 512, 256, 128). 0 keeps the full vector.
+  ///
+  /// Each call stands alone. A text longer than the context (`KilnContextParams.nCtx`, 2048
+  /// tokens by default for embedding models) throws `KILN_ERR_CONTEXT_FULL`: nothing is cut
+  /// silently, so split long documents into pieces. Throws `KILN_ERR_NOT_SUPPORTED` when the
+  /// model is not an embedding model; check [KilnModelInfo.isEmbeddingModel].
+  Future<KilnEmbedding> embed(
+    String text, {
+    KilnEmbedKind kind = KilnEmbedKind.raw,
+    String? title,
+    int dimensions = 0,
+    bool normalize = true,
+  }) =>
+      _embed(text, const [], kind, title, dimensions, normalize);
+
+  /// Like [embed], for images and audio, alone or together with [text]. The result is in the
+  /// same space as [embed]'s, so a typed query can find a photo or a voice note.
+  ///
+  /// ```dart
+  /// await model.loadProjector('/path/to/mmproj.gguf');
+  /// final photo = await ctx.embedMedia([KilnMedia.file('/path/to/holiday.jpg')]);
+  /// final query = await ctx.embed('a lake between mountains', kind: KilnEmbedKind.query);
+  /// print(query.similarity(photo));
+  /// ```
+  ///
+  /// Each [KilnMedia.marker] in [text] is replaced by the next item; without a marker the
+  /// items follow the text. No task prefix is added when media are present. An image costs a
+  /// few hundred tokens of the context and takes seconds on a phone CPU; audio costs a few
+  /// dozen tokens per second. Needs [KilnModel.loadProjector] first.
+  Future<KilnEmbedding> embedMedia(
+    List<KilnMedia> media, {
+    String? text,
+    int dimensions = 0,
+    bool normalize = true,
+  }) {
+    if (media.isEmpty) throw ArgumentError('embedMedia needs at least one media item; use embed() for text alone');
+    return _embed(text, media, KilnEmbedKind.raw, null, dimensions, normalize);
+  }
+
+  Future<KilnEmbedding> _embed(String? text, List<KilnMedia> media, KilnEmbedKind kind, String? title,
+      int dimensions, bool normalize) async {
+    if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
+    final n = model.info.nEmbd;
+    return KilnEmbedding.fromMap(await model._kiln._worker.call<Map>('embed', {
+      'context': _handle,
+      'text': text,
+      'media': [for (final m in media) m.toMap()],
+      'kind': kind.index,
+      'title': title,
+      'dimensions': dimensions,
+      'normalize': normalize,
+      // room for the answer; the C side rejects a `dimensions` above the model's size
+      'cap': dimensions > 0 && dimensions < n ? dimensions : n,
+    }));
   }
 
   /// Clears the KV cache. Next chat starts from scratch.

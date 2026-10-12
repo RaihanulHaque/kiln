@@ -1,5 +1,5 @@
-// Core behaviour tests. Needs real models: pass a directory containing
-//   LiquidAI_LFM2.5-350M_Q4_K_M.gguf, Qwen3.5-0.8B-Q4_K_M.gguf, gemma-3-270m-it-Q8_0.gguf
+// Core behaviour tests. Needs real models: pass a directory containing the files that
+// scripts/fetch_models.sh downloads (three chat models, a decision model, two embedding models).
 // Missing models are skipped, not failed. Runs on host and on Android via scripts/android-test.sh.
 #include "kiln/kiln.h"
 #include <atomic>
@@ -202,6 +202,9 @@ static void test_model(const std::string& path, const char* label, bool expect_t
         float p[2]; kiln_decision_answer a;
         kiln_decision_question q = {"q", KILN_QUESTION_NOUL, "Is this a question?", nullptr, 0};
         CHECK(!mi.is_decision_model && kiln_decide(c, "state", &q, p, 2, &a) == KILN_ERR_NOT_SUPPORTED, "kiln_decide on a chat model");
+        CHECK(kiln_model_load_projector(m, "/nonexistent/mmproj.gguf", nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "projector on a chat model");
+        float v[8];
+        CHECK(!mi.is_embedding_model && mi.n_embd == 0 && kiln_embed(c, "text", nullptr, v, 8, nullptr) == KILN_ERR_NOT_SUPPORTED, "kiln_embed on a chat model");
     }
 
     kiln_context_free(c);
@@ -294,6 +297,254 @@ static void test_decision(const std::string& path) {
     kiln_model_free(m);
 }
 
+// Embedding model: text in, vector out. ref = the first numbers llama.cpp's own llama-embedding
+// tool prints for "The cat sat on the mat." (same commit, CPU, normalised).
+// titled_model: the model has a place for a document title in its prefix (EmbeddingGemma).
+static void test_embedding(const std::string& path, const char* label, bool expect_prefix, bool matryoshka, bool titled_model, const float ref[3]) {
+    SECTION(label);
+    if (!exists(path)) { fprintf(stderr, "  SKIP (missing %s)\n", path.c_str()); return; }
+    kiln_model* m = nullptr;
+    kiln_model_params mp = kiln_model_params_default();
+    CHECK(kiln_model_load(path.c_str(), &mp, &m) == KILN_OK, "%s", kiln_last_error());
+    if (!m) return;
+    kiln_model_info mi; kiln_model_get_info(m, &mi);
+    CHECK(mi.is_embedding_model && !mi.is_decision_model && !mi.supports_thinking, "arch=%s", mi.arch);
+    CHECK(mi.n_embd == 768, "n_embd=%d", mi.n_embd);
+    kiln_context_params cp = kiln_context_params_default(); cp.n_ctx = 256;
+    kiln_context* c = nullptr;
+    CHECK(kiln_context_create(m, &cp, &c) == KILN_OK, "%s", kiln_last_error());
+    if (!c) { kiln_model_free(m); return; }
+    const int D = mi.n_embd;
+    auto dot = [](const std::vector<float>& a, const std::vector<float>& b, int n) { double s = 0; for (int i = 0; i < n; ++i) s += (double)a[i] * b[i]; return s; };
+
+    // raw text: the numbers llama.cpp gives, length 1, same again on a second call
+    std::vector<float> v(D), v2(D);
+    kiln_embed_stats st;
+    kiln_status s = kiln_embed(c, "The cat sat on the mat.", nullptr, v.data(), D, &st);
+    CHECK(s == KILN_OK, "%s", kiln_last_error());
+    CHECK(st.dimensions == D && st.tokens > 4 && st.tokens < 16 && !st.prefixed, "dims=%d tokens=%d prefixed=%d", st.dimensions, st.tokens, st.prefixed);
+    CHECK(fabs(dot(v, v, D) - 1.0) < 1e-4, "length^2=%.6f", dot(v, v, D));
+    // ref was measured on x86. A 4-bit model is computed with different instructions on each
+    // kind of processor and the rounding differs: a Pixel 8 is off by up to 0.009 on nomic, an
+    // M4 GPU by 0.003. A wrong prefix or pooling moves these numbers by far more than 0.015.
+    CHECK(fabsf(v[0] - ref[0]) < 1.5e-2f && fabsf(v[1] - ref[1]) < 1.5e-2f && fabsf(v[2] - ref[2]) < 1.5e-2f,
+          "got %.6f %.6f %.6f, llama.cpp gives %.6f %.6f %.6f", v[0], v[1], v[2], ref[0], ref[1], ref[2]);
+    s = kiln_embed(c, "The cat sat on the mat.", nullptr, v2.data(), D, nullptr);
+    CHECK(s == KILN_OK && memcmp(v.data(), v2.data(), D * sizeof(float)) == 0, "not deterministic");
+    fprintf(stderr, "  %d numbers, %d tok in %.1f ms\n", st.dimensions, st.tokens, st.ms);
+
+    // search: the query must land nearer the text that answers it than the one sharing its words
+    kiln_embed_options q = kiln_embed_options_default(); q.kind = KILN_EMBED_QUERY;
+    kiln_embed_options d = kiln_embed_options_default(); d.kind = KILN_EMBED_DOCUMENT;
+    std::vector<float> qv(D), right(D), trap(D), other(D);
+    kiln_embed_stats qst;
+    CHECK(kiln_embed(c, "how do I reset my password", &q, qv.data(), D, &qst) == KILN_OK, "%s", kiln_last_error());
+    CHECK(qst.prefixed == expect_prefix, "prefixed=%d", qst.prefixed);
+    CHECK(kiln_embed(c, "Steps to recover account access: open Settings, choose Security, and tap Forgot credentials.", &d, right.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    CHECK(kiln_embed(c, "Passwords should contain at least twelve characters including a symbol.", &d, trap.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    CHECK(kiln_embed(c, "Soda loaf uses baking soda and buttermilk as the raising agent.", &d, other.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    const double s_right = dot(qv, right, D), s_trap = dot(qv, trap, D), s_other = dot(qv, other, D);
+    CHECK(s_right > s_trap && s_trap > s_other, "right=%.3f trap=%.3f unrelated=%.3f", s_right, s_trap, s_other);
+    fprintf(stderr, "  password query: answer %.3f, trap %.3f, unrelated %.3f\n", s_right, s_trap, s_other);
+
+    // the kind changes the vector only when the model has a prefix
+    std::vector<float> raw(D);
+    CHECK(kiln_embed(c, "how do I reset my password", nullptr, raw.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    CHECK((memcmp(raw.data(), qv.data(), D * sizeof(float)) != 0) == expect_prefix, "query prefix");
+    kiln_embed_options titled = d; titled.title = "Account help";
+    std::vector<float> tv(D);
+    CHECK(kiln_embed(c, "Steps to recover account access: open Settings, choose Security, and tap Forgot credentials.", &titled, tv.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    CHECK(fabs(dot(tv, tv, D) - 1.0) < 1e-4, "titled document");
+    // the title must reach the model where the model has a place for it, and only there
+    CHECK((memcmp(tv.data(), right.data(), D * sizeof(float)) != 0) == titled_model, "title %s", titled_model ? "was ignored" : "changed the vector of a model without titles");
+
+    // shortened vector: the leading numbers of the full one, scaled back to length 1
+    kiln_embed_options sh = kiln_embed_options_default(); sh.dimensions = 256;
+    std::vector<float> sv(256);
+    s = kiln_embed(c, "The cat sat on the mat.", &sh, sv.data(), 256, &st);
+    CHECK(s == KILN_OK && st.dimensions == 256, "%s", kiln_last_error());
+    CHECK(fabs(dot(sv, sv, 256) - 1.0) < 1e-4, "length^2=%.6f", dot(sv, sv, 256));
+    const double head = sqrt(dot(v, v, 256));
+    CHECK(fabs(sv[0] * head - v[0]) < 1e-5 && fabs(sv[255] * head - v[255]) < 1e-5, "not the leading part of the full vector");
+    if (matryoshka) {
+        // A shortened vector is a coarser one. It must still tell the answer from an unrelated
+        // text and score it close to the full vector. It is not required to beat the trap
+        // sentence: at 256 numbers the two are 0.001 apart and the order depends on the hardware.
+        std::vector<float> a(256), b(256), t2(256);
+        kiln_embed_options q2 = q, d2 = d; q2.dimensions = d2.dimensions = 256;
+        kiln_embed(c, "how do I reset my password", &q2, a.data(), 256, nullptr);
+        kiln_embed(c, "Steps to recover account access: open Settings, choose Security, and tap Forgot credentials.", &d2, b.data(), 256, nullptr);
+        kiln_embed(c, "Soda loaf uses baking soda and buttermilk as the raising agent.", &d2, t2.data(), 256, nullptr);
+        const double r256 = dot(a, b, 256), o256 = dot(a, t2, 256);
+        CHECK(r256 > o256 + 0.1 && fabs(r256 - s_right) < 0.05, "256 numbers: right=%.3f unrelated=%.3f, full right=%.3f", r256, o256, s_right);
+    }
+    kiln_embed_options un = kiln_embed_options_default(); un.normalize = false;
+    CHECK(kiln_embed(c, "The cat sat on the mat.", &un, v2.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+    const double len = sqrt(dot(v2, v2, D));
+    // the raw vector points the same way but keeps the model's own length (about 1246 for
+    // EmbeddingGemma 2 and 22 for nomic), so a result of length 1 means the option was ignored
+    CHECK(len > 0 && fabs(v2[0] / len - v[0]) < 1e-5 && fabs(len - 1.0) > 0.5, "normalize=false, length=%.4f", len);
+
+    // bad input, text too long, wrong kind of call
+    CHECK(kiln_embed(c, "text", nullptr, v.data(), D - 1, nullptr) == KILN_ERR_INVALID_ARG, "out too small accepted");
+    kiln_embed_options big = kiln_embed_options_default(); big.dimensions = D + 1;
+    CHECK(kiln_embed(c, "text", &big, v.data(), D, nullptr) == KILN_ERR_INVALID_ARG, "dimensions above n_embd accepted");
+    CHECK(kiln_embed(c, nullptr, nullptr, v.data(), D, nullptr) == KILN_ERR_INVALID_ARG, "null text accepted");
+    std::string longtext;
+    for (int i = 0; i < 200; ++i) longtext += "The quick brown fox jumps over the lazy dog. ";
+    CHECK(kiln_embed(c, longtext.c_str(), nullptr, v.data(), D, &st) == KILN_ERR_CONTEXT_FULL && st.tokens > 256, "long text: tokens=%d", st.tokens);
+    CHECK(kiln_embed(c, "The cat sat on the mat.", nullptr, v2.data(), D, nullptr) == KILN_OK && fabsf(v2[0] - ref[0]) < 5e-3f, "embed after an error");
+    kiln_chat_message msg[] = { {"user", "hi"} }; kiln_gen_stats gst;
+    CHECK(kiln_chat(c, msg, 1, nullptr, nullptr, nullptr, nullptr, &gst) == KILN_ERR_NOT_SUPPORTED, "chat on an embedding model");
+    CHECK(kiln_generate(c, "hi", nullptr, nullptr, nullptr, &gst) == KILN_ERR_NOT_SUPPORTED, "generate on an embedding model");
+    float p[2]; kiln_decision_answer da;
+    kiln_decision_question dq = {"q", KILN_QUESTION_NOUL, "Is this a question?", nullptr, 0};
+    CHECK(kiln_decide(c, "state", &dq, p, 2, &da) == KILN_ERR_NOT_SUPPORTED, "decide on an embedding model");
+
+    // media without a projector; kiln_embed_media with no media is kiln_embed
+    kiln_media none = {"/nonexistent.png", nullptr, 0};
+    CHECK(kiln_embed_media(c, nullptr, &none, 1, nullptr, v2.data(), D, nullptr) == KILN_ERR_NOT_SUPPORTED, "media without a projector");
+    CHECK(kiln_embed_media(c, "The cat sat on the mat.", nullptr, 0, nullptr, v2.data(), D, nullptr) == KILN_OK && fabsf(v2[0] - ref[0]) < 5e-3f, "embed_media with text only");
+    CHECK(kiln_embed_media(c, nullptr, nullptr, 0, nullptr, v2.data(), D, nullptr) == KILN_ERR_INVALID_ARG, "no text and no media accepted");
+
+    kiln_context_free(c);
+    kiln_model_free(m);
+}
+
+// Images and audio through an embedding model's projector. The reference numbers are what
+// llama.cpp's llama-server returns for the same files (same commit, CPU): ref[0] invoice.png,
+// ref[1] "An invoice <marker> for a blender", ref[2] speech_train.wav, ref[3] "Listen: <marker>".
+static void test_embedding_media(const std::string& path, const std::string& mmproj, const std::string& media,
+                                 const char* label, bool audio, const float ref[4][3]) {
+    SECTION(label);
+    if (!exists(path) || !exists(mmproj)) { fprintf(stderr, "  SKIP (missing %s)\n", exists(path) ? mmproj.c_str() : path.c_str()); return; }
+    if (!exists(media + "/invoice.png")) { fprintf(stderr, "  SKIP (missing %s/invoice.png)\n", media.c_str()); return; }
+    kiln_model* m = nullptr;
+    kiln_model_params mp = kiln_model_params_default();
+    CHECK(kiln_model_load(path.c_str(), &mp, &m) == KILN_OK, "%s", kiln_last_error());
+    if (!m) return;
+    kiln_model_info mi; kiln_model_get_info(m, &mi);
+    const int D = mi.n_embd;
+    kiln_projector_info pi;
+    CHECK(kiln_model_load_projector(m, "/nonexistent/mmproj.gguf", nullptr, &pi) == KILN_ERR_MODEL_LOAD, "missing projector accepted");
+    CHECK(kiln_model_load_projector(m, mmproj.c_str(), nullptr, &pi) == KILN_OK, "%s", kiln_last_error());
+    CHECK(pi.supports_images && pi.supports_audio == audio, "images=%d audio=%d", pi.supports_images, pi.supports_audio);
+    CHECK(kiln_model_load_projector(m, mmproj.c_str(), nullptr, &pi) == KILN_ERR_INVALID_ARG, "second projector accepted");
+    kiln_context_params cp = kiln_context_params_default(); cp.n_ctx = 1024;
+    kiln_context* c = nullptr;
+    CHECK(kiln_context_create(m, &cp, &c) == KILN_OK, "%s", kiln_last_error());
+    if (!c) { kiln_model_free(m); return; }
+
+    auto dot = [&](const std::vector<float>& a, const std::vector<float>& b) { double s = 0; for (int i = 0; i < D; ++i) s += (double)a[i] * b[i]; return s; };
+    auto file = [&](const char* name, const char* text, kiln_embed_stats* st) {
+        std::vector<float> v(D);
+        const std::string p = media + "/" + name;
+        kiln_media item = {p.c_str(), nullptr, 0};
+        kiln_status s = kiln_embed_media(c, text, &item, 1, nullptr, v.data(), D, st);
+        CHECK(s == KILN_OK, "%s: %s", name, kiln_last_error());
+        return v;
+    };
+    auto query = [&](const char* text) {
+        std::vector<float> v(D);
+        kiln_embed_options q = kiln_embed_options_default(); q.kind = KILN_EMBED_QUERY;
+        CHECK(kiln_embed(c, text, &q, v.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+        return v;
+    };
+    auto near_ref = [](const std::vector<float>& v, float a, float b, float d) { return fabsf(v[0] - a) < 5e-3f && fabsf(v[1] - b) < 5e-3f && fabsf(v[2] - d) < 5e-3f; };
+
+    // an image alone: llama.cpp's numbers, length 1, same again
+    kiln_embed_stats st;
+    std::vector<float> invoice = file("invoice.png", nullptr, &st);
+    CHECK(st.media_tokens > 0 && st.tokens > st.media_tokens && st.dimensions == D && !st.prefixed && st.media_ms > 0, "tokens=%d media=%d", st.tokens, st.media_tokens);
+    CHECK(fabs(dot(invoice, invoice) - 1.0) < 1e-4, "length^2=%.6f", dot(invoice, invoice));
+    CHECK(near_ref(invoice, ref[0][0], ref[0][1], ref[0][2]), "got %.6f %.6f %.6f", invoice[0], invoice[1], invoice[2]);
+    fprintf(stderr, "  image: %d tok (%d media) in %.0f ms, encoder %.0f ms\n", st.tokens, st.media_tokens, st.ms, st.media_ms);
+    std::vector<float> again = file("invoice.png", nullptr, nullptr);
+    CHECK(memcmp(invoice.data(), again.data(), D * sizeof(float)) == 0, "image not deterministic");
+
+    // the same image from memory
+    {
+        std::ifstream f(media + "/invoice.png", std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        kiln_media item = {nullptr, bytes.data(), bytes.size()};
+        std::vector<float> v(D);
+        CHECK(kiln_embed_media(c, nullptr, &item, 1, nullptr, v.data(), D, nullptr) == KILN_OK, "%s", kiln_last_error());
+        CHECK(memcmp(invoice.data(), v.data(), D * sizeof(float)) == 0, "bytes and file differ");
+    }
+
+    // a text query finds the right picture
+    std::vector<float> red = file("red_circle.png", nullptr, nullptr), blue = file("blue_square.png", nullptr, nullptr);
+    std::vector<float> q_inv = query("an invoice showing the total amount to pay"), q_red = query("a red circle"), q_blue = query("a blue square");
+    CHECK(dot(q_inv, invoice) > dot(q_inv, red) && dot(q_inv, invoice) > dot(q_inv, blue), "invoice %.3f red %.3f blue %.3f", dot(q_inv, invoice), dot(q_inv, red), dot(q_inv, blue));
+    CHECK(dot(q_red, red) > dot(q_red, blue) && dot(q_red, red) > dot(q_red, invoice), "red %.3f blue %.3f invoice %.3f", dot(q_red, red), dot(q_red, blue), dot(q_red, invoice));
+    CHECK(dot(q_blue, blue) > dot(q_blue, red) && dot(q_blue, blue) > dot(q_blue, invoice), "blue %.3f red %.3f invoice %.3f", dot(q_blue, blue), dot(q_blue, red), dot(q_blue, invoice));
+    fprintf(stderr, "  \"a red circle\": red circle %.3f, blue square %.3f, invoice %.3f\n", dot(q_red, red), dot(q_red, blue), dot(q_red, invoice));
+
+    // text and an image in one input, with the marker saying where the image goes
+    std::vector<float> mixed = file("invoice.png", "An invoice " KILN_MEDIA_MARKER " for a blender", &st);
+    CHECK(near_ref(mixed, ref[1][0], ref[1][1], ref[1][2]), "got %.6f %.6f %.6f", mixed[0], mixed[1], mixed[2]);
+    {
+        std::vector<float> at_end = file("invoice.png", "An invoice " KILN_MEDIA_MARKER, nullptr), appended = file("invoice.png", "An invoice", nullptr);
+        CHECK(memcmp(at_end.data(), appended.data(), D * sizeof(float)) == 0, "media after the text differs from an explicit marker at the end");
+    }
+
+    if (!audio) {
+        const std::string p = media + "/speech_train.wav";
+        kiln_media item = {p.c_str(), nullptr, 0};
+        std::vector<float> v(D);
+        CHECK(kiln_embed_media(c, nullptr, &item, 1, nullptr, v.data(), D, nullptr) != KILN_OK, "audio accepted by an image-only projector");
+    } else {
+    // audio: a text query finds the clip that says it
+    std::vector<float> train = file("speech_train.wav", nullptr, &st), recipe = file("speech_recipe.wav", nullptr, nullptr), tone = file("tone.wav", nullptr, nullptr);
+    CHECK(st.media_tokens > 0, "audio media tokens=%d", st.media_tokens);
+    CHECK(near_ref(train, ref[2][0], ref[2][1], ref[2][2]), "got %.6f %.6f %.6f", train[0], train[1], train[2]);
+    fprintf(stderr, "  audio: %d tok (%d media) in %.0f ms, encoder %.0f ms\n", st.tokens, st.media_tokens, st.ms, st.media_ms);
+    std::vector<float> q_train = query("when does the train to London leave"), q_recipe = query("how much flour do I need for the recipe");
+    CHECK(dot(q_train, train) > dot(q_train, recipe) && dot(q_train, train) > dot(q_train, tone), "train %.3f recipe %.3f tone %.3f", dot(q_train, train), dot(q_train, recipe), dot(q_train, tone));
+    CHECK(dot(q_recipe, recipe) > dot(q_recipe, train) && dot(q_recipe, recipe) > dot(q_recipe, tone), "recipe %.3f train %.3f tone %.3f", dot(q_recipe, recipe), dot(q_recipe, train), dot(q_recipe, tone));
+    fprintf(stderr, "  \"when does the train to London leave\": train clip %.3f, recipe clip %.3f, tone %.3f\n", dot(q_train, train), dot(q_train, recipe), dot(q_train, tone));
+
+    std::vector<float> listen = file("speech_train.wav", "Listen: " KILN_MEDIA_MARKER, nullptr);
+    CHECK(near_ref(listen, ref[3][0], ref[3][1], ref[3][2]), "got %.6f %.6f %.6f", listen[0], listen[1], listen[2]);
+    }
+    {
+        const std::string a = media + "/red_circle.png", b = media + "/blue_square.png";
+        kiln_media two[] = {{a.c_str(), nullptr, 0}, {b.c_str(), nullptr, 0}};
+        std::vector<float> v(D);
+        CHECK(kiln_embed_media(c, nullptr, two, 2, nullptr, v.data(), D, &st) == KILN_OK && st.media_tokens > 100, "two images: %s", kiln_last_error());
+        CHECK(kiln_embed_media(c, "one " KILN_MEDIA_MARKER " marker", two, 2, nullptr, v.data(), D, nullptr) == KILN_ERR_INVALID_ARG, "marker count mismatch accepted");
+    }
+
+    // shortened vector, bad files, a context too small for an image
+    {
+        const std::string p = media + "/invoice.png";
+        kiln_media item = {p.c_str(), nullptr, 0};
+        kiln_embed_options sh = kiln_embed_options_default(); sh.dimensions = 256;
+        std::vector<float> sv(256);
+        CHECK(kiln_embed_media(c, nullptr, &item, 1, &sh, sv.data(), 256, &st) == KILN_OK && st.dimensions == 256, "%s", kiln_last_error());
+        kiln_media missing = {"/nonexistent/picture.png", nullptr, 0};
+        std::vector<float> v(D);
+        CHECK(kiln_embed_media(c, nullptr, &missing, 1, nullptr, v.data(), D, nullptr) == KILN_ERR_INVALID_ARG, "missing file accepted");
+        const uint8_t junk[64] = {1, 2, 3, 4, 5};
+        kiln_media bad = {nullptr, junk, sizeof junk};
+        CHECK(kiln_embed_media(c, nullptr, &bad, 1, nullptr, v.data(), D, nullptr) == KILN_ERR_INVALID_ARG, "junk bytes accepted");
+        kiln_media empty = {nullptr, nullptr, 0};
+        CHECK(kiln_embed_media(c, nullptr, &empty, 1, nullptr, v.data(), D, nullptr) == KILN_ERR_INVALID_ARG, "empty media item accepted");
+        kiln_context_params small = kiln_context_params_default(); small.n_ctx = 32;
+        kiln_context* c2 = nullptr;
+        CHECK(kiln_context_create(m, &small, &c2) == KILN_OK, "%s", kiln_last_error());
+        if (c2) {
+            CHECK(kiln_embed_media(c2, nullptr, &item, 1, nullptr, v.data(), D, &st) == KILN_ERR_CONTEXT_FULL && st.tokens > 32, "image in a 32-token context: tokens=%d", st.tokens);
+            kiln_context_free(c2);
+        }
+        std::vector<float> after = file("invoice.png", nullptr, nullptr);
+        CHECK(memcmp(invoice.data(), after.data(), D * sizeof(float)) == 0, "embed after errors differs");
+    }
+
+    kiln_context_free(c);
+    kiln_model_free(m);
+}
+
 int main(int argc, char** argv) {
     std::string dir = argc > 1 ? argv[1] : "models";
     kiln_set_log_level(KILN_LOG_ERROR);
@@ -304,6 +555,20 @@ int main(int argc, char** argv) {
     test_model(dir + "/Qwen3.5-0.8B-Q4_K_M.gguf",         "Qwen3.5-0.8B", true);
     test_model(dir + "/gemma-3-270m-it-Q8_0.gguf",         "Gemma3-270M",  false);
     test_decision(dir + "/d1-omni-600M-Q8_0.gguf");
+    const float gemma_ref[3] = {-0.001069f, -0.025002f, 0.020770f};
+    const float nomic_ref[3] = {0.047576f, 0.061704f, -0.118842f};
+    test_embedding(dir + "/embeddinggemma-2-UD-Q4_K_XL.gguf", "EmbeddingGemma 2 (embedding model)", true, true, true, gemma_ref);
+    test_embedding(dir + "/nomic-embed-text-v1.5.Q4_K_M.gguf", "nomic-embed-text v1.5 (embedding model)", true, false, false, nomic_ref);
+    // test images and audio: tests/media in the repo, or media/ next to the models (Android)
+    const char* media_env = getenv("KILN_TEST_MEDIA");
+    std::string media = media_env ? media_env : exists(dir + "/media/invoice.png") ? dir + "/media" : dir + "/../tests/media";
+    const float gemma_media_ref[4][3] = {{-0.048288f, -0.022876f, 0.024317f}, {-0.028795f, -0.009980f, 0.006978f},
+                                         {-0.031794f, -0.024362f, 0.002251f}, {-0.033693f, -0.033323f, -0.007274f}};
+    test_embedding_media(dir + "/embeddinggemma-2-UD-Q4_K_XL.gguf", dir + "/mmproj-embeddinggemma-2-Q8_0.gguf", media,
+                         "EmbeddingGemma 2 (text, images and audio)", true, gemma_media_ref);
+    const float jina_media_ref[4][3] = {{0.040660f, -0.008720f, 0.047007f}, {0.042589f, -0.011429f, 0.048737f}, {0, 0, 0}, {0, 0, 0}};
+    test_embedding_media(dir + "/jina-embeddings-v5-omni-nano-retrieval-Q4_K_M.gguf", dir + "/jina-embeddings-v5-omni-nano-retrieval-vision-mmproj-F16.gguf", media,
+                         "jina-embeddings-v5-omni-nano (text and images)", false, jina_media_ref);
     fprintf(stderr, "\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
