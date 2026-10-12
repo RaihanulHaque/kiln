@@ -5,7 +5,7 @@
 <p align="center"><b>On-device LLM runtime for Android and desktop, with iOS in progress. Honest about what it runs on.</b></p>
 
 <p align="center">
-  <img src="docs/img/kiln_promo.gif" width="720" alt="kiln: ember ignites, a streaming reply with live tok/s, then the numbers">
+  <img src="docs/img/kiln_promo.gif" width="720" alt="kiln: the ember ignites; a chat reply streams while a decision and an embedding search run beside it; then the measured numbers">
 </p>
 
 Every mobile LLM library promises "runs on phones" and backs it with a device list the
