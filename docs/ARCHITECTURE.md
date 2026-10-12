@@ -108,6 +108,11 @@ One source tree, three outputs, no copies.
 - [x] v0.3.0: images and audio for embedding models (`kiln_embed_media`, llama.cpp mtmd): EmbeddingGemma 2 (both), jina v5 omni nano (images)
 - [ ] Embeddings: Flutter binding, macOS / Android / iOS runs, several inputs per call, video, raw pixels and samples, rerankers
 - [ ] Images and audio for chat and decision models (the projector plumbing is now in the build)
+- [ ] ASR (speech to text): the pinned llama.cpp `mtmd` has Whisper, Parakeet and Qwen3-ASR encoders, and `mtmd` is now in the build.
+      A chat-style call that takes an audio clip and streams the words. First step: load Qwen3-ASR 0.6B and compare with `llama-mtmd-cli`. Nothing run yet
+- [ ] TTS (text to speech): `mtmd` has Qwen3-TTS and PocketTTS, but its header marks audio generation as experimental and subject
+      to breaking changes. Needs a new output kind in `kiln.h` (audio samples). Check how stable that API is in a newer llama.cpp first. Nothing run yet
+- [ ] Voice loop in the example app once both exist: ASR -> chat -> embeddings lookup -> TTS, all offline from GGUF files
 - [ ] Tool calling: common already parses it; expose `kiln_tool` + a TOOL_CALL channel
 - [ ] Runtime ISA dispatch (i8mm / sve) instead of one baseline build
 - [ ] Context-length auto-cap from available RAM in the probe
@@ -117,6 +122,13 @@ One source tree, three outputs, no copies.
 - [ ] iOS: re-run the integration suite after the chat() deadlock fix; simulator slice in CI; SoC name in the iOS probe
 - [ ] Example app: throttle setState per piece (UI rebuild costs ~15% tok/s on Pixel 8)
 - [ ] Opt-in benchmark upload from the sample app -> real device compatibility table
-- [ ] QNN backend for Snapdragon NPUs, gated on probe + model artifact availability
+- [ ] Android GPU, measured before enabled: `-DKILN_ANDROID_GPU=vulkan|opencl` exists but has no numbers. Run `kiln-bench` on the
+      Pixel 8 (Vulkan, Mali) with a small and a larger model, and time the image encoder; OpenCL on a Snapdragon (Adreno) phone when one
+      is available. Expectation to test, not a result: little gain for token generation (memory-bound), more for prompt eval and encoders
+- [ ] Pick CPU or GPU per device from a first-run benchmark, fall back to CPU on a bad driver (part of the auto-tune item above)
+- [ ] NPU: look at `ggml-hexagon` in the pinned llama.cpp (Qualcomm). It is the one NPU route that might run plain GGUF files. Not read or tested
+- [ ] QNN backend for Snapdragon NPUs, gated on probe + model artifact availability. Vendor NPU SDKs need a converted model per
+      chip, which breaks "one GGUF runs everywhere"; not planned unless the Hexagon route fails and a device shows a clear need
+- [ ] TFLite / LiteRT as a second backend: not planned. A separate runtime with no shared model contract; revisit only for a model that exists in no other form
 - [ ] JNI binding for Kotlin/Java
 - [ ] Model manager: download, verify, cache, choose variant per device
