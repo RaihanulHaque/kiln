@@ -1,5 +1,9 @@
 # Benchmarks
 
+These benchmarks cover chat models only (generation speed over time). Decision and embedding
+models are timed per call in the main [README](../../README.md#decision-and-embedding-models);
+`kiln-bench` does not run them yet.
+
 Resource usage over time while kiln loads a model and generates. Produced by `kiln-bench`
 (`tools/kiln-bench`) and `scripts/bench_plot.py`; rerun everything with `scripts/bench.sh`.
 

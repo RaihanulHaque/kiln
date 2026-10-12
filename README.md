@@ -77,7 +77,7 @@ a model downloader, thinking toggle, collapsible reasoning and per-reply stats, 
 screen for decision models and a Search screen for embedding models.
 
 <p>
-<img src="docs/img/app_library.png" width="180"> <img src="docs/img/app_chat_thinking.png" width="180"> <img src="docs/img/app_chat_reply.png" width="180"> <img src="docs/img/app_decide.png" width="180"> <img src="docs/img/app_search.png" width="180"> <img src="docs/img/app_library_light.png" width="180">
+<img src="docs/img/app_library.png" width="180"> <img src="docs/img/app_chat_thinking.png" width="180"> <img src="docs/img/app_chat_reply.png" width="180"> <img src="docs/img/app_decide.png" width="180"> <img src="docs/img/app_search_media.png" width="180"> <img src="docs/img/app_search_result.png" width="180"> <img src="docs/img/app_library_light.png" width="180">
 </p>
 
 ### C
@@ -198,6 +198,25 @@ from 2.48 GHz to 1.69 GHz within a minute; token rate follows. Any phone benchma
 than a minute reports the cold number.
 
 <img src="docs/bench/pixel8_Qwen3.5-0.8B-Q4_K_M.png" width="720">
+
+### Decision and embedding models
+
+These do not generate text, so tokens per second does not apply. What matters in an app is the
+time for one call. Measured with `kiln-cli` on 2026-10-13; the first call after loading a model
+is slower (up to about 3 times) and is not counted. Times are for the whole call; for images
+and audio most of it is the encoder (about 2.5 s and 0.6 s on the Pixel 8). They are not part of `kiln-bench` and have
+no charts or sustained-load runs yet.
+
+| what one call does | model | Pixel 8 | M4 Pro Metal |
+|---|---|---|---|
+| answer one yes / no question about a short message (56 tokens) | LFM2 d1-omni 600M, Q8_0 | 190 to 235 ms | 38 ms |
+| embed a sentence (18 tokens) | EmbeddingGemma 2, UD-Q4_K_XL | 40 to 60 ms | 10 to 13 ms |
+| embed a small image (81 media tokens) | the same, with its Q8_0 projector | 2.8 s | 95 ms |
+| embed a 3-second audio clip (78 media tokens) | the same | 0.9 s | 43 ms |
+
+In practice on the phone: sorting a message into one of a few classes feels instant, a search
+query over notes that are already embedded takes well under a tenth of a second, and photos
+and audio are slow enough that an app should embed them in the background when they are added.
 
 ## Repository
 
