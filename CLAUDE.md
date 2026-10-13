@@ -158,7 +158,8 @@ through llama.cpp): `kiln-tests models` gives 476 passed on macOS (M4 Pro, Metal
   quantisations (only base q5_1 and TDT 0.6B v3 q8_0 were run).
 - `docs/ASR_COMPARISON.md` (accuracy of Whisper, Moonshine, Parakeet, Qwen3-ASR) is one Linux
   run whose raw files were lost; it has the steps to repeat it, not run on the Mac.
-- pub.dev: `kiln_flutter` 0.4.0 is not published yet.
+- pub.dev: `kiln_flutter` 0.4.0 was published on 2026-10-13 from the `v0.4.0` tag; a fresh app installed
+  it from pub.dev and transcribed with Parakeet on the Pixel 8 (312 ms for the 3-second clip).
 
 The notes below are from 0.3.1 and earlier.
 
@@ -169,7 +170,7 @@ macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes
 - iOS: the items already listed in `docs/RELEASE.md`.
 - M4 Pro chat benchmarks: still the v0.1.0 figures. Re-run `scripts/bench.sh` on a quiet Mac.
   (Pixel 8 chat, and decision and embedding models on both, were run at v0.3.0 on 2026-10-13.)
-- pub.dev: `kiln_flutter` 0.3.1 was published on 2026-10-13 (0.3.0 the same day, 0.2.0 on 2026-10-12), Android only. A published version
+- pub.dev: `kiln_flutter` 0.4.0 was published on 2026-10-13 (0.3.1 and 0.3.0 the same day, 0.2.0 on 2026-10-12), Android only. A published version
   cannot be changed: any fix needs a new version number. `scripts/publish_flutter.sh` publishes.
 
 0.3.0 (embedding models, `kiln_embed` and `kiln_embed_media`): `kiln-tests models` gives 319
