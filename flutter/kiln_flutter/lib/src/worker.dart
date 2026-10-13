@@ -168,6 +168,9 @@ class KilnWorker {
 
       case 'embed':
         return _embed(k, r);
+
+      case 'transcribe':
+        return _transcribe(k, r);
     }
     throw KilnException(b.kiln_status.KILN_ERR_INVALID_ARG, 'unknown op ${r.op}');
   }
@@ -323,6 +326,57 @@ class KilnWorker {
       if (s != b.kiln_status.KILN_OK) _fail(k, s);
       return KilnProjectorInfo(supportsImages: info.ref.supports_images, supportsAudio: info.ref.supports_audio).toMap();
     } finally { calloc.free(path); calloc.free(pp); calloc.free(info); }
+  }
+
+  static Map<String, Object?> _transcribe(b.KilnBindings k, _Req r) {
+    final audio = KilnMedia.fromMap(r.args['audio'] as Map);
+    final stream = r.stream!;
+    final frees = <Pointer>[];
+    Pointer<Char> str(String? s) {
+      if (s == null) return nullptr;
+      final p = s.toNativeUtf8();
+      frees.add(p);
+      return p.cast();
+    }
+
+    final cb = NativeCallable<b.kiln_token_cbFunction>.isolateLocal(
+      (int ch, Pointer<Char> piece, int tok, Pointer<Void> user) {
+        stream.send(piece.cast<Utf8>().toDartString());
+        return true;
+      },
+      exceptionalReturn: false,
+    );
+    final item = calloc<b.kiln_media>();
+    final opts = calloc<b.kiln_transcribe_options>();
+    final st = calloc<b.kiln_transcribe_stats>();
+    try {
+      final bytes = audio.bytes;
+      if (bytes == null) {
+        item.ref.path = str(audio.path);
+      } else {
+        final buf = calloc<Uint8>(bytes.isEmpty ? 1 : bytes.length);
+        frees.add(buf);
+        buf.asTypedList(bytes.length).setAll(0, bytes);
+        item.ref.path = nullptr;
+        item.ref.data = buf;
+        item.ref.size = bytes.length;
+      }
+      opts.ref = k.kiln_transcribe_options_default();
+      opts.ref.language = str(r.args['language'] as String?);
+      opts.ref.prompt = str(r.args['prompt'] as String?);
+      opts.ref.max_tokens = r.args['maxTokens'] as int;
+      final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
+      final s = k.kiln_transcribe(ctx, item, opts, cb.nativeFunction, nullptr, st);
+      final stats = KilnTranscribeStats.fromNative(st.ref).toMap();
+      if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) _fail(k, s);
+      return {'status': s.value, 'stats': stats};
+    } finally {
+      cb.close();
+      calloc.free(item); calloc.free(opts); calloc.free(st);
+      for (final p in frees) {
+        calloc.free(p);
+      }
+    }
   }
 
   /// Text only goes through kiln_embed (which adds the task prefix); anything with media

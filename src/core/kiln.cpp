@@ -37,8 +37,11 @@ kiln_status kiln_model_load(const char* path, const kiln_model_params* params, k
 
     kiln_status last = KILN_OK;
     std::string last_msg;
+    bool format_known = false;
     for (auto* b : backends()) {
         if (!b->supports(p.backend, dev)) continue;
+        if (!b->can_load(path)) continue;
+        format_known = true;
         std::unique_ptr<Model> m;
         kiln_status s = b->load_model(path, p, dev, m);
         if (s == KILN_OK) {
@@ -50,6 +53,7 @@ kiln_status kiln_model_load(const char* path, const kiln_model_params* params, k
         if (p.backend != KILN_BACKEND_AUTO) return s;   // explicit request, don't fall through
     }
     if (last != KILN_OK) return set_error(last, last_msg);   // every capable backend tried and failed
+    if (!format_known) return set_error(KILN_ERR_MODEL_LOAD, std::string("failed to load ") + path + ": not a GGUF or whisper.cpp model file (missing, or another format)");
     return set_error(KILN_ERR_NO_BACKEND, "no backend supports the requested kind on this device");
 }
 
@@ -185,6 +189,24 @@ kiln_status kiln_embed_media(kiln_context* c, const char* text, const kiln_media
     kiln_embed_options o = opts ? *opts : kiln_embed_options_default();
     kiln_embed_stats st{};
     kiln_status s = c->impl->embed(text, media, n_media, o, out, out_cap, st);
+    if (stats) *stats = st;
+    return s;
+}
+
+kiln_transcribe_options kiln_transcribe_options_default(void) {
+    kiln_transcribe_options o{}; o.language = nullptr; o.prompt = nullptr; o.max_tokens = 0; return o;
+}
+
+kiln_status kiln_transcribe(kiln_context* c, const kiln_media* audio, const kiln_transcribe_options* opts,
+                            kiln_token_cb cb, void* user, kiln_transcribe_stats* stats) {
+    kiln_transcribe_stats st{};
+    if (stats) *stats = st;
+    if (!c || !audio) return set_error(KILN_ERR_INVALID_ARG, "null handle/audio");
+    if (!audio->path && (!audio->data || audio->size == 0)) return set_error(KILN_ERR_INVALID_ARG, "audio without path or data");
+    kiln_transcribe_options o = opts ? *opts : kiln_transcribe_options_default();
+    RenderedPrompt r;
+    kiln_status s = c->model->render_transcribe(o, r);
+    if (s == KILN_OK) s = c->impl->transcribe(r, o, *audio, cb, user, st);
     if (stats) *stats = st;
     return s;
 }

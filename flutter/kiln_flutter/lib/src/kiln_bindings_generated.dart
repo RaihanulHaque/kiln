@@ -538,10 +538,11 @@ class KilnBindings {
   late final _kiln_projector_params_default = _kiln_projector_params_defaultPtr
       .asFunction<kiln_projector_params Function()>();
 
-  /// Loads the image / audio encoders that belong to an embedding model (its mmproj GGUF).
-  /// Call once after kiln_model_load, before embedding media; freed with the model. The
+  /// Loads the image / audio encoders that belong to a model (its mmproj GGUF): an embedding
+  /// model that takes media, or a speech model (see kiln_transcribe).
+  /// Call once after kiln_model_load, before using media; freed with the model. The
   /// encoders stay in memory, often more than the text model itself. params and out may be NULL.
-  /// Returns KILN_ERR_NOT_SUPPORTED on a model that is not an embedding model.
+  /// Returns KILN_ERR_NOT_SUPPORTED on a decision model.
   kiln_status kiln_model_load_projector(
     ffi.Pointer<kiln_model> m,
     ffi.Pointer<ffi.Char> path,
@@ -621,6 +622,69 @@ class KilnBindings {
           ffi.Pointer<ffi.Float>,
           int,
           ffi.Pointer<kiln_embed_stats>,
+        )
+      >();
+
+  kiln_transcribe_options kiln_transcribe_options_default() {
+    return _kiln_transcribe_options_default();
+  }
+
+  late final _kiln_transcribe_options_defaultPtr =
+      _lookup<ffi.NativeFunction<kiln_transcribe_options Function()>>(
+        'kiln_transcribe_options_default',
+      );
+  late final _kiln_transcribe_options_default =
+      _kiln_transcribe_options_defaultPtr
+          .asFunction<kiln_transcribe_options Function()>();
+
+  /// Writes down one audio clip (wav, mp3 or flac: a file path or the bytes of such a file) and
+  /// streams the words to cb, on KILN_CHANNEL_ANSWER, as they are produced. Always picks the most
+  /// likely word, so the same clip gives the same text. Blocking; kiln_cancel stops it.
+  /// Each call stands alone and clears the context: a conversation held in it is forgotten.
+  /// A clip with no speech in it gives an empty text and KILN_OK.
+  /// The clip and its text have to fit in the context (13 tokens per second of audio with
+  /// Qwen3-ASR; the default context of 4096 holds a few minutes), else KILN_ERR_CONTEXT_FULL:
+  /// cut long recordings into pieces. A clip that is too long is refused before any work; one
+  /// that just fits can still run out of room while the words are written, after part of the
+  /// text was streamed. opts, cb and stats may be NULL.
+  /// Whisper works on 30-second windows and takes any length; Parakeet takes the clip whole.
+  /// Returns KILN_ERR_NOT_SUPPORTED on a model that cannot transcribe, or a Qwen3-ASR model
+  /// whose projector is not loaded yet.
+  kiln_status kiln_transcribe(
+    ffi.Pointer<kiln_context> c,
+    ffi.Pointer<kiln_media> audio,
+    ffi.Pointer<kiln_transcribe_options> opts,
+    kiln_token_cb cb,
+    ffi.Pointer<ffi.Void> user,
+    ffi.Pointer<kiln_transcribe_stats> stats,
+  ) {
+    return kiln_status.fromValue(
+      _kiln_transcribe(c, audio, opts, cb, user, stats),
+    );
+  }
+
+  late final _kiln_transcribePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<kiln_context>,
+            ffi.Pointer<kiln_media>,
+            ffi.Pointer<kiln_transcribe_options>,
+            kiln_token_cb,
+            ffi.Pointer<ffi.Void>,
+            ffi.Pointer<kiln_transcribe_stats>,
+          )
+        >
+      >('kiln_transcribe');
+  late final _kiln_transcribe = _kiln_transcribePtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<kiln_context>,
+          ffi.Pointer<kiln_media>,
+          ffi.Pointer<kiln_transcribe_options>,
+          kiln_token_cb,
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<kiln_transcribe_stats>,
         )
       >();
 
@@ -731,7 +795,7 @@ final class kiln_device_info extends ffi.Struct {
   @ffi.Int32()
   external int cpu_cores;
 
-  /// cores outside the slowest cluster, = cpu_cores if unknown
+  /// cores kiln treats as fast: all but the little cores, = cpu_cores if unknown
   @ffi.Int32()
   external int cpu_big_cores;
 
@@ -848,6 +912,11 @@ final class kiln_model_info extends ffi.Struct {
   /// embedding models: length of the vector kiln_embed returns; else 0
   @ffi.Int32()
   external int n_embd;
+
+  /// writes down audio with kiln_transcribe and needs no projector (Whisper, Parakeet);
+  /// cannot generate text. Qwen3-ASR is a chat-style model plus a projector, so it reads false
+  @ffi.Bool()
+  external bool is_speech_model;
 }
 
 final class kiln_context extends ffi.Opaque {}
@@ -1172,6 +1241,72 @@ final class kiln_media extends ffi.Struct {
   external int size;
 }
 
+/// A speech model writes down what is said in an audio clip. Two kinds are supported:
+/// - Whisper and Parakeet files from whisper.cpp ("ggml-base-q5_1.bin", "ggml-parakeet-tdt-0.6b-v3-q8_0.bin").
+/// kiln_model_load takes them like a GGUF; the encoder is built in, so no projector is
+/// needed and kiln_model_info.is_speech_model is true. Create a context and call kiln_transcribe.
+/// - Qwen3-ASR, a small text model plus an audio encoder (its projector, an "mmproj" GGUF):
+/// load the model, load the projector with kiln_model_load_projector, then transcribe.
+/// Tested with Whisper base (q5_1), Parakeet TDT 0.6B v3 (q8_0) and Qwen3-ASR 0.6B (Q8_0).
+final class kiln_transcribe_options extends ffi.Struct {
+  /// the language spoken, e.g. "English", when known. NULL = the model works it out.
+  /// Parakeet does not take a hint; an English-only Whisper file refuses another language
+  external ffi.Pointer<ffi.Char> language;
+
+  /// Qwen3-ASR: replaces the instruction (NULL = "Transcribe audio to text").
+  /// Whisper: a text the words may follow on from (names, spellings). Parakeet: ignored
+  external ffi.Pointer<ffi.Char> prompt;
+
+  /// <= 0 = until the model stops or the context is full. Whisper: per 30-second window. Parakeet: ignored
+  @ffi.Int32()
+  external int max_tokens;
+}
+
+final class kiln_transcribe_stats extends ffi.Struct {
+  /// length of the clip
+  @ffi.Double()
+  external double audio_seconds;
+
+  /// tokens the clip took in the context
+  @ffi.Int32()
+  external int audio_tokens;
+
+  /// instruction and audio together
+  @ffi.Int32()
+  external int prompt_tokens;
+
+  @ffi.Int32()
+  external int generated_tokens;
+
+  /// audio encoder: sound to audio tokens
+  @ffi.Double()
+  external double encode_ms;
+
+  /// the model reading the instruction and the audio tokens
+  @ffi.Double()
+  external double prompt_ms;
+
+  /// the model writing the words
+  @ffi.Double()
+  external double gen_ms;
+
+  /// whole call, reading the file included. Faster than real time when ms < audio_seconds * 1000
+  @ffi.Double()
+  external double ms;
+
+  /// the language as the model named it, e.g. "English"; empty if it did not say
+  /// (Parakeet never does). Qwen3-ASR writes "None" when it hears no speech
+  @ffi.Array.multi([32])
+  external ffi.Array<ffi.Char> language;
+
+  /// the model finished by itself (false = cut by max_tokens, the context or the caller)
+  @ffi.Bool()
+  external bool stopped_by_eos;
+
+  @ffi.Bool()
+  external bool stopped_by_user;
+}
+
 /// ------------------------------------------------------------------ */
 /// /* Logging                                                             */
 /// /* ------------------------------------------------------------------
@@ -1209,7 +1344,7 @@ typedef kiln_log_cb = ffi.Pointer<ffi.NativeFunction<kiln_log_cbFunction>>;
 
 const int KILN_VERSION_MAJOR = 0;
 
-const int KILN_VERSION_MINOR = 3;
+const int KILN_VERSION_MINOR = 4;
 
 const int KILN_VERSION_PATCH = 0;
 

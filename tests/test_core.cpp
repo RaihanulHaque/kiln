@@ -1,8 +1,10 @@
 // Core behaviour tests. Needs real models: pass a directory containing the files that
-// scripts/fetch_models.sh downloads (three chat models, a decision model, two embedding models).
+// scripts/fetch_models.sh downloads (three chat models, a decision model, two embedding models;
+// with --media the image / audio encoders, with --speech a speech model).
 // Missing models are skipped, not failed. Runs on host and on Android via scripts/android-test.sh.
 #include "kiln/kiln.h"
 #include "../src/probe/fast_cores.h"      // header-only rules, tested with layouts of real chips
+#include "../src/backends/llamacpp/transcript_filter.h"   // header-only, tested with the pieces a speech model writes
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -83,6 +85,44 @@ static void test_core_selection() {
     CHECK(default_thread_count(4, 4, true) == 4, "4-core threads");
     CHECK(default_thread_count(10, 10, true) == 8, "10 fast cores");
     CHECK(default_thread_count(0, 0, false) == 4, "unknown");
+}
+
+// What a speech model writes, cut into pieces the way tokens arrive. No model needed.
+static void test_transcript_filter() {
+    SECTION("transcript filter");
+    struct Out {
+        std::string text; int calls = 0, stop_after = 0;
+        static bool cb(kiln_channel ch, const char* p, int32_t, void* u) {
+            auto* o = static_cast<Out*>(u);
+            if (ch != KILN_CHANNEL_ANSWER) return false;
+            o->text += p; ++o->calls;
+            return !(o->stop_after > 0 && o->calls >= o->stop_after);
+        }
+    };
+    auto run = [](const std::vector<const char*>& pieces, std::string* language) {
+        Out o; kiln::TranscriptFilter f(Out::cb, &o);
+        for (const char* p : pieces) f.feed(p);
+        f.finish();
+        if (language) *language = f.language();
+        return o.text;
+    };
+    std::string lang;
+    // Qwen3-ASR: "language English<asr_text>...", the tag is one token
+    CHECK(run({"language", " English", "<asr_text>", "The", " train", " leaves."}, &lang) == "The train leaves." && lang == "English", "got '%s' / '%s'", run({"language", " English", "<asr_text>", "The", " train", " leaves."}, nullptr).c_str(), lang.c_str());
+    // the same header cut at awkward places, and a space before the first word
+    CHECK(run({"lang", "uage Chi", "nese<asr", "_text> ", "\xe4\xbd\xa0", "\xe5\xa5\xbd"}, &lang) == "\xe4\xbd\xa0\xe5\xa5\xbd" && lang == "Chinese", "split header: '%s'", lang.c_str());
+    // silence: a header and nothing after it
+    CHECK(run({"language None<asr_text>"}, &lang).empty() && lang == "None", "empty transcript: '%s'", lang.c_str());
+    // a model that writes the words directly; nothing may be held back or lost
+    CHECK(run({"The", " train", " leaves."}, &lang) == "The train leaves." && lang.empty(), "plain text changed");
+    CHECK(run({"language", " is a hard thing to learn"}, &lang) == "language is a hard thing to learn" && lang.empty(), "text that starts like a header was lost");
+    CHECK(run({"lang"}, &lang) == "lang", "short text held back for ever");
+    // the tag without a language in front
+    CHECK(run({"<asr_text>", "Hello."}, &lang) == "Hello." && lang.empty(), "bare tag");
+    // the caller's callback can stop the stream
+    Out o; o.stop_after = 1;
+    kiln::TranscriptFilter f(Out::cb, &o);
+    CHECK(f.feed("language English<asr_text>One") == false && f.stopped() && o.text == "One", "stop from the callback: '%s'", o.text.c_str());
 }
 
 static void test_bad_loads(const std::string& dir) {
@@ -241,7 +281,10 @@ static void test_model(const std::string& path, const char* label, bool expect_t
         float p[2]; kiln_decision_answer a;
         kiln_decision_question q = {"q", KILN_QUESTION_NOUL, "Is this a question?", nullptr, 0};
         CHECK(!mi.is_decision_model && kiln_decide(c, "state", &q, p, 2, &a) == KILN_ERR_NOT_SUPPORTED, "kiln_decide on a chat model");
-        CHECK(kiln_model_load_projector(m, "/nonexistent/mmproj.gguf", nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "projector on a chat model");
+        // a chat model may load a projector (speech models are chat models with an audio encoder), but has none here
+        CHECK(kiln_model_load_projector(m, "/nonexistent/mmproj.gguf", nullptr, nullptr) == KILN_ERR_MODEL_LOAD, "missing projector accepted");
+        kiln_media clip = {"/nonexistent.wav", nullptr, 0};
+        CHECK(kiln_transcribe(c, &clip, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "transcribe without a projector");
         float v[8];
         CHECK(!mi.is_embedding_model && mi.n_embd == 0 && kiln_embed(c, "text", nullptr, v, 8, nullptr) == KILN_ERR_NOT_SUPPORTED, "kiln_embed on a chat model");
     }
@@ -331,6 +374,9 @@ static void test_decision(const std::string& path) {
     CHECK(kiln_decide(c, nullptr, &refund, p, 8, &a) == KILN_OK, "null state: %s", kiln_last_error());
     kiln_chat_message msg[] = { {"user", "hi"} }; kiln_gen_stats st;
     CHECK(kiln_chat(c, msg, 1, nullptr, nullptr, nullptr, nullptr, &st) == KILN_ERR_NOT_SUPPORTED, "chat on a decision model");
+    CHECK(kiln_model_load_projector(m, "/nonexistent/mmproj.gguf", nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "projector on a decision model");
+    kiln_media clip = {"/nonexistent.wav", nullptr, 0};
+    CHECK(kiln_transcribe(c, &clip, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "transcribe on a decision model");
 
     kiln_context_free(c);
     kiln_model_free(m);
@@ -439,6 +485,9 @@ static void test_embedding(const std::string& path, const char* label, bool expe
     float p[2]; kiln_decision_answer da;
     kiln_decision_question dq = {"q", KILN_QUESTION_NOUL, "Is this a question?", nullptr, 0};
     CHECK(kiln_decide(c, "state", &dq, p, 2, &da) == KILN_ERR_NOT_SUPPORTED, "decide on an embedding model");
+
+    kiln_media clip = {"/nonexistent.wav", nullptr, 0};
+    CHECK(kiln_transcribe(c, &clip, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "transcribe on an embedding model");
 
     // media without a projector; kiln_embed_media with no media is kiln_embed
     kiln_media none = {"/nonexistent.png", nullptr, 0};
@@ -584,11 +633,265 @@ static void test_embedding_media(const std::string& path, const std::string& mmp
     kiln_model_free(m);
 }
 
+// Lower-case letters and digits only, words separated by one space: two transcripts that differ
+// in capitals or punctuation compare equal. Processors round differently, and with a speech
+// model that can turn "Walk" into "walk" (seen between 6 and 8 threads on one machine).
+static std::string words_only(const std::string& s) {
+    std::string out;
+    for (unsigned char ch : s) {
+        if (isalnum(ch)) out += (char)tolower(ch);
+        else if (!out.empty() && out.back() != ' ') out += ' ';
+    }
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
+// A wav file in memory: a 440 Hz tone, 16 kHz, 16-bit, one channel.
+static std::vector<uint8_t> tone_wav(int seconds) {
+    const uint32_t rate = 16000, n = rate * (uint32_t)seconds, bytes = n * 2;
+    std::vector<uint8_t> w(44 + bytes);
+    auto u32 = [&](size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) w[at + i] = (uint8_t)(v >> (8 * i)); };
+    auto u16 = [&](size_t at, uint16_t v) { w[at] = (uint8_t)v; w[at + 1] = (uint8_t)(v >> 8); };
+    memcpy(&w[0], "RIFF", 4); u32(4, 36 + bytes); memcpy(&w[8], "WAVEfmt ", 8);
+    u32(16, 16); u16(20, 1); u16(22, 1); u32(24, rate); u32(28, rate * 2); u16(32, 2); u16(34, 16);
+    memcpy(&w[36], "data", 4); u32(40, bytes);
+    for (uint32_t i = 0; i < n; ++i) u16(44 + i * 2, (uint16_t)(int16_t)(8000.0 * sin(2.0 * 3.14159265358979 * 440.0 * i / rate)));
+    return w;
+}
+
+// A speech model: audio in, the spoken words out. The expected texts are what llama.cpp's
+// llama-server returns from /v1/audio/transcriptions for the same files (same commit, CPU).
+static void test_transcribe(const std::string& path, const std::string& mmproj, const std::string& media) {
+    SECTION("Qwen3-ASR 0.6B (speech to text)");
+    if (!exists(path) || !exists(mmproj)) { fprintf(stderr, "  SKIP (missing %s)\n", exists(path) ? mmproj.c_str() : path.c_str()); return; }
+    if (!exists(media + "/speech_train.wav")) { fprintf(stderr, "  SKIP (missing %s/speech_train.wav)\n", media.c_str()); return; }
+    kiln_model* m = nullptr;
+    kiln_model_params mp = kiln_model_params_default();
+    CHECK(kiln_model_load(path.c_str(), &mp, &m) == KILN_OK, "%s", kiln_last_error());
+    if (!m) return;
+    kiln_context* c = nullptr;
+    CHECK(kiln_context_create(m, nullptr, &c) == KILN_OK, "%s", kiln_last_error());
+    if (!c) { kiln_model_free(m); return; }
+
+    const std::string train = media + "/speech_train.wav", recipe = media + "/speech_recipe.wav";
+    kiln_media clip = {train.c_str(), nullptr, 0};
+    CHECK(kiln_transcribe(c, &clip, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "transcribe before the projector is loaded");
+    kiln_projector_info pi;
+    CHECK(kiln_model_load_projector(m, mmproj.c_str(), nullptr, &pi) == KILN_OK, "%s", kiln_last_error());
+    CHECK(pi.supports_audio && !pi.supports_images, "images=%d audio=%d", pi.supports_images, pi.supports_audio);
+
+    auto run = [&](const kiln_media& item, const kiln_transcribe_options* o, kiln_transcribe_stats* st, kiln_status expect = KILN_OK) {
+        Capture cap;
+        const kiln_status s = kiln_transcribe(c, &item, o, Capture::cb, &cap, st);
+        CHECK(s == expect, "status %d: %s", (int)s, kiln_last_error());
+        CHECK(cap.reasoning.empty(), "a transcript went to the reasoning channel");
+        return cap.answer;
+    };
+
+    // the words, the language, and nothing of the model's own header
+    const char* kTrain = "the train to london leaves at nine in the morning";
+    kiln_transcribe_stats st;
+    const std::string text = run(clip, nullptr, &st);
+    CHECK(words_only(text) == kTrain, "got '%s'", text.c_str());
+    CHECK(text.find("<asr_text>") == std::string::npos && text.compare(0, 8, "language") != 0 && !text.empty() && text[0] != ' ', "header left in '%s'", text.c_str());
+    CHECK(strcmp(st.language, "English") == 0, "language '%s'", st.language);
+    CHECK(st.audio_seconds > 3.0 && st.audio_seconds < 3.3, "audio_seconds=%.2f", st.audio_seconds);
+    CHECK(st.audio_tokens > 20 && st.prompt_tokens > st.audio_tokens && st.generated_tokens > 5, "tokens: audio=%d prompt=%d generated=%d", st.audio_tokens, st.prompt_tokens, st.generated_tokens);
+    CHECK(st.encode_ms > 0 && st.prompt_ms > 0 && st.gen_ms > 0 && st.ms >= st.encode_ms + st.prompt_ms + st.gen_ms, "ms: encode=%.0f prompt=%.0f gen=%.0f all=%.0f", st.encode_ms, st.prompt_ms, st.gen_ms, st.ms);
+    CHECK(st.stopped_by_eos && !st.stopped_by_user, "eos=%d user=%d", st.stopped_by_eos, st.stopped_by_user);
+    fprintf(stderr, "  %.1f s of audio in %.0f ms (encoder %.0f, prompt %.0f, %d tok in %.0f)\n", st.audio_seconds, st.ms, st.encode_ms, st.prompt_ms, st.generated_tokens, st.gen_ms);
+
+    // the same clip again gives the same text, and so does a second clip in between
+    kiln_media clip2 = {recipe.c_str(), nullptr, 0};
+    const std::string text2 = run(clip2, nullptr, nullptr);
+    CHECK(words_only(text2) == "please add two cups of flour and one egg to the bowl", "got '%s'", text2.c_str());
+    CHECK(run(clip, nullptr, nullptr) == text, "the same clip gave a different text");
+
+    // the bytes of the file instead of its path
+    {
+        std::ifstream f(train, std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        kiln_media mem = {nullptr, bytes.data(), bytes.size()};
+        CHECK(run(mem, nullptr, nullptr) == text, "bytes and path gave different texts");
+    }
+
+    // options: the language named up front, a word limit, and stopping from the callback
+    kiln_transcribe_options o = kiln_transcribe_options_default();
+    o.language = "English";
+    CHECK(words_only(run(clip, &o, &st)) == kTrain && strcmp(st.language, "English") == 0, "with a language hint");
+    o = kiln_transcribe_options_default(); o.max_tokens = 6;      // the header takes 3 of them
+    const std::string cut = run(clip, &o, &st);
+    CHECK(st.generated_tokens == 6 && !st.stopped_by_eos && !cut.empty() && cut.size() < text.size(), "max_tokens: %d tok, '%s'", st.generated_tokens, cut.c_str());
+    {
+        Capture cap; cap.stop_after = 2;
+        CHECK(kiln_transcribe(c, &clip, nullptr, Capture::cb, &cap, &st) == KILN_OK && st.stopped_by_user && cap.pieces == 2, "stop from the callback: pieces=%d user=%d", cap.pieces, st.stopped_by_user);
+    }
+    CHECK(kiln_transcribe(c, &clip, nullptr, nullptr, nullptr, &st) == KILN_OK && st.generated_tokens > 5, "no callback: %s", kiln_last_error());
+
+    // no speech: an empty text, not an error and not invented words
+    {
+        const std::string tone = media + "/tone.wav";
+        kiln_media item = {tone.c_str(), nullptr, 0};
+        const std::string none = run(item, nullptr, &st);
+        CHECK(none.empty() && st.stopped_by_eos, "a tone was written down as '%s'", none.c_str());
+    }
+
+    // bad input
+    {
+        const std::string png = media + "/invoice.png";
+        kiln_media image = {png.c_str(), nullptr, 0}, missing = {"/nonexistent/clip.wav", nullptr, 0}, empty = {nullptr, nullptr, 0};
+        CHECK(kiln_transcribe(c, &image, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "an image accepted as speech");
+        CHECK(kiln_transcribe(c, &missing, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "missing file accepted");
+        CHECK(kiln_transcribe(c, &empty, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "clip without path or data accepted");
+        CHECK(kiln_transcribe(c, nullptr, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "null clip accepted");
+        float v[4];
+        CHECK(kiln_embed(c, "text", nullptr, v, 4, nullptr) == KILN_ERR_NOT_SUPPORTED, "kiln_embed on a speech model");
+    }
+
+    // a transcription leaves nothing behind: chat on the same context works, and the other way round
+    {
+        kiln_chat_message msg[] = { {"user", "Say hello."} };
+        kiln_sampling_params sp = greedy(8);
+        kiln_gen_stats gs;
+        CHECK(kiln_chat(c, msg, 1, nullptr, &sp, nullptr, nullptr, &gs) == KILN_OK && gs.cached_tokens == 0 && gs.generated_tokens > 0, "chat after transcribe: cached=%d generated=%d %s", gs.cached_tokens, gs.generated_tokens, kiln_last_error());
+        CHECK(run(clip, nullptr, nullptr) == text, "transcribe after chat gave a different text");
+        CHECK(kiln_chat(c, msg, 1, nullptr, &sp, nullptr, nullptr, &gs) == KILN_OK && gs.cached_tokens == 0, "chat reused a cache that the transcription had cleared: cached=%d", gs.cached_tokens);
+    }
+    kiln_context_free(c);
+
+    // A clip that does not fit in the context is refused, not cut. llama.cpp rounds a small
+    // context up to 256 tokens, so the clip has to be longer than that: 40 s is about 500.
+    // The short clip still works there, in batches smaller than its audio (n_batch follows n_ctx).
+    kiln_context_params cp = kiln_context_params_default(); cp.n_ctx = 32;
+    CHECK(kiln_context_create(m, &cp, &c) == KILN_OK, "%s", kiln_last_error());
+    if (c) {
+        const std::vector<uint8_t> wav = tone_wav(40);
+        kiln_media big = {nullptr, wav.data(), wav.size()};
+        Capture cap;
+        CHECK(kiln_transcribe(c, &big, nullptr, Capture::cb, &cap, &st) == KILN_ERR_CONTEXT_FULL && st.prompt_tokens > 256 && cap.pieces == 0,
+              "clip larger than the context: prompt=%d pieces=%d", st.prompt_tokens, cap.pieces);
+        CHECK(run(clip, nullptr, nullptr) == text, "small context gave a different text");
+        kiln_context_free(c);
+    }
+    kiln_model_free(m);
+}
+
+
+// Whisper and Parakeet through the whisper.cpp backend: one file, encoder built in, no
+// projector. The expected words are what whisper-cli / parakeet-cli print for the same files
+// (whisper.cpp 0c7be69, M4 Pro). `expect_lang` is what the model reports ("" = it does not).
+static void test_speech_builtin(const std::string& path, const char* label, const char* arch, const char* expect_lang, const std::string& media) {
+    SECTION(label);
+    if (!exists(path)) { fprintf(stderr, "  SKIP (missing %s)\n", path.c_str()); return; }
+    if (!exists(media + "/speech_train.wav")) { fprintf(stderr, "  SKIP (missing %s/speech_train.wav)\n", media.c_str()); return; }
+    kiln_model* m = nullptr;
+    kiln_model_params mp = kiln_model_params_default();
+    CHECK(kiln_model_load(path.c_str(), &mp, &m) == KILN_OK, "%s", kiln_last_error());
+    if (!m) return;
+    kiln_model_info mi;
+    CHECK(kiln_model_get_info(m, &mi) == KILN_OK && mi.is_speech_model && !mi.is_decision_model && !mi.is_embedding_model, "info flags");
+    CHECK(strcmp(mi.arch, arch) == 0 && strncmp(mi.backend_name, "whisper.cpp/", 12) == 0 && mi.model_bytes > 1000000 && mi.n_vocab > 1000,
+          "arch=%s backend=%s bytes=%llu vocab=%d", mi.arch, mi.backend_name, (unsigned long long)mi.model_bytes, mi.n_vocab);
+    fprintf(stderr, "  arch=%s quant=%s backend=%s vocab=%d\n", mi.arch, mi.quant, mi.backend_name, mi.n_vocab);
+    kiln_projector_info pi;
+    CHECK(kiln_model_load_projector(m, (media + "/invoice.png").c_str(), nullptr, &pi) == KILN_ERR_NOT_SUPPORTED, "a projector accepted by a built-in speech model");
+
+    kiln_context* c = nullptr;
+    CHECK(kiln_context_create(m, nullptr, &c) == KILN_OK, "%s", kiln_last_error());
+    if (!c) { kiln_model_free(m); return; }
+    const std::string train = media + "/speech_train.wav", recipe = media + "/speech_recipe.wav";
+    kiln_media clip = {train.c_str(), nullptr, 0}, clip2 = {recipe.c_str(), nullptr, 0};
+
+    auto run = [&](const kiln_media& item, const kiln_transcribe_options* o, kiln_transcribe_stats* st, kiln_status expect = KILN_OK) {
+        Capture cap;
+        const kiln_status s = kiln_transcribe(c, &item, o, Capture::cb, &cap, st);
+        CHECK(s == expect, "status %d: %s", (int)s, kiln_last_error());
+        CHECK(cap.reasoning.empty(), "a transcript went to the reasoning channel");
+        return cap.answer;
+    };
+
+    // both models write "9" and "2" as digits; words_only keeps digits, so compare both spellings
+    auto same = [](const std::string& got, const char* words, const char* digits) { const std::string w = words_only(got); return w == words || w == digits; };
+    kiln_transcribe_stats st;
+    const std::string text = run(clip, nullptr, &st);
+    CHECK(same(text, "the train to london leaves at nine in the morning", "the train to london leaves at 9 in the morning"), "got '%s'", text.c_str());
+    CHECK(!text.empty() && text[0] != ' ', "leading space in '%s'", text.c_str());
+    CHECK(strcmp(st.language, expect_lang) == 0, "language '%s', expected '%s'", st.language, expect_lang);
+    CHECK(st.audio_seconds > 3.0 && st.audio_seconds < 3.3, "audio_seconds=%.2f", st.audio_seconds);
+    CHECK(st.audio_tokens > 20 && st.prompt_tokens == st.audio_tokens && st.generated_tokens > 5, "tokens: audio=%d prompt=%d generated=%d", st.audio_tokens, st.prompt_tokens, st.generated_tokens);
+    CHECK(st.encode_ms > 0 && st.gen_ms > 0 && st.ms >= st.encode_ms, "ms: encode=%.0f gen=%.0f all=%.0f", st.encode_ms, st.gen_ms, st.ms);
+    CHECK(st.stopped_by_eos && !st.stopped_by_user, "eos=%d user=%d", st.stopped_by_eos, st.stopped_by_user);
+    fprintf(stderr, "  %.1f s of audio in %.0f ms (encoder %.0f, %d tok)\n", st.audio_seconds, st.ms, st.encode_ms, st.generated_tokens);
+
+    const std::string text2 = run(clip2, nullptr, nullptr);
+    CHECK(same(text2, "please add two cups of flour and one egg to the bowl", "please add 2 cups of flour and 1 egg to the bowl"), "got '%s'", text2.c_str());
+    CHECK(run(clip, nullptr, nullptr) == text, "the same clip gave a different text");
+    {
+        std::ifstream f(train, std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        kiln_media mem = {nullptr, bytes.data(), bytes.size()};
+        CHECK(run(mem, nullptr, nullptr) == text, "bytes and path gave different texts");
+    }
+    // a language hint: Whisper takes it (and refuses one it does not know); Parakeet ignores it
+    kiln_transcribe_options o = kiln_transcribe_options_default();
+    o.language = "English";
+    CHECK(same(run(clip, &o, &st), "the train to london leaves at nine in the morning", "the train to london leaves at 9 in the morning"), "with a language hint");
+    if (strcmp(arch, "whisper") == 0) {
+        o.language = "Klingon";
+        CHECK(kiln_transcribe(c, &clip, &o, nullptr, nullptr, &st) == KILN_ERR_INVALID_ARG, "unknown language accepted");
+    }
+    {   // stop from the callback: no error, stopped_by_user set
+        Capture cap; cap.stop_after = 1;
+        CHECK(kiln_transcribe(c, &clip, nullptr, Capture::cb, &cap, &st) == KILN_OK && st.stopped_by_user && !st.stopped_by_eos && cap.pieces == 1,
+              "stop from the callback: pieces=%d user=%d", cap.pieces, st.stopped_by_user);
+    }
+    CHECK(kiln_transcribe(c, &clip, nullptr, nullptr, nullptr, &st) == KILN_OK && st.generated_tokens > 5, "no callback: %s", kiln_last_error());
+
+    // bad input and the calls these models do not take
+    {
+        const std::string png = media + "/invoice.png";
+        kiln_media image = {png.c_str(), nullptr, 0}, missing = {"/nonexistent/clip.wav", nullptr, 0}, empty = {nullptr, nullptr, 0};
+        CHECK(kiln_transcribe(c, &image, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "an image accepted as speech");
+        CHECK(kiln_transcribe(c, &missing, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "missing file accepted");
+        CHECK(kiln_transcribe(c, &empty, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "clip without path or data accepted");
+        float v[4];
+        CHECK(kiln_embed(c, "text", nullptr, v, 4, nullptr) == KILN_ERR_NOT_SUPPORTED, "kiln_embed on a speech model");
+        kiln_chat_message msg[] = { {"user", "Say hello."} };
+        kiln_sampling_params sp = greedy(8);
+        CHECK(kiln_chat(c, msg, 1, nullptr, &sp, nullptr, nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "kiln_chat on a speech model");
+        kiln_decision_question q = {"yes", KILN_QUESTION_NOUL, "Is it?", nullptr, 0};
+        float probs[2]; kiln_decision_answer a;
+        CHECK(kiln_decide(c, "state", &q, probs, 2, &a) == KILN_ERR_NOT_SUPPORTED, "kiln_decide on a speech model");
+    }
+    // no speech: Parakeet writes nothing; Whisper is known to make words up on pure tones, so
+    // for it the check is only that the call succeeds
+    {
+        const std::string tone = media + "/tone.wav";
+        kiln_media item = {tone.c_str(), nullptr, 0};
+        const std::string none = run(item, nullptr, &st);
+        if (strcmp(arch, "parakeet") == 0) CHECK(none.empty(), "a tone was written down as '%s'", none.c_str());
+        else if (!none.empty()) fprintf(stderr, "  note: Whisper wrote '%s' for a pure tone\n", none.c_str());
+    }
+    // a second context on the same model works too (they take turns inside the engine)
+    {
+        kiln_context* c2 = nullptr;
+        CHECK(kiln_context_create(m, nullptr, &c2) == KILN_OK, "%s", kiln_last_error());
+        if (c2) {
+            Capture cap;
+            CHECK(kiln_transcribe(c2, &clip2, nullptr, Capture::cb, &cap, nullptr) == KILN_OK && cap.answer == text2, "second context: '%s'", cap.answer.c_str());
+            kiln_context_free(c2);
+        }
+    }
+    kiln_context_free(c);
+    kiln_model_free(m);
+}
+
 int main(int argc, char** argv) {
     std::string dir = argc > 1 ? argv[1] : "models";
     kiln_set_log_level(KILN_LOG_ERROR);
     test_probe();
     test_core_selection();
+    test_transcript_filter();
     test_bad_loads(dir);
     //                                                       label           thinking
     test_model(dir + "/LiquidAI_LFM2.5-350M_Q4_K_M.gguf", "LFM2.5-350M",  false);
@@ -609,6 +912,9 @@ int main(int argc, char** argv) {
     const float jina_media_ref[4][3] = {{0.040660f, -0.008720f, 0.047007f}, {0.042589f, -0.011429f, 0.048737f}, {0, 0, 0}, {0, 0, 0}};
     test_embedding_media(dir + "/jina-embeddings-v5-omni-nano-retrieval-Q4_K_M.gguf", dir + "/jina-embeddings-v5-omni-nano-retrieval-vision-mmproj-F16.gguf", media,
                          "jina-embeddings-v5-omni-nano (text and images)", false, jina_media_ref);
+    test_transcribe(dir + "/Qwen3-ASR-0.6B-Q8_0.gguf", dir + "/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf", media);
+    test_speech_builtin(dir + "/ggml-base-q5_1.bin", "Whisper base q5_1 (speech to text, whisper.cpp)", "whisper", "English", media);
+    test_speech_builtin(dir + "/ggml-parakeet-tdt-0.6b-v3-q8_0.bin", "Parakeet TDT 0.6B v3 q8_0 (speech to text, whisper.cpp)", "parakeet", "", media);
     fprintf(stderr, "\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

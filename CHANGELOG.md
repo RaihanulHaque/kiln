@@ -1,5 +1,102 @@
 # Changelog
 
+## 0.4.0
+
+Speech to text, with three model families: Whisper, Parakeet and Qwen3-ASR. The C ABI changed:
+two new functions (`kiln_transcribe`, `kiln_transcribe_options_default`), two new structs
+(`kiln_transcribe_options`, `kiln_transcribe_stats`), and one new field at the end of
+`kiln_model_info` (`is_speech_model`), so that struct grew: code built against 0.3.x headers
+must be rebuilt. The llama.cpp submodule is unchanged (781dbc5ac); whisper.cpp (0c7be696) is a
+new submodule.
+
+- **A second engine, whisper.cpp, runs Whisper and Parakeet.** `kiln_model_load` takes their
+  files (`ggml-base-q5_1.bin`, `ggml-parakeet-tdt-0.6b-v3-q8_0.bin`: whisper.cpp's own format,
+  not GGUF) like any model; the audio encoder is built in, so no projector, and
+  `kiln_model_info.is_speech_model` reads true. Everything but `kiln_transcribe` answers
+  `KILN_ERR_NOT_SUPPORTED` on them. whisper.cpp pins the same ggml as llama.cpp (0.26.0) and
+  builds against the copy already in libkiln, so there is one ggml. The backend is
+  `src/backends/whispercpp/`; backends now say which file formats they read (`Backend::can_load`),
+  so a file in another format fails with one clear message instead of one try per backend.
+  Parakeet is the most accurate of the three on English and the fastest (`docs/ASR_COMPARISON.md`);
+  Whisper base is the smallest file (60 MB) and knows 99 languages. Both always take the most
+  likely word. Whisper reports the language it heard; Parakeet does not. Whisper reads a
+  language hint and refuses one it does not know (`KILN_ERR_INVALID_ARG`); Parakeet ignores it,
+  as it ignores `prompt` and `max_tokens`. Whisper works in 30-second windows, so a long
+  recording needs no cutting; Parakeet takes the clip whole.
+
+- **`kiln_transcribe` writes down what is said in an audio clip.** A speech model is two
+  files: a small text model and an audio encoder (its `mmproj`). Load the model, load the
+  encoder with `kiln_model_load_projector`, and call `kiln_transcribe` with a wav, mp3 or flac
+  file (a path, or the bytes). The words are streamed to the same callback `kiln_chat` uses.
+  `kiln_transcribe_stats` gives the length of the clip, the time in the encoder, in reading
+  and in writing, and the language the model heard. `kiln_transcribe_options` takes a language
+  hint, another instruction, and a token limit.
+- Tested with **Qwen3-ASR 0.6B** (Q8_0, 805 MB, with its 214 MB encoder; Apache 2.0). On the
+  Linux desktop (Ryzen 5 8500G, CPU, 8 threads) a 3-second clip takes 0.6 to 0.8 s and a
+  17-second clip 3.0 to 3.4 s, about 5 times faster than real time, with 1.5 GB of memory in
+  use. The desktop was in normal use during these runs; they are not a quiet-machine
+  benchmark. A clip with no speech in it gives an empty text.
+- The text is what llama.cpp's `llama-server` returns from `/v1/audio/transcriptions` for the
+  same file, when both run with the same number of threads (compared on four clips at 6
+  threads and on the 17-second one at 8; the token counts of the prompts match too). Between 6 and 8 threads one headline in that clip
+  changes from "Men Walk on Moon" to "Men walk on moon", in the server and in kiln alike:
+  processors round differently with a different split of the work, and two near-equal
+  spellings can swap. The words do not change.
+- Qwen3-ASR starts its answer with `language English<asr_text>`. kiln removes that header and
+  reports the language in the stats.
+- `kiln_model_load_projector` now also works on a chat-style model (before: embedding models
+  only). It still returns `KILN_ERR_NOT_SUPPORTED` on a decision model.
+- A transcription clears the context: a conversation held in it is forgotten, and the audio
+  leaves nothing behind for the next `kiln_chat`.
+- Fix: a context smaller than 512 tokens kept a batch size of 512 where llama.cpp had lowered
+  it. Harmless for chat, where the prompt has to fit in the context anyway; it would have
+  aborted on audio.
+- `kiln-cli`: `--transcribe clip.wav` (repeatable) and `--language`. `kiln-bench`: a chat-style
+  model given `--mmproj` and `--media` is benchmarked as a speech model (series
+  `transcribe-<file>`); `scripts/bench.sh` does that for Qwen3-ASR.
+- `scripts/fetch_models.sh --speech` downloads the speech model and its encoder (1.0 GB).
+- Internal: the projector code moved from `embedding.h` to `media.h`, shared by embeddings and
+  speech; the sampling loop of `generate` is now a method that `transcribe` also uses.
+
+Verified with `kiln-tests` on 2026-10-13: 476 checks on macOS (M4 Pro, Metal; whisper.cpp uses
+Metal there too) and on Android (Pixel 8, CPU); 398 on Linux x86_64 (Ryzen 5 8500G, CPU)
+before the whisper.cpp backend and its 78 checks were added. Without the speech models the
+count is 349 (334 before, plus 8 for the transcript header and 7 for the new error paths).
+
+Speeds for the 3.1-second test clip, whole call including reading the file:
+
+| model | M4 Pro (Metal) | Pixel 8 (CPU) |
+|---|---|---|
+| Parakeet TDT 0.6B v3, q8_0 (669 MB) | 53 to 68 ms | 0.24 to 0.37 s |
+| Whisper base, q5_1 (60 MB) | 84 ms | 3.0 s |
+| Qwen3-ASR 0.6B, Q8_0 (805 MB + 214 MB encoder) | 130 ms | 3.8 s, slower than the clip |
+
+Two things were needed to get there on the phone. The engine's threads inherit the calling
+thread's core set, so the call runs under `AffinityScope` (as the mtmd encoders do): pinned,
+Parakeet's encoder is a steady 0.3 s; unpinned it swung between 0.4 and 7 s. And the Android
+build now uses OpenMP (the NDK's `libomp.a`, linked statically): without it ggml starts fresh
+threads for every graph, and Parakeet's decoder computes dozens of tiny graphs per clip,
+which took 1 to 13 s on the Pixel 8 with no two runs alike; with OpenMP's persistent workers
+the decoder takes 25 to 35 ms. whisper.cpp's own `parakeet-cli` and `whisper-cli`, built for
+Android without OpenMP, showed the same swings, so this is not a kiln bug but a build choice
+that matters on phones. Chat is unchanged by the switch: LFM2.5 350M, three runs alternating the two builds on
+the same phone, 97.0 / 89.5 / 85.1 tok/s without OpenMP and 96.5 / 88.5 / 85.7 with
+(`-DKILN_ANDROID_OPENMP=OFF` builds the old way). Qwen3-ASR spends 2.5 s of its 3.8 s in the audio encoder. So on a Pixel 8: Parakeet
+keeps up with the speaker with room to spare, Whisper base only just, Qwen3-ASR does not.
+
+Sustained use (`KILN_BENCH_ONLY=ggml scripts/bench.sh`, bursts of 5 calls back to back,
+`docs/bench/pixel8_ggml-*`): Parakeet averaged 0.28 s per 3-second clip for the first three
+bursts and 0.8 to 1.5 s once the phone reached 82 °C; Whisper base 3.5 to 7.5 s throughout.
+
+The Flutter plugin has `transcribe` (see its CHANGELOG), run on the Pixel 8.
+
+Not run: iOS. Linux x86 has not been re-run since the whisper.cpp backend was added (Linux
+arm64 in Docker: see the README's status table).
+
+Known gaps: one clip per call; files or file bytes only (no raw microphone samples, so an app
+records to a wav first); nothing is streamed in while the person is still speaking; a
+recording longer than the context has to be cut by the app; only the Q8_0 file was tried.
+
 ## 0.3.1
 
 No ABI change: code built against 0.3.0 headers keeps working.

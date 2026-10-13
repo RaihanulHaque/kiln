@@ -262,6 +262,61 @@ audio with one projector. Vectors from different models cannot be compared with 
 kiln stores nothing: it returns the vector and the app keeps it. This was run on Linux x86,
 on a Mac (Metal) and on a Pixel 8, and from Flutter on the Pixel 8.
 
+## Speech models
+
+A speech model writes down what someone says. The usual name is ASR, automatic speech
+recognition. Example: the app records "The train to London leaves at nine in the morning" and
+gets that sentence back as text, which it can then show, search, or hand to a chat model.
+
+kiln runs two kinds of speech model.
+
+**Whisper and Parakeet** are complete speech models: an encoder that turns the sound into
+vectors and a decoder of their own that turns the vectors into words. llama.cpp cannot run
+such a decoder, so these go through a second engine, whisper.cpp, which is built on the same
+maths library (ggml). Their files are one `.bin` each, the encoder included, and
+`kiln_model_load` takes them like a GGUF. Parakeet (NVIDIA, 600 million weights) made the
+fewest mistakes of the small English models in our comparison and is the fastest; Whisper
+(OpenAI) comes in sizes from 39 million weights up, knows 99 languages, and always works on
+30-second windows, so a 3-second clip costs about as much as a 30-second one.
+
+**Qwen3-ASR** is built from two parts that were already here. The **audio encoder** (the
+projector file) turns the sound into a row of vectors, 13 for each started second. The
+**text model** reads those vectors as if they were words, and then writes the sentence one
+token at a time, exactly as a chat model writes an answer. So a transcription is a chat turn
+where the question is fixed ("Transcribe audio to text") and an audio clip is attached to it.
+
+For Qwen3-ASR the cost has three parts. For the 3-second clip above on the desktop CPU:
+
+| step | what happens | time |
+|---|---|---|
+| encode | the sound becomes 52 vectors | 0.14 s |
+| read | the model takes in the instruction and the vectors (67 tokens) | 0.18 s |
+| write | the model writes 14 tokens | 0.35 s |
+
+Writing is the largest part, and it grows with how much was said, not with how long the clip
+is. A 17-second clip with 88 tokens of text took 3.3 s, of which 2.1 s was writing.
+
+The number to watch is **how many times faster than real time** it runs. 17 seconds of sound
+in 3.3 s is about 5 times faster. Below 1 the app falls behind the speaker. On a Pixel 8 the
+3-second clip takes 0.3 s with Parakeet, 3.0 s with Whisper base, and 3.8 s with
+Qwen3-ASR, whose encoder alone takes 2.5 s there: on that phone Qwen3-ASR falls behind the
+speaker and the other two do not.
+
+Three things to know:
+
+- **They always take the most likely word.** The same clip gives the same text every time on
+  the same machine. Across machines, or with a different number of threads, a capital letter
+  can differ ("Men Walk on Moon" or "Men walk on moon"); the words stay.
+- **Silence gives an empty text** with Parakeet and Qwen3-ASR (a 2-second tone came back as
+  nothing). Whisper is known to invent words on sound with no speech in it.
+- **Length.** Whisper takes any length (30-second windows). Parakeet takes the clip whole.
+  A Qwen3-ASR clip has to fit in the context: at 13 tokens a second the default context holds
+  a few minutes, a longer recording is refused, and the app cuts it into pieces.
+
+Memory: Whisper base 60 MB on disk, Parakeet 669 MB, Qwen3-ASR 1.5 GB while it works (the text
+model is 805 MB, the encoder 214 MB). kiln takes a file or the bytes of a file, so an app
+records to a wav first; the example app does exactly that.
+
 ## Chat templates
 
 Each model was trained on conversations formatted a specific way: special tokens around

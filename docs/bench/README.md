@@ -133,6 +133,21 @@ Three things to take from this:
   and questions went from 0.22 s to 0.82 s with single ones at 2.4 s. A phone that is doing
   other things will do this to any model that takes a large share of its free memory.
 
+### Speech models (v0.4.0, 2026-10-13)
+
+`kiln-bench` writes down `tests/media/speech_train.wav` and `speech_recipe.wav` (3.1 and 3.2 s)
+five times per burst, five bursts per clip; the figure is the mean call. The phone had been
+running tests for two hours and started these at throttle status 1.
+
+| model | first burst | later bursts | notes |
+|---|---|---|---|
+| Parakeet TDT 0.6B v3, q8_0 (whisper.cpp) | 0.28 s | 0.28 s for three bursts, then 0.8 to 1.5 s at 82 °C | encoder about 0.22 s, decoder 25 to 35 ms |
+| Whisper base, q5_1 (whisper.cpp) | 3.5 s | 4 to 7.5 s | always encodes a 30-second window |
+| Qwen3-ASR 0.6B, Q8_0 (llama.cpp) | 3.8 s (single call, `kiln-cli`) | not benchmarked | 2.5 s of it in the audio encoder |
+
+These need the Android build with OpenMP (the default since 0.4.0): without it the decoders
+took 1 to 13 s per clip with no two runs alike. Raw files: `pixel8_ggml-*.csv`.
+
 ### What the chat charts say (v0.1.0 run)
 
 - **CPU: all five fast cores saturated the whole time.** Process CPU sits at 480 to 500%. The

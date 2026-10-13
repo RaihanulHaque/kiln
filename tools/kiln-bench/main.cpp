@@ -7,6 +7,9 @@
 //   decision model   each run asks --calls questions (kiln_decide)     speed = ms per question
 //   embedding model  each run embeds --calls texts (kiln_embed), and with --mmproj and --media
 //                    each media file --media-calls times               speed = ms per input
+//   speech model     a Whisper or Parakeet file, or a chat-style model given --mmproj, with
+//                    --media: each run writes down every audio file --media-calls times
+//                    (kiln_transcribe)  speed = ms per clip
 // Runs come back to back, so the later ones show what heat does to the speed.
 #include "kiln/kiln.h"
 
@@ -126,7 +129,7 @@ struct Sampler {
     std::atomic<int>  phase{0};          // index into phase_names
     std::atomic<int>  tokens{0};
     std::atomic<int>  run{0};
-    std::vector<const char*> phase_names{"idle", "load", "prompt", "generate", "cooldown", "decide", "embed", "encode"};
+    std::vector<const char*> phase_names{"idle", "load", "prompt", "generate", "cooldown", "decide", "embed", "encode", "transcribe"};
     FILE* out;
     uint64_t fast_mask;
     std::vector<ThermalZone> zones;
@@ -169,7 +172,7 @@ static double current_temp_c(const std::vector<ThermalZone>& zones) {
 
 // ---------------------------------------------------------------- per-run results
 // One line per run, on stderr and (with -o x.csv) in x.runs.csv:
-//   series  chat | decide | embed-text | embed-<media file>
+//   series  chat | decide | embed-text | embed-<media file> | transcribe-<audio file>
 //   unit    tok (chat: count = generated tokens) or call (count = calls in the run)
 //   per_s   tokens per second, or calls per second
 
@@ -270,6 +273,7 @@ int main(int argc, char** argv) {
                             "  decision models:  [--calls questions per run]              (default 40)\n"
                             "  embedding models: [--calls texts per run]                  (default 150)\n"
                             "                    [--mmproj projector.gguf --media file]... [--media-calls per run] (default 5)\n"
+                            "  speech models:    --media clip.wav [--media clip2.wav]... [--media-calls per run] (default 5); Qwen3-ASR also --mmproj projector.gguf\n"
                             "  -o x.csv also writes x.runs.csv with one line per run\n");
             return 2;
         }
@@ -359,6 +363,30 @@ int main(int argc, char** argv) {
                     return kiln_embed_media(c, nullptr, &item, 1, nullptr, v.data(), (int32_t)v.size(), &es) == KILN_OK ? es.tokens : -1;
                 });
             }
+        }
+        failed = !ok;
+    } else if (!mmproj.empty() || mi.is_speech_model) {
+        // a speech model: one run = each audio file written down `media_calls` times
+        if (media_calls <= 0) media_calls = 5;
+        s.phase = 1;
+        const double tp = now_ms(), rss_before = rss_mb();
+        kiln_projector_info pi{};
+        bool ok = true;
+        if (!mmproj.empty()) {
+            ok = kiln_model_load_projector(m, mmproj.c_str(), nullptr, &pi) == KILN_OK;
+            if (!ok) fprintf(stderr, "projector: %s\n", kiln_last_error());
+            else fprintf(stderr, "projector: load %.0f ms, +%.0f MB rss, images=%d audio=%d\n", now_ms() - tp, rss_mb() - rss_before, pi.supports_images, pi.supports_audio);
+        }
+        if (media.empty()) { fprintf(stderr, "a speech model needs --media clip.wav\n"); ok = false; }
+        s.phase = 0;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        for (const std::string& f : media) {
+            if (!ok) break;
+            ok = burst(s, 8, "transcribe-" + base_name(f), runs, media_calls, run_no, peak_rss, [&](int) {
+                kiln_media clip = {f.c_str(), nullptr, 0};
+                kiln_transcribe_stats ts;
+                return kiln_transcribe(c, &clip, nullptr, nullptr, nullptr, &ts) == KILN_OK ? ts.prompt_tokens : -1;
+            });
         }
         failed = !ok;
     } else {

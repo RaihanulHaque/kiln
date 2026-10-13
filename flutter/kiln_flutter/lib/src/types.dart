@@ -106,6 +106,7 @@ class KilnModelInfo {
     this.isDecisionModel = false,
     this.isEmbeddingModel = false,
     this.nEmbd = 0,
+    this.isSpeechModel = false,
   });
 
   factory KilnModelInfo.fromNative(b.kiln_model_info i) => KilnModelInfo(
@@ -122,6 +123,7 @@ class KilnModelInfo {
         isDecisionModel: i.is_decision_model,
         isEmbeddingModel: i.is_embedding_model,
         nEmbd: i.n_embd,
+        isSpeechModel: i.is_speech_model,
       );
 
   final KilnBackend backend;
@@ -139,11 +141,17 @@ class KilnModelInfo {
   /// Embedding models: how many numbers a full vector has. 0 for other models.
   final int nEmbd;
 
+  /// A Whisper or Parakeet file: writes down audio with [KilnContext.transcribe], needs no
+  /// projector, and cannot generate text. False for Qwen3-ASR, which is a chat-style model
+  /// that transcribes once its projector is loaded.
+  final bool isSpeechModel;
+
   Map<String, Object> toMap() => {
         'backend': backend.index, 'backendName': backendName, 'arch': arch, 'quant': quant,
         'nParams': nParams, 'nCtxTrain': nCtxTrain, 'nVocab': nVocab,
         'gpuLayersUsed': gpuLayersUsed, 'modelBytes': modelBytes, 'supportsThinking': supportsThinking,
         'isDecisionModel': isDecisionModel, 'isEmbeddingModel': isEmbeddingModel, 'nEmbd': nEmbd,
+        'isSpeechModel': isSpeechModel,
       };
   factory KilnModelInfo.fromMap(Map m) => KilnModelInfo(
         backend: KilnBackend.values[m['backend']], backendName: m['backendName'], arch: m['arch'],
@@ -151,6 +159,7 @@ class KilnModelInfo {
         gpuLayersUsed: m['gpuLayersUsed'], modelBytes: m['modelBytes'], supportsThinking: m['supportsThinking'],
         isDecisionModel: m['isDecisionModel'] ?? false,
         isEmbeddingModel: m['isEmbeddingModel'] ?? false, nEmbd: m['nEmbd'] ?? 0,
+        isSpeechModel: m['isSpeechModel'] ?? false,
       );
 
   @override
@@ -158,7 +167,8 @@ class KilnModelInfo {
       '$arch $quant, ${(nParams / 1e9).toStringAsFixed(2)}B params, '
       '${(modelBytes / 1e9).toStringAsFixed(2)} GB, via $backendName'
       '${supportsThinking ? ', thinking' : ''}${isDecisionModel ? ', decision model' : ''}'
-      '${isEmbeddingModel ? ', embedding model ($nEmbd numbers)' : ''}';
+      '${isEmbeddingModel ? ', embedding model ($nEmbd numbers)' : ''}'
+      '${isSpeechModel ? ', speech model' : ''}';
 }
 
 class KilnModelParams {
@@ -404,8 +414,8 @@ enum KilnEmbedKind {
   document,
 }
 
-/// One image or one audio clip for [KilnContext.embedMedia]: a file on the device, or the
-/// bytes of such a file. Images: jpg, png, bmp, gif. Audio: wav, mp3, flac.
+/// One image or one audio clip for [KilnContext.embedMedia] or [KilnContext.transcribe]: a file
+/// on the device, or the bytes of such a file. Images: jpg, png, bmp, gif. Audio: wav, mp3, flac.
 class KilnMedia {
   /// A file on the device.
   const KilnMedia.file(String this.path) : bytes = null;
@@ -497,6 +507,73 @@ class KilnEmbedding {
   String toString() =>
       '$dimensions numbers, $tokens tok${mediaTokens > 0 ? ' ($mediaTokens media, encoder ${mediaMs.round()} ms)' : ''}, '
       '${ms.round()} ms${prefixed ? ', prefix added' : ''}';
+}
+
+/// What happened in one [KilnContext.transcribe] call.
+class KilnTranscribeStats {
+  KilnTranscribeStats({
+    required this.audioSeconds,
+    required this.audioTokens,
+    required this.promptTokens,
+    required this.generatedTokens,
+    required this.encodeMs,
+    required this.promptMs,
+    required this.genMs,
+    required this.ms,
+    required this.language,
+    required this.stoppedByEos,
+    required this.stoppedByUser,
+  });
+  factory KilnTranscribeStats.fromNative(b.kiln_transcribe_stats s) => KilnTranscribeStats(
+        audioSeconds: s.audio_seconds,
+        audioTokens: s.audio_tokens,
+        promptTokens: s.prompt_tokens,
+        generatedTokens: s.generated_tokens,
+        encodeMs: s.encode_ms,
+        promptMs: s.prompt_ms,
+        genMs: s.gen_ms,
+        ms: s.ms,
+        language: _str(s.language, 32),
+        stoppedByEos: s.stopped_by_eos,
+        stoppedByUser: s.stopped_by_user,
+      );
+
+  /// Length of the clip.
+  final double audioSeconds;
+
+  /// Tokens the clip took, tokens of the whole prompt (instruction and clip; Whisper and
+  /// Parakeet take no instruction), and tokens written.
+  final int audioTokens, promptTokens, generatedTokens;
+
+  /// Time in the audio encoder, reading the prompt, writing the words, and the whole call
+  /// (reading the file included), in milliseconds.
+  final double encodeMs, promptMs, genMs, ms;
+
+  /// The language the model heard, as it named it ("English"); empty when it did not say
+  /// (Parakeet never does; Qwen3-ASR writes "None" for a clip with no speech).
+  final String language;
+
+  /// The model finished by itself; or the callback / [KilnTranscription.cancel] stopped it.
+  final bool stoppedByEos, stoppedByUser;
+
+  /// How many times faster than real time: 2.0 means a 10-second clip took 5 seconds.
+  double get speed => ms > 0 ? audioSeconds * 1000 / ms : 0;
+
+  Map<String, Object> toMap() => {
+        'audioSeconds': audioSeconds, 'audioTokens': audioTokens, 'promptTokens': promptTokens,
+        'generatedTokens': generatedTokens, 'encodeMs': encodeMs, 'promptMs': promptMs, 'genMs': genMs, 'ms': ms,
+        'language': language, 'stoppedByEos': stoppedByEos, 'stoppedByUser': stoppedByUser,
+      };
+  factory KilnTranscribeStats.fromMap(Map m) => KilnTranscribeStats(
+        audioSeconds: m['audioSeconds'], audioTokens: m['audioTokens'], promptTokens: m['promptTokens'],
+        generatedTokens: m['generatedTokens'], encodeMs: m['encodeMs'], promptMs: m['promptMs'], genMs: m['genMs'],
+        ms: m['ms'], language: m['language'], stoppedByEos: m['stoppedByEos'], stoppedByUser: m['stoppedByUser'],
+      );
+
+  @override
+  String toString() =>
+      '${audioSeconds.toStringAsFixed(1)} s of audio in ${ms.round()} ms (${speed.toStringAsFixed(1)}x real time), '
+      '$generatedTokens tok${language.isNotEmpty ? ', $language' : ''}${stoppedByEos ? '' : ' [cut]'}';
 }
 
 /// One streamed fragment of model output.

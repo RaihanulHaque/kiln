@@ -10,16 +10,22 @@ include/kiln/kiln.h                 the public C API. The only header bindings s
 src/core/internal.h                 C++ interfaces Backend / Model / Context that backends implement
 src/core/kiln.cpp                   C API functions: validate args, pick a backend, forward
 src/core/error.cpp                  thread-local last-error string, logging
-src/core/registry.cpp               ordered list of backends (today: llama.cpp only)
+src/core/registry.cpp               ordered list of backends: llama.cpp, then whisper.cpp; each reads its own file format
 src/probe/probe.cpp                 device probe: SoC, cores, clocks -> fast-core mask, RAM, ISA bits
 src/backends/llamacpp/
-    llamacpp_backend.cpp            the one backend: load, template, generate, threadpool pinning
+    llamacpp_backend.cpp            the main backend: load, template, generate, threadpool pinning
     reasoning_splitter.h            splits streamed text into answer / reasoning by think tags
     decision.h                      decision models: render the systemone template, one pass, scores -> probabilities
     embedding.h                     embedding models: detect, add the task prefix, one pass, shorten and normalise the vector;
-                                    images and audio through llama.cpp's mtmd (projector), mixed with text in one batch
-tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query / --mmproj / --media (embedding models)
-tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark for chat, decision and embedding models
+                                    images and audio mixed with text in one batch
+    media.h                         the projector (llama.cpp's mtmd): load it, decode image / audio files, AffinityScope;
+                                    shared by embedding models and speech models
+    transcript_filter.h             speech models: removes the "language English<asr_text>" header from the streamed text
+src/backends/whispercpp/
+    whispercpp_backend.cpp          Whisper and Parakeet through whisper.cpp's two libraries: sniff the file, load, decode
+                                    the audio (its own static miniaudio), stream the segments, timings
+tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query / --mmproj / --media (embedding models), --transcribe (speech models)
+tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark for chat, decision, embedding and speech models
 tools/barrier-lab/main.cpp          standalone experiment (not in the CMake build): split work + ggml-style barrier
 tests/test_core.cpp                 the C test suite (host and device)
 flutter/kiln_flutter/
@@ -33,13 +39,14 @@ flutter/kiln_flutter/
     example/lib/main.dart           the demo chat app
     example/integration_test/       on-device test suite (+ KILN_SPEED speed group)
 scripts/
-    fetch_models.sh                 download the six test GGUFs into models/
+    fetch_models.sh                 download the six test GGUFs into models/; --media and --speech add the encoders and the speech model
     android-run.sh, android-test.sh push the CLI / C tests to a phone over adb
     bench.sh, bench_plot.py, bench_compare.py   resource benchmarks and charts
     vendor_flutter.sh               copy the core into the plugin for pub.dev
     build_ios.sh                    static libs + xcframework for iOS
     brand.py, export_brand.py, make_promo.py    logo, assets, promo video
 third_party/llama.cpp               git submodule, pinned to a tag
+third_party/whisper.cpp             git submodule, pinned; built without its own ggml, against llama.cpp's
 ```
 
 ## The three objects
@@ -194,6 +201,52 @@ gives the same numbers as `kiln-cli --embed "text"`. For images and audio, start
 read `media_marker` from `/props`, and POST `{"content": {"prompt_string": "<marker>",
 "multimodal_data": ["<base64 of the file>"]}}` to `/embedding`.
 
+## One `kiln_transcribe` call
+
+Two paths, chosen by the model that was loaded.
+
+**Whisper or Parakeet** (`whispercpp_backend.cpp`): `kiln_model_load` reads the first twelve
+bytes of the file: ggml's old magic says "whisper.cpp format", and the vocabulary size tells
+Whisper (51864 to 51866) from Parakeet (1024 or 8192). `SpeechContext::transcribe` decodes
+the file to 16 kHz samples, then calls `whisper_full` or `parakeet_full` with greedy sampling
+and a segment callback that hands each finished sentence to the caller; `kiln_cancel` and a
+callback that returns false both end the run through the engine's abort callback. The stats
+come from the engine's own timings. The model's one working state is shared by all contexts
+under a mutex.
+
+**Qwen3-ASR** (`llamacpp_backend.cpp`): a chat model with an audio encoder in front. So this
+call is `kiln_chat` with the question written by kiln and an audio clip attached.
+
+1. **Load.** `kiln_model_load` for the text model, then `kiln_model_load_projector` for the
+   encoder (`MediaProjector::load` in `media.h`). Nothing in the GGUF marks a speech model:
+   it is a chat-style model whose projector takes audio.
+2. **The instruction.** `LlamaModel::render_transcribe` builds one user message,
+   `Transcribe audio to text<__media__>`, and renders it with the model's own chat template.
+   The words come from llama.cpp (`common_chat_get_asr_prompt`), the same ones its server
+   uses. A language hint adds ` (language: English)`.
+3. **The audio.** `LlamaContext::transcribe` decodes the file to samples (miniaudio, 16 kHz).
+   `mtmd_tokenize` cuts the prompt at the marker into three chunks: text, audio, text. If the
+   total does not fit in the context the call returns `KILN_ERR_CONTEXT_FULL` here.
+4. **Encode.** `mtmd_encode_chunk` turns the samples into vectors, 13 per started second of
+   sound for Qwen3-ASR (52 for a 3.1-second clip). Audio longer than 8 seconds is cut into 8-second
+   windows by `mtmd` and encoded window by window. This step runs under `AffinityScope`.
+5. **Read.** The text chunks and the audio vectors are decoded into a cleared context, in
+   order (`mtmd_helper_eval_chunk_single`, `mtmd_helper_decode_image_chunk`).
+6. **Write.** The same loop as chat (`LlamaContext::sample_loop`), always taking the most
+   likely token, with no repeat penalty.
+7. **Clean up the text.** Qwen3-ASR writes `language English<asr_text>The train leaves at
+   nine.` `TranscriptFilter` holds the first pieces back until it has seen the header, keeps
+   the language for the stats and passes on only the words.
+8. **Reset.** The context is cleared again, so the audio is not part of any later chat.
+
+To check a change, start `llama-server -m model.gguf --mmproj projector.gguf -t <threads>`
+from the submodule and send the file:
+`curl localhost:8080/v1/audio/transcriptions -F file=@clip.wav -F temperature=0`. The text
+after `<asr_text>` should be what `kiln-cli --transcribe clip.wav -t <threads>` prints. Use
+the same thread count on both sides: with a different one, near-equal spellings can swap.
+`llama-mtmd-cli` is not the reference: it puts the audio before the instruction, the server
+puts it after.
+
 ## The generation loop as a state machine
 
 ```mermaid
@@ -244,9 +297,10 @@ calling thread; the Dart layer turns that into an async stream.
 |---|---|
 | add an API call | `kiln.h`, `kiln.cpp`, then the backend; re-run ffigen; add to `kiln.dart` |
 | change thread/pin policy | `probe.cpp` (which cores are "fast") and `create_context` in the backend |
-| support a new engine | implement `Backend/Model/Context` from `internal.h`, register in `registry.cpp` |
+| support a new engine | implement `Backend/Model/Context` from `internal.h` (`whispercpp_backend.cpp` is the small example), register in `registry.cpp` |
 | change how thinking is detected | `LlamaModel` constructor (empirical on/off render) |
-| change the thinking budget behaviour | the end of the sampling loop in `LlamaContext::generate` |
+| change the thinking budget behaviour | the end of the sampling loop, `LlamaContext::sample_loop` |
+| support a speech model that writes another header | `transcript_filter.h`, and a case in `test_transcript_filter` with the pieces it writes |
 | change cache checkpoints for hybrid models | `save_checkpoint` / `restore_checkpoint` in `LlamaContext`; `stable_prefix` in `render_chat` |
 | add the task prefix of another embedding model | `EmbeddingHead::init` in `embedding.h`; take the strings from the model card and add it to `test_embedding` |
 | support another decision model family | `decision.h`; port its path from llama.cpp `tools/server/server-decision.cpp` and compare with `llama-server` |

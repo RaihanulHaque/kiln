@@ -1,0 +1,11 @@
+series,run,unit,count,total_ms,mean_ms,min_ms,max_ms,per_s,rss_mb,temp_c,tokens_per_call,prompt_tok,prompt_ms,sample_run
+transcribe-speech_train.wav,1,call,5,17303,3460.55,2862.87,4103.40,0.3,162,79.0,156,0,0,1
+transcribe-speech_train.wav,2,call,5,20346,4069.19,3872.65,4465.27,0.2,162,79.0,156,0,0,2
+transcribe-speech_train.wav,3,call,5,27939,5587.73,5054.53,6301.22,0.2,162,61.0,156,0,0,3
+transcribe-speech_train.wav,4,call,5,31855,6370.96,5461.13,7318.58,0.2,162,60.0,156,0,0,4
+transcribe-speech_train.wav,5,call,5,29563,5912.64,3906.79,8887.87,0.2,162,74.0,156,0,0,5
+transcribe-speech_recipe.wav,1,call,5,23814,4762.71,3932.40,6375.18,0.2,162,74.0,159,0,0,6
+transcribe-speech_recipe.wav,2,call,5,30531,6106.20,5460.27,6853.36,0.2,162,62.0,159,0,0,7
+transcribe-speech_recipe.wav,3,call,5,37285,7456.91,5937.13,9572.24,0.1,162,58.0,159,0,0,8
+transcribe-speech_recipe.wav,4,call,5,36003,7200.55,5495.28,8820.04,0.1,162,59.0,159,0,0,9
+transcribe-speech_recipe.wav,5,call,5,29129,5825.87,5464.36,7200.59,0.2,162,58.0,159,0,0,10

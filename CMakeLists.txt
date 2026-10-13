@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(kiln VERSION 0.3.1 LANGUAGES C CXX)
+project(kiln VERSION 0.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,11 +55,34 @@ elseif(ANDROID)
     elseif(KILN_ANDROID_GPU STREQUAL "opencl")
         set(GGML_OPENCL ON CACHE BOOL "" FORCE)
     endif()
-    set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+    # OpenMP on Android, linked statically from the NDK's libomp.a: ggml then keeps its worker
+    # threads alive between graphs. Without it the whisper.cpp decoders, which compute dozens of
+    # tiny graphs per clip, start fresh threads for each one, and on a phone that took seconds.
+    option(KILN_ANDROID_OPENMP "OpenMP on Android (off: ggml spawns threads per graph)" ON)
+    set(GGML_OPENMP ${KILN_ANDROID_OPENMP} CACHE BOOL "" FORCE)
+    if(KILN_ANDROID_OPENMP)
+        execute_process(COMMAND ${CMAKE_CXX_COMPILER} --target=${CMAKE_CXX_COMPILER_TARGET} -print-file-name=libomp.a
+                        OUTPUT_VARIABLE KILN_LIBOMP_A OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(NOT EXISTS "${KILN_LIBOMP_A}")
+            message(FATAL_ERROR "NDK libomp.a not found (clang said: ${KILN_LIBOMP_A})")
+        endif()
+        set(OpenMP_omp_LIBRARY "${KILN_LIBOMP_A}" CACHE FILEPATH "" FORCE)   # FindOpenMP would pick libomp.so
+    endif()
     set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 endif()
 
 add_subdirectory(third_party/llama.cpp EXCLUDE_FROM_ALL)
+
+# ---- whisper.cpp (pinned submodule): Whisper and Parakeet speech models. It finds the ggml
+# target llama.cpp already made (both pin ggml 0.26.0), so libkiln holds one copy of ggml. ----
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/whisper.cpp/CMakeLists.txt")
+    message(FATAL_ERROR "third_party/whisper.cpp is empty. Run: git submodule update --init --recursive")
+endif()
+set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+set(WHISPER_ALL_WARNINGS   OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/whisper.cpp EXCLUDE_FROM_ALL)
 
 # ---- libkiln ----
 set(KILN_SOURCES
@@ -68,6 +91,7 @@ set(KILN_SOURCES
     src/core/kiln.cpp
     src/probe/probe.cpp
     src/backends/llamacpp/llamacpp_backend.cpp
+    src/backends/whispercpp/whispercpp_backend.cpp
 )
 
 if(KILN_BUILD_SHARED)
@@ -79,11 +103,20 @@ endif()
 target_include_directories(kiln
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     PRIVATE third_party/llama.cpp/include third_party/llama.cpp/ggml/include third_party/llama.cpp/common
-            third_party/llama.cpp/tools/mtmd)
-target_link_libraries(kiln PRIVATE llama-common mtmd llama ggml)
+            third_party/llama.cpp/tools/mtmd third_party/llama.cpp/vendor third_party/whisper.cpp/include)
+target_link_libraries(kiln PRIVATE llama-common mtmd llama whisper parakeet ggml)
+if(NOT MSVC)
+    # miniaudio.h (compiled into the whisper.cpp backend for reading audio files) casts away const
+    set_source_files_properties(src/backends/whispercpp/whispercpp_backend.cpp PROPERTIES COMPILE_OPTIONS "-Wno-cast-qual")
+endif()
 target_compile_definitions(kiln PRIVATE KILN_BUILD)
 if(ANDROID)
     target_link_libraries(kiln PRIVATE log)
+    if(KILN_ANDROID_OPENMP)
+        target_link_options(kiln PRIVATE -static-openmp)   # with OpenMP_omp_LIBRARY above: libomp.a goes into libkiln.so, nothing extra to ship
+    endif()
+    # miniaudio.h defines ma_android_sdk_version() without a prior prototype
+    set_source_files_properties(src/backends/whispercpp/whispercpp_backend.cpp PROPERTIES COMPILE_OPTIONS "-Wno-cast-qual;-Wno-missing-prototypes")
 endif()
 set_target_properties(kiln PROPERTIES
     VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}

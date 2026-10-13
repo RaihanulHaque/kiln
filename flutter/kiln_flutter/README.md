@@ -119,11 +119,35 @@ On a Pixel 8 a short text takes 30 to 80 ms, a small image about 2.5 s and a 3-s
 clip about half a second; the projector adds roughly 0.6 GB of RAM. Tested with
 EmbeddingGemma 2 (text, images, audio; Apache 2.0) and nomic-embed-text v1.5 (text; Apache 2.0).
 
+## Speech to text
+
+A speech model writes down what is said in a recording. Two of the three supported families
+come as a single file in whisper.cpp's format and need nothing else:
+
+```dart
+final model = await kiln.loadModel('/path/to/ggml-parakeet-tdt-0.6b-v3-q8_0.bin');
+print(model.info.isSpeechModel);   // true
+final ctx = await model.createContext();
+
+final t = ctx.transcribe(KilnMedia.file('/path/to/voice_note.wav'));   // wav, mp3 or flac
+t.pieces.listen((words) => print(words));     // a sentence at a time
+final stats = await t.stats;
+print('${stats.audioSeconds} s of audio in ${stats.ms} ms, ${stats.speed}x real time');
+```
+
+Parakeet TDT 0.6B v3 (669 MB, 25 European languages) made the fewest mistakes of the small
+models on English and is the fastest; Whisper base (60 MB) knows 99 languages and reports
+which one it heard in `stats.language`. Qwen3-ASR 0.6B works too, as a GGUF plus its projector
+(`loadProjector`), but on a Pixel 8 it is slower than the clip it transcribes.
+
+Each call takes one clip, from a file or its bytes. The example app records with the `record`
+package to a 16 kHz wav and hands the file over.
+
 ## Status
 
 | platform | native | verified |
 |---|---|---|
-| Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Galaxy S26 Ultra and Pixel 8: 26 of 26 integration tests with speed and media groups (0.3.1) |
+| Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Pixel 8: 25 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1) with speed, media and speech groups (0.4.0); Galaxy S26 Ultra: 26 of 26 at 0.3.1 |
 | iOS 15+ | not in the pub.dev package; from a clone, `kiln.xcframework` via `scripts/build_ios.sh`, Metal | **In progress, not supported yet.** iPhone 16 Pro at v0.1.0: 7 of 9 integration tests; not re-run for v0.2.0 |
 
 Desktop (macOS/Linux) works for development by passing a host build:
@@ -132,7 +156,7 @@ Desktop (macOS/Linux) works for development by passing a host build:
 ## Example app
 
 <p>
-<img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_library.png" width="170" alt="Model library"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_chat_thinking.png" width="170" alt="Thinking, streamed"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_chat_reply.png" width="170" alt="Chat reply with stats"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_decide.png" width="170" alt="Decide screen"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_search_media.png" width="170" alt="Search screen with notes, photos and audio"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_search_result.png" width="170" alt="A typed question finds a spoken clip"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_library_light.png" width="170" alt="Light theme">
+<img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_library.png" width="170" alt="Model library"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_chat_thinking.png" width="170" alt="Thinking, streamed"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_chat_reply.png" width="170" alt="Chat reply with stats"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_decide.png" width="170" alt="Decide screen"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_search_media.png" width="170" alt="Search screen with notes, photos and audio"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_search_result.png" width="170" alt="A typed question finds a spoken clip"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_transcribe.png" width="170" alt="Transcribe screen: two clips written down by Parakeet at 9x real time"> <img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/app_library_light.png" width="170" alt="Light theme">
 </p>
 
 `example/` is a small chat app in one file, with a light and a dark theme that follow the system.

@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'kiln_flutter'
-  s.version          = '0.3.1'
+  s.version          = '0.4.0'
   s.summary          = 'On-device LLM runtime for Flutter. Honest about what it runs on.'
   s.description      = 'Dart FFI bindings for the kiln C core (llama.cpp based). Static xcframework, Metal on Apple silicon.'
   s.homepage         = 'https://github.com/RaihanulHaque/kiln'

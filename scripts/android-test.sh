@@ -13,7 +13,8 @@ LIBCXX="$(ls "$NDK"/toolchains/llvm/prebuilt/*/sysroot/usr/lib/aarch64-linux-and
 
 adb shell mkdir -p "$DEV"
 adb push "$BUILD/libkiln.so" "$BUILD/kiln-tests" "$LIBCXX" "$DEV/" >/dev/null
-for m in "$ROOT"/models/*.gguf; do
+for m in "$ROOT"/models/*.gguf "$ROOT"/models/*.bin; do
+  [ -f "$m" ] || continue             # an unmatched glob
   adb shell "[ -f $DEV/$(basename "$m") ]" || adb push "$m" "$DEV/"
 done
 # small images and audio clips for the kiln_embed_media tests

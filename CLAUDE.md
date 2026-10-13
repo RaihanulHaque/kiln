@@ -1,7 +1,8 @@
 # kiln
 
-On-device LLM runtime: a C core (`include/kiln/kiln.h`) over llama.cpp, with a device probe,
-CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desktop.
+On-device LLM runtime (chat, decision, embedding and speech models): a C core (`include/kiln/kiln.h`)
+over llama.cpp, plus whisper.cpp for Whisper and Parakeet, with a device probe, CLI and benchmark
+tools, and a Flutter plugin. Targets are Android, iOS and desktop.
 `docs/CODEBASE.md` is the file-by-file map; `docs/CONCEPTS.md` explains the ideas in plain words.
 
 ## Rules for this repo
@@ -25,8 +26,8 @@ CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desk
 ```bash
 git submodule update --init --recursive      # CMake also does this if the submodule is empty
 cmake --preset host && cmake --build --preset host -j
-scripts/fetch_models.sh --media              # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders)
-./build/host/kiln-tests models               # 334 checks at 0.3.1; without --media the image / audio tests are skipped
+scripts/fetch_models.sh --media --speech     # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders and 1.7 GB for three speech models)
+./build/host/kiln-tests models               # 476 checks at 0.4.0 (349 without --speech); without --media the image / audio tests are skipped
 ./build/host/kiln-cli -m models/<file>.gguf --chat
 ```
 
@@ -44,8 +45,13 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 
 ## Things that are easy to get wrong
 
-- **Linux builds use OpenMP; macOS and Android builds do not.** A threadpool smaller than
-  `cp.n_threads` crashes only on Linux. Keep the context's thread count and the pool size equal.
+- **Linux and Android builds use OpenMP; macOS does not.** A threadpool smaller than
+  `cp.n_threads` crashes under OpenMP. Keep the context's thread count and the pool size equal.
+  Android links the NDK's `libomp.a` statically (`OpenMP_omp_LIBRARY` and `-static-openmp` in
+  `CMakeLists.txt`); check `llvm-readelf -d libkiln.so` shows no `libomp.so` after touching that.
+  It was turned on for the whisper.cpp decoders: without OpenMP ggml starts fresh threads for
+  every graph, and Parakeet's decoder computes dozens of tiny ones per clip, which on a Pixel 8
+  took 1 to 13 s with wild swings; with OpenMP's persistent workers the same clip takes 0.3 s.
 - **`kiln-bench` prints one line per run on stderr** (`chat,1,tok,...`, `decide,1,call,...`,
   `embed-text,...`). The samples go to stdout by default; `-o x.csv` writes them to that file
   and the per-run lines to `x.runs.csv` as well. It exits non-zero when a call fails. It picks the workload from the kind of model. `scripts/bench.sh` skips
@@ -74,6 +80,30 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   (`LLAMA_BUILD_MTMD`). The reference for them is `llama-server`, not `llama-embedding`;
   `docs/CODEBASE.md` has the request. The server picks a random media marker per run: read
   it from `/props`.
+- **Speech models (`kiln_transcribe`) are a chat turn with an audio clip attached.** The reference
+  is `llama-server`'s `/v1/audio/transcriptions` (`docs/CODEBASE.md` has the request), not
+  `llama-mtmd-cli`, which puts the audio before the instruction and can give another spelling.
+  Compare with the same `-t` on both sides: between 6 and 8 threads "Men Walk on Moon" became
+  "Men walk on moon" in the server and in kiln alike. Tests compare words, not capitals.
+- **Whisper and Parakeet run through a second engine, whisper.cpp** (`src/backends/whispercpp/`),
+  not llama.cpp: they are whole speech models with their own decoders, and their files are
+  ggml's older format (`lmgg` magic, `.bin`), not GGUF. `Backend::can_load` sniffs the first bytes,
+  so each backend sees only its own format. whisper.cpp must pin the same ggml as llama.cpp
+  (both 0.26.0 today): its CMake takes the `ggml` target a parent already made. When bumping
+  either submodule, check `ggml/CMakeLists.txt` in both. The engines are not thread-safe per
+  model: `SpeechModel::mutex()` serialises calls from different contexts.
+- **miniaudio is compiled twice into libkiln**, once by llama.cpp's mtmd and once by the
+  whisper.cpp backend, both with `MA_API static`; two symbols escape that and are renamed with
+  `#define` before the include (`ma_atomic_global_lock`, `ma_android_sdk_version`). A new
+  duplicate-symbol link error after a llama.cpp bump means another one appeared.
+- **Qwen3-ASR is not a usable voice path on a Pixel 8**: 3.8 s for a 3-second clip, 2.5 s of it in
+  the encoder. Parakeet is (0.3 s); Whisper base keeps up only just (3.0 s, half of it the
+  encoder: Whisper always encodes a 30-second window). `kiln_model_info.is_speech_model` is
+  false for Qwen3-ASR (it is a chat-style model plus projector); the example app lists only
+  the other two.
+- **llama.cpp changes a small context behind your back.** Asked for `n_ctx = 32` it gave a
+  context of 256 and a batch size below 52. Read both back (`llama_n_ctx`, `llama_n_batch`)
+  instead of trusting what was asked for; a batch larger than `llama_n_batch` aborts inside `mtmd`.
 - **A large image is slow far beyond its size.** 1080 image tokens took 21.7 s on the desktop;
   `image_max_tokens` defaults to 280. Test with a phone-sized photo, not only small images.
 - **A GGUF's training context can be wrong.** EmbeddingGemma 2 states 262144 tokens; its card
@@ -91,7 +121,7 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 - **Threads started inside a kiln call inherit one core.** The pinned threadpool ties the
   calling thread to a single core (it is worker 0). Anything that starts its own threads from
   that thread, as the mtmd image / audio encoders do, lands on that one core unless the caller
-  is widened first: see `AffinityScope` in `embedding.h`. `top -H` on the device shows it.
+  is widened first: see `AffinityScope` in `media.h`. `top -H` on the device shows it.
 - **Reference numbers from one processor are not exact on another.** A 4-bit model's vectors
   differ by up to 0.009 per number between x86, the Pixel 8 and the M4 GPU. Tests that compare
   with llama.cpp's numbers allow 0.015; tests that rank two texts need a real margin.
@@ -113,7 +143,24 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   the script without a message. This broke the Android scripts on macOS once.
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
 
-## Not yet verified (as of 0.3.1)
+## Not yet verified (as of 0.4.0)
+
+0.4.0 (speech to text, `kiln_transcribe`: Whisper and Parakeet through whisper.cpp, Qwen3-ASR
+through llama.cpp): `kiln-tests models` gives 476 passed on macOS (M4 Pro, Metal) and Android
+(Pixel 8) on 2026-10-13, after `scripts/fetch_models.sh --media --speech`; 398 on Linux x86
+(Ryzen 5 8500G) before the whisper.cpp backend was added. The Flutter plugin has `transcribe`
+(25 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1) on the Pixel 8). Still open:
+
+- Linux x86: re-run on the Ryzen with the whisper.cpp backend (Linux arm64 in Docker gives 476 passed).
+- iOS: not built, not run; `scripts/build_ios.sh` does not know about whisper.cpp yet.
+- Raw microphone samples (the example app records to a wav first), a 4-bit Qwen3-ASR file
+  (ggml-org publishes Q8_0 and bf16 only), Whisper small / large and Parakeet's other
+  quantisations (only base q5_1 and TDT 0.6B v3 q8_0 were run).
+- `docs/ASR_COMPARISON.md` (accuracy of Whisper, Moonshine, Parakeet, Qwen3-ASR) is one Linux
+  run whose raw files were lost; it has the steps to repeat it, not run on the Mac.
+- pub.dev: `kiln_flutter` 0.4.0 is not published yet.
+
+The notes below are from 0.3.1 and earlier.
 
 Checked on 2026-10-11: `kiln-tests models` gives 154 passed on Linux x86 (Ryzen 5 8500G),
 macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes on the Pixel 8
@@ -131,12 +178,11 @@ passed on macOS (M4 Pro, Metal) and Android (Pixel 8) on 2026-10-13, after
 plugin has `embed` / `embedMedia` / `loadProjector` and is at 0.3.0: 23 integration tests on
 the Pixel 8 (`--dart-define=KILN_MEDIA=true` for the image and audio test). Still open for it:
 
-- Linux x86: re-run `kiln-tests models` on the Ryzen (the test tolerances and two checks
-  changed on the Mac). Linux arm64 in Docker on the Mac gives 319 passed, and so does emulated x86_64
+- Linux x86: done at 0.4.0 (see above). Linux arm64 in Docker on the Mac gave 319 passed at 0.3.0, and so did emulated x86_64
   (add `--platform linux/amd64`, about four times slower); see the command above.
 - iOS, as for everything else.
 
-Known gaps: embedding models take one input per call; no video, no raw pixels or samples
+Known gaps: speech models take one clip per call, from a file or file bytes, and the clip has to fit in the context; embedding models take one input per call; no video, no raw pixels or samples
 (files or file bytes only); images and audio are for embedding models only, not chat. Decision models take a text state only (no images or audio,
 only the lfm2-d1-omni family); the probe counts hyperthreads as cores and trusts max frequency
 to tell cores apart (`docs/CPU.md` §8).

@@ -6,7 +6,8 @@ Reads <device>_<model>.csv (samples over time) and, when present, <device>_<mode
 (one line per run), writes <device>_<model>.png and summary.md next to them.
 
 A chat model's speed is tokens per second. Decision and embedding models do not generate
-tokens, so theirs is the time for one call, in milliseconds.
+tokens, so theirs is the time for one call, in milliseconds. A speech model's is the time to
+write down one clip.
 """
 import glob
 import os
@@ -18,8 +19,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 PHASE_COLORS = {"load": "#f4a261", "prompt": "#e9c46a", "generate": "#2a9d8f", "decide": "#2a9d8f",
-                "embed": "#2a9d8f", "encode": "#6a4c93", "cooldown": "#8d99ae"}
-WORK_PHASES = ["generate", "decide", "embed", "encode"]       # the model is computing
+                "embed": "#2a9d8f", "encode": "#6a4c93", "transcribe": "#2a9d8f", "cooldown": "#8d99ae"}
+WORK_PHASES = ["generate", "decide", "embed", "encode", "transcribe"]       # the model is computing
 SERIES_COLORS = ["#2a9d8f", "#6a4c93", "#e76f51", "#457b9d", "#bc6c25"]
 
 
@@ -48,7 +49,7 @@ def speed_text(runs):
         else:
             def ms(v):
                 return f"{v / 1000:.1f} s" if v >= 1000 else f"{v:.0f} ms"
-            label = series.replace("embed-", "").replace("decide", "question")
+            label = series.replace("embed-", "").replace("transcribe-", "").replace("decide", "question")
             parts.append(f"{label}: {ms(first['mean_ms'])} → {ms(last['mean_ms'])}")
     return "<br>".join(parts)
 
@@ -89,7 +90,7 @@ def plot_one(path, out_png):
             xs = [when.get(r, float("nan")) for r in g["global_run"]]
             ys = g["per_s"] if is_chat else g["mean_ms"]
             ax.plot(xs, ys, "o-", color=SERIES_COLORS[k % len(SERIES_COLORS)], lw=1.5, ms=5,
-                    label=None if is_chat else series.replace("embed-", ""))
+                    label=None if is_chat else series.replace("embed-", "").replace("transcribe-", ""))
             for x, y in zip(xs, ys):
                 ax.annotate(f"{y:.0f}", (x, y), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=7)
         if is_chat:
@@ -164,7 +165,7 @@ def main():
         print("plotted", csv)
     with open(os.path.join(d, "summary.md"), "w") as f:
         f.write("Speed is the first run → the last run of each series. \"work\" is while the model is computing: "
-                "generating, deciding, embedding text, or encoding an image or audio clip.\n\n")
+                "generating, deciding, embedding text, encoding an image or audio clip, or writing down speech.\n\n")
         f.write("| run | speed, first → last run | baseline RSS | peak RSS | work CPU mean | work CPU max | work freq | CPU temp start → max | OS throttle | min mem avail |\n")
         f.write("|---|---|---|---|---|---|---|---|---|---|\n")
         for r in rows:
