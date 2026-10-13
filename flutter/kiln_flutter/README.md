@@ -3,6 +3,8 @@
 Flutter bindings for [kiln](https://github.com/RaihanulHaque/kiln), an on-device LLM runtime that
 is honest about what it runs on. Android (arm64) today; iOS is in progress.
 
+<p align="center"><img src="https://raw.githubusercontent.com/RaihanulHaque/kiln/main/docs/img/kiln_promo.gif" width="600" alt="kiln: a chat reply streams while a decision and an embedding search run beside it, then the measured numbers"></p>
+
 ```dart
 final kiln  = await Kiln.create();
 final model = await kiln.loadModel('/path/to/model.gguf');
