@@ -281,6 +281,7 @@ Start with [CONCEPTS](docs/CONCEPTS.md), then the [codebase walkthrough](docs/CO
 Also: [architecture and roadmap](docs/ARCHITECTURE.md), [CPU notes](docs/CPU.md),
 [glossary](docs/GLOSSARY.md), [benchmarks](docs/bench/README.md),
 [speech models compared](docs/ASR_COMPARISON.md),
+[quantization on phones](docs/QUANT.md),
 [release checklist](docs/RELEASE.md).
 
 ## License

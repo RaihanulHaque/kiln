@@ -141,6 +141,10 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   library path, static C++ runtime) are in `docs/devices/galaxy-s26-ultra.md`.
 - **A shell glob that matches nothing makes `ls` fail**, and with `set -o pipefail` that ends
   the script without a message. This broke the Android scripts on macOS once.
+- **Quantization: do not design a format before reading `docs/QUANT.md`.** On the Pixel 8,
+  Q4_0 is 20% faster than Q4_K_M (109 against 90 tok/s) and an importance matrix recovers most
+  of its quality; i8mm and KleidiAI change nothing for generation. `scripts/quant_eval.sh`
+  reproduces the table (KL divergence from F16 on the host, kiln-bench on the phone).
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
 
 ## Not yet verified (as of 0.4.0)
