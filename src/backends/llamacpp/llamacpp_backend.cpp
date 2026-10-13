@@ -2,6 +2,7 @@
 #include "../../core/internal.h"
 #include "decision.h"
 #include "embedding.h"
+#include "transcript_filter.h"
 #include "../../probe/fast_cores.h"
 #include "reasoning_splitter.h"
 #include "llama.h"
@@ -94,6 +95,7 @@ public:
     std::atomic<bool> cancel_{false};
     const kiln::DecisionHead* decision_ = nullptr;   // owned by the model; set for decision models
     const kiln::EmbeddingHead* embedding_ = nullptr; // owned by the model; set for embedding models
+    const kiln::MediaProjector* media_ = nullptr;    // owned by the model; holds encoders once a projector is loaded
 
     static bool abort_cb(void* user) { return static_cast<LlamaContext*>(user)->cancel_.load(); }
 
@@ -117,7 +119,7 @@ public:
                       float* out, int32_t out_cap, kiln_embed_stats& stats) override {
         if (!embedding_ || !embedding_->is_embedding_model()) return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not an embedding model");
         cancel_.store(false);
-        return embedding_->embed(ctx_, text, media, n_media, o, out, out_cap, stats);
+        return embedding_->embed(ctx_, *media_, text, media, n_media, o, out, out_cap, stats);
     }
 
     kiln_status generate(const kiln::RenderedPrompt& in, const kiln_sampling_params& sp,
@@ -200,7 +202,111 @@ public:
         }
         st.prompt_ms = ms_since(t0);
 
-        // ---- generation
+        const kiln_status result = sample_loop(smpl, in, sp, n_past, cb, user, st);
+        st.prompt_tps = st.prompt_ms > 0 ? (st.prompt_tokens - st.cached_tokens) * 1000.0 / st.prompt_ms : 0;
+        st.gen_tps    = st.gen_ms > 0 ? st.generated_tokens * 1000.0 / st.gen_ms : 0;
+        return done(result);
+    }
+
+    // Speech to text: the instruction and the audio go in as one prompt, then the model writes
+    // the words like any other answer. Follows llama.cpp's mtmd helper (mtmd_helper_eval_chunks),
+    // with the encoder timed on its own and spread over the fast cores.
+    kiln_status transcribe(const kiln::RenderedPrompt& in, const kiln_media& audio, int32_t max_tokens,
+                           kiln_token_cb cb, void* user, kiln_transcribe_stats& st) override {
+        cancel_.store(false);
+        if ((decision_ && decision_->is_decision_model()) || (embedding_ && embedding_->is_embedding_model()))
+            return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not a speech model");
+        const auto t_all = clock_t_::now();
+
+        std::unique_lock<std::mutex> lock(media_->mutex());    // the encoders are not thread-safe
+        mtmd_context* mctx = media_->ctx();
+        if (!mctx || !mtmd_support_audio(mctx))
+            return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "no audio encoder loaded; call kiln_model_load_projector with the speech model's mmproj file");
+
+        kiln::MediaProjector::Bitmaps clip;
+        if (kiln_status s = media_->read(&audio, 1, clip); s != KILN_OK) return s;
+        if (!mtmd_bitmap_is_audio(clip.v[0])) return kiln::set_error(KILN_ERR_INVALID_ARG, "kiln_transcribe takes an audio clip, not an image");
+        const int rate = mtmd_get_audio_sample_rate(mctx);
+        if (rate > 0) st.audio_seconds = (double)(mtmd_bitmap_get_n_bytes(clip.v[0]) / sizeof(float)) / rate;
+
+        struct Chunks {
+            mtmd_input_chunks* c = mtmd_input_chunks_init();
+            ~Chunks() { mtmd_input_chunks_free(c); }
+        } chunks;
+        mtmd_input_text text{in.prompt.c_str(), in.prompt.size(), true, true};
+        const int32_t trc = mtmd_tokenize(mctx, chunks.c, &text, const_cast<const mtmd_bitmap**>(clip.v.data()), clip.v.size());
+        if (trc != 0) return kiln::set_error(KILN_ERR_BACKEND, "could not prepare the audio for the model (mtmd_tokenize rc=" + std::to_string(trc) + ")");
+
+        const int n     = (int)mtmd_helper_get_n_tokens(chunks.c);
+        const int n_ctx = (int)llama_n_ctx(ctx_);
+        st.prompt_tokens = n;
+        if (n >= n_ctx)
+            return kiln::set_error(KILN_ERR_CONTEXT_FULL, "the clip (" + std::to_string(n) + " tok) does not fit in context (" + std::to_string(n_ctx) + "); cut it into shorter pieces or raise n_ctx");
+
+        // Each clip stands alone: whatever conversation the context held is dropped.
+        reset();
+        llama_pos n_past = 0;
+        const size_t n_chunks = mtmd_input_chunks_size(chunks.c);
+        for (size_t ci = 0; ci < n_chunks; ++ci) {
+            const mtmd_input_chunk* chunk = mtmd_input_chunks_get(chunks.c, ci);
+            if (cancel_.load()) { reset(); st.stopped_by_user = true; return KILN_ERR_CANCELLED; }
+            int32_t rc = 0;
+            if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                const auto t0 = clock_t_::now();
+                rc = mtmd_helper_eval_chunk_single(mctx, ctx_, chunk, n_past, 0, n_batch_, ci + 1 == n_chunks, &n_past);
+                st.prompt_ms += ms_since(t0);
+            } else {
+                {
+                    kiln::AffinityScope spread(media_->cpu_mask());   // see AffinityScope: the encoder's threads inherit this
+                    const auto te = clock_t_::now();
+                    rc = mtmd_encode_chunk(mctx, chunk);
+                    st.encode_ms += ms_since(te);
+                }
+                if (rc != 0) { reset(); return kiln::set_error(KILN_ERR_BACKEND, "the audio encoder failed"); }
+                st.audio_tokens += (int32_t)mtmd_input_chunk_get_n_tokens(chunk);
+                const auto t0 = clock_t_::now();
+                rc = mtmd_helper_decode_image_chunk(mctx, ctx_, chunk, mtmd_get_output_embd(mctx), n_past, 0, n_batch_, &n_past, nullptr, nullptr);
+                st.prompt_ms += ms_since(t0);
+            }
+            if (rc != 0) {
+                reset();
+                if (rc == 2) { st.stopped_by_user = true; return KILN_ERR_CANCELLED; }
+                return kiln::set_error(KILN_ERR_BACKEND, "decoding the prompt failed in transcribe, rc=" + std::to_string(rc));
+            }
+        }
+
+        lock.unlock();     // the encoders are done; writing the words needs only this context
+
+        // Always the most likely word: a transcript should be the same every time. No repeat
+        // penalty either, people do say the same word twice.
+        kiln_sampling_params sp{};
+        sp.max_tokens = max_tokens;
+        llama_sampler* smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+        struct SmplGuard { llama_sampler* s; ~SmplGuard() { llama_sampler_free(s); } } guard{smpl};
+
+        kiln::TranscriptFilter filter(cb, user);
+        kiln_gen_stats gs{};
+        const kiln_status result = sample_loop(smpl, in, sp, (int)n_past, kiln::TranscriptFilter::on_piece, &filter, gs);
+        if (result == KILN_OK && !gs.stopped_by_user) filter.finish();
+        reset();     // the audio is not part of any conversation; leave nothing behind for kiln_chat
+
+        st.generated_tokens = gs.generated_tokens;
+        st.gen_ms           = gs.gen_ms;
+        st.stopped_by_eos   = gs.stopped_by_eos;
+        st.stopped_by_user  = gs.stopped_by_user || filter.stopped();
+        strncpy(st.language, filter.language().c_str(), sizeof st.language - 1);
+        st.ms = ms_since(t_all);
+        return result;
+    }
+
+private:
+    // The token-by-token loop shared by generate() and transcribe(): sample, hand the piece to
+    // the callback, feed the token back. n_past = tokens already in the context. Fills the
+    // generation fields of st.
+    kiln_status sample_loop(llama_sampler* smpl, const kiln::RenderedPrompt& in, const kiln_sampling_params& sp,
+                            int n_past, kiln_token_cb cb, void* user, kiln_gen_stats& st) {
+        const int n_ctx = (int)llama_n_ctx(ctx_);
         kiln::ReasoningSplitter split(tags_.start, tags_.ends, in.starts_in_reasoning);
         bool user_stopped = false;
         auto emit = [&](kiln_channel ch, const std::string& s) -> bool {
@@ -258,12 +364,9 @@ public:
         }
         if (!user_stopped && result != KILN_ERR_CANCELLED) split.finish(emit);
         st.gen_ms = ms_since(t1);
-        st.prompt_tps = st.prompt_ms > 0 ? (st.prompt_tokens - st.cached_tokens) * 1000.0 / st.prompt_ms : 0;
-        st.gen_tps    = st.gen_ms > 0 ? st.generated_tokens * 1000.0 / st.gen_ms : 0;
-        return done(result);
+        return result;
     }
 
-private:
     // Saved recurrent state of a hybrid / recurrent model after its first n_tokens cache tokens.
     // Only the part seq_rm cannot rewind is stored (PARTIAL_ONLY); attention KV is truncated instead.
     struct Checkpoint { size_t n_tokens; std::vector<uint8_t> data; };
@@ -332,7 +435,7 @@ public:
         decision_.init(model_);
         if (!decision_.is_decision_model()) embedding_.init(model_);
     }
-    ~LlamaModel() override { embedding_.free_projector(); llama_model_free(model_); }
+    ~LlamaModel() override { media_.free(); llama_model_free(model_); }
 
     kiln_status info(kiln_model_info& out) const override {
         memset(&out, 0, sizeof out);
@@ -391,6 +494,21 @@ public:
         }
     }
 
+    // The instruction a speech model gets, in the model's own chat format, with the place for
+    // the audio marked. Follows llama.cpp's server (convert_transcriptions_to_chatcmpl).
+    kiln_status render_transcribe(const kiln_transcribe_options& o, kiln::RenderedPrompt& out) const override {
+        const common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls_.get());
+        std::string user = o.prompt && *o.prompt ? o.prompt : preset.user;
+        if (o.language && *o.language) user += std::string(" (language: ") + o.language + ")";
+        user += mtmd_default_marker();
+        std::vector<kiln_chat_message> msgs;
+        if (!preset.system.empty()) msgs.push_back({"system", preset.system.c_str()});
+        msgs.push_back({"user", user.c_str()});
+        kiln_chat_options co{};
+        co.add_assistant_prefix = true;
+        return render_chat(msgs.data(), (int32_t)msgs.size(), co, out);
+    }
+
     kiln_status create_context(const kiln_context_params& p, std::unique_ptr<kiln::Context>& out) override {
         auto c = std::make_unique<LlamaContext>(model_, tags_);
 
@@ -416,9 +534,10 @@ public:
 
         c->ctx_ = llama_init_from_model(model_, cp);
         if (!c->ctx_) return kiln::set_error(KILN_ERR_OUT_OF_MEMORY, "llama_init_from_model failed (n_ctx=" + std::to_string(cp.n_ctx) + ")");
-        c->n_batch_ = (int)cp.n_batch;
+        c->n_batch_ = (int)llama_n_batch(c->ctx_);   // llama.cpp lowers it to n_ctx when the context is smaller
         c->decision_ = &decision_;
         c->embedding_ = &embedding_;
+        c->media_ = &media_;
 
         if (pin) {
             ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
@@ -435,12 +554,12 @@ public:
     }
 
     kiln_status load_projector(const char* path, const kiln_projector_params& p, kiln_projector_info& out) override {
-        if (!embedding_.is_embedding_model())
-            return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "images and audio are supported for embedding models only");
-        // same cores and thread count as text; see AffinityScope in embedding.h for why the mask is needed
+        if (decision_.is_decision_model())
+            return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "images and audio are not supported for decision models");
+        // same cores and thread count as text; see AffinityScope in media.h for why the mask is needed
         uint64_t mask; int n_threads;
         const bool pin = affinity(mask, n_threads);
-        return embedding_.load_projector(model_, path, p, kind_ == KILN_BACKEND_GPU, n_threads, pin ? mask : 0, out);
+        return media_.load(model_, path, p, kind_ == KILN_BACKEND_GPU, n_threads, pin ? mask : 0, out);
     }
 
 private:
@@ -470,6 +589,7 @@ private:
     ThinkTags                 tags_;
     kiln::DecisionHead        decision_;
     kiln::EmbeddingHead       embedding_;
+    kiln::MediaProjector      media_;
 };
 
 // ------------------------------------------------------------------ Backend

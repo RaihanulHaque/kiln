@@ -28,7 +28,11 @@ static void usage() {
         "  --mmproj the model's image / audio encoders\n"
         "  --image-tokens N  most tokens one image may take (default 280; -1 = the model's own limit)\n"
         "  --query  rank the --embed texts and --media files by how well they match this query, best first\n"
-        "  --dim    keep only the first N numbers of each vector\n");
+        "  --dim    keep only the first N numbers of each vector\n"
+        "speech models:\n"
+        "       kiln-cli -m model.gguf --mmproj projector.gguf --transcribe clip.wav [--transcribe clip2.mp3]... [--language English] [-n max_tokens]\n"
+        "  --transcribe  an audio file (wav, mp3, flac) to write down; needs --mmproj\n"
+        "  --language    the language spoken, when known; without it the model works it out\n");
 }
 
 static bool on_piece(kiln_channel ch, const char* piece, int32_t, void*) {
@@ -64,6 +68,9 @@ int main(int argc, char** argv) {
     std::vector<std::string> opt_keys, opt_descs;
     std::vector<std::string> embed_texts, embed_media;
     std::string mmproj;
+    std::vector<std::string> clips;
+    std::string language;
+    bool max_tokens_set = false;
     int image_tokens = 0;
     std::string embed_query;
     int embed_dim = 0;
@@ -75,7 +82,7 @@ int main(int argc, char** argv) {
         if      (a == "--probe") probe = true;
         else if (a == "-m")      model = next();
         else if (a == "-p")      prompt = next();
-        else if (a == "-n")      max_tokens = atoi(next());
+        else if (a == "-n")      { max_tokens = atoi(next()); max_tokens_set = true; }
         else if (a == "-t")      threads = atoi(next());
         else if (a == "-c")      n_ctx = atoi(next());
         else if (a == "--cpu")   backend = KILN_BACKEND_CPU;
@@ -90,6 +97,8 @@ int main(int argc, char** argv) {
         else if (a == "--query") embed_query = next();
         else if (a == "--media") embed_media.push_back(next());
         else if (a == "--mmproj") mmproj = next();
+        else if (a == "--transcribe") clips.push_back(next());
+        else if (a == "--language") language = next();
         else if (a == "--image-tokens") image_tokens = atoi(next());
         else if (a == "--dim")   embed_dim = atoi(next());
         else if (a == "-o") {
@@ -130,6 +139,26 @@ int main(int argc, char** argv) {
         pp.image_max_tokens = image_tokens;
         if (kiln_model_load_projector(m, mmproj.c_str(), &pp, &pi) != KILN_OK) { fprintf(stderr, "projector failed: %s\n", kiln_last_error()); return 1; }
         fprintf(stderr, "projector: images=%s audio=%s\n", pi.supports_images ? "yes" : "no", pi.supports_audio ? "yes" : "no");
+    }
+
+    if (!clips.empty()) {
+        kiln_transcribe_options to = kiln_transcribe_options_default();
+        to.language   = language.empty() ? nullptr : language.c_str();
+        to.max_tokens = max_tokens_set ? max_tokens : 0;     // a transcript is as long as the clip; -n only when asked
+        int failed = 0;
+        for (const std::string& f : clips) {
+            kiln_media clip = {f.c_str(), nullptr, 0};
+            kiln_transcribe_stats ts;
+            const kiln_status s = kiln_transcribe(c, &clip, &to, on_piece, nullptr, &ts);
+            printf("\n"); fflush(stdout);
+            if (s != KILN_OK) { fprintf(stderr, "transcribe failed: %s\n", kiln_last_error()); ++failed; continue; }
+            fprintf(stderr, "          %.1f s of audio (%d of %d prompt tok) in %.0f ms = %.1fx real time | encoder %.0f ms, prompt %.0f ms, %d tok written in %.0f ms%s%s%s\n",
+                    ts.audio_seconds, ts.audio_tokens, ts.prompt_tokens, ts.ms, ts.ms > 0 ? ts.audio_seconds * 1000.0 / ts.ms : 0.0,
+                    ts.encode_ms, ts.prompt_ms, ts.generated_tokens, ts.gen_ms,
+                    ts.language[0] ? " | language: " : "", ts.language, ts.stopped_by_eos ? "" : " [cut]");
+        }
+        kiln_context_free(c); kiln_model_free(m);
+        return failed ? 1 : 0;
     }
 
     if (!embed_texts.empty() || !embed_media.empty() || !embed_query.empty()) {

@@ -1,6 +1,6 @@
 # kiln
 
-On-device LLM runtime: a C core (`include/kiln/kiln.h`) over llama.cpp, with a device probe,
+On-device LLM runtime (chat, decision, embedding and speech models): a C core (`include/kiln/kiln.h`) over llama.cpp, with a device probe,
 CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desktop.
 `docs/CODEBASE.md` is the file-by-file map; `docs/CONCEPTS.md` explains the ideas in plain words.
 
@@ -25,8 +25,8 @@ CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desk
 ```bash
 git submodule update --init --recursive      # CMake also does this if the submodule is empty
 cmake --preset host && cmake --build --preset host -j
-scripts/fetch_models.sh --media              # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders)
-./build/host/kiln-tests models               # 334 checks at 0.3.1; without --media the image / audio tests are skipped
+scripts/fetch_models.sh --media --speech     # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders and 1.0 GB for the speech model)
+./build/host/kiln-tests models               # 398 checks at 0.4.0 (349 without --speech); without --media the image / audio tests are skipped
 ./build/host/kiln-cli -m models/<file>.gguf --chat
 ```
 
@@ -74,6 +74,14 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   (`LLAMA_BUILD_MTMD`). The reference for them is `llama-server`, not `llama-embedding`;
   `docs/CODEBASE.md` has the request. The server picks a random media marker per run: read
   it from `/props`.
+- **Speech models (`kiln_transcribe`) are a chat turn with an audio clip attached.** The reference
+  is `llama-server`'s `/v1/audio/transcriptions` (`docs/CODEBASE.md` has the request), not
+  `llama-mtmd-cli`, which puts the audio before the instruction and can give another spelling.
+  Compare with the same `-t` on both sides: between 6 and 8 threads "Men Walk on Moon" became
+  "Men walk on moon" in the server and in kiln alike. Tests compare words, not capitals.
+- **llama.cpp changes a small context behind your back.** Asked for `n_ctx = 32` it gave a
+  context of 256 and a batch size below 52. Read both back (`llama_n_ctx`, `llama_n_batch`)
+  instead of trusting what was asked for; a batch larger than `llama_n_batch` aborts inside `mtmd`.
 - **A large image is slow far beyond its size.** 1080 image tokens took 21.7 s on the desktop;
   `image_max_tokens` defaults to 280. Test with a phone-sized photo, not only small images.
 - **A GGUF's training context can be wrong.** EmbeddingGemma 2 states 262144 tokens; its card
@@ -91,7 +99,7 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 - **Threads started inside a kiln call inherit one core.** The pinned threadpool ties the
   calling thread to a single core (it is worker 0). Anything that starts its own threads from
   that thread, as the mtmd image / audio encoders do, lands on that one core unless the caller
-  is widened first: see `AffinityScope` in `embedding.h`. `top -H` on the device shows it.
+  is widened first: see `AffinityScope` in `media.h`. `top -H` on the device shows it.
 - **Reference numbers from one processor are not exact on another.** A 4-bit model's vectors
   differ by up to 0.009 per number between x86, the Pixel 8 and the M4 GPU. Tests that compare
   with llama.cpp's numbers allow 0.015; tests that rank two texts need a real margin.
@@ -113,7 +121,19 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   the script without a message. This broke the Android scripts on macOS once.
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
 
-## Not yet verified (as of 0.3.1)
+## Not yet verified (as of 0.4.0)
+
+0.4.0 (speech to text, `kiln_transcribe`, Qwen3-ASR 0.6B): `kiln-tests models` gives 398 passed
+on Linux x86 (Ryzen 5 8500G) on 2026-10-13, after `scripts/fetch_models.sh --media --speech`.
+That machine has no Flutter, no adb and no Android NDK. Still open for it:
+
+- macOS, Android (Pixel 8) and iOS: not built, not run. The phone speed is the open question:
+  run `KILN_BENCH_ONLY=asr scripts/bench.sh` with the phone attached.
+- Flutter: no `transcribe` in the plugin. Run ffigen, add it to `kiln.dart` and the worker, test
+  on a device. `pubspec.yaml` and the podspec already say 0.4.0; do not publish before this.
+- Raw microphone samples, long recordings, and a 4-bit file (ggml-org publishes Q8_0 and bf16 only).
+
+The notes below are from 0.3.1 and earlier.
 
 Checked on 2026-10-11: `kiln-tests models` gives 154 passed on Linux x86 (Ryzen 5 8500G),
 macOS (M4 Pro, Metal) and Android (Pixel 8). The Flutter integration test passes on the Pixel 8
@@ -131,12 +151,11 @@ passed on macOS (M4 Pro, Metal) and Android (Pixel 8) on 2026-10-13, after
 plugin has `embed` / `embedMedia` / `loadProjector` and is at 0.3.0: 23 integration tests on
 the Pixel 8 (`--dart-define=KILN_MEDIA=true` for the image and audio test). Still open for it:
 
-- Linux x86: re-run `kiln-tests models` on the Ryzen (the test tolerances and two checks
-  changed on the Mac). Linux arm64 in Docker on the Mac gives 319 passed, and so does emulated x86_64
+- Linux x86: done at 0.4.0 (see above). Linux arm64 in Docker on the Mac gave 319 passed at 0.3.0, and so did emulated x86_64
   (add `--platform linux/amd64`, about four times slower); see the command above.
 - iOS, as for everything else.
 
-Known gaps: embedding models take one input per call; no video, no raw pixels or samples
+Known gaps: speech models take one clip per call, from a file or file bytes, and the clip has to fit in the context; embedding models take one input per call; no video, no raw pixels or samples
 (files or file bytes only); images and audio are for embedding models only, not chat. Decision models take a text state only (no images or audio,
 only the lfm2-d1-omni family); the probe counts hyperthreads as cores and trusts max frequency
 to tell cores apart (`docs/CPU.md` §8).

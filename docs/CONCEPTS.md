@@ -262,6 +262,48 @@ audio with one projector. Vectors from different models cannot be compared with 
 kiln stores nothing: it returns the vector and the app keeps it. This was run on Linux x86,
 on a Mac (Metal) and on a Pixel 8, and from Flutter on the Pixel 8.
 
+## Speech models
+
+A speech model writes down what someone says. The usual name is ASR, automatic speech
+recognition. Example: the app records "The train to London leaves at nine in the morning" and
+gets that sentence back as text, which it can then show, search, or hand to a chat model.
+
+It is built from two parts that were already here. The **audio encoder** (the projector file)
+turns the sound into a row of vectors, 13 for each started second with Qwen3-ASR. The **text model**
+reads those vectors as if they were words, and then writes the sentence one token at a time,
+exactly as a chat model writes an answer. So a transcription is a chat turn where the
+question is fixed ("Transcribe audio to text") and an audio clip is attached to it.
+
+That is why the cost has three parts. For the 3-second clip above on the desktop CPU:
+
+| step | what happens | time |
+|---|---|---|
+| encode | the sound becomes 52 vectors | 0.14 s |
+| read | the model takes in the instruction and the vectors (67 tokens) | 0.18 s |
+| write | the model writes 14 tokens | 0.35 s |
+
+Writing is the largest part, and it grows with how much was said, not with how long the clip
+is. A 17-second clip with 88 tokens of text took 3.3 s, of which 2.1 s was writing.
+
+The number to watch is **how many times faster than real time** it runs. 17 seconds of sound
+in 3.3 s is about 5 times faster. Below 1 the app falls behind the speaker. The desktop is at
+5; a phone is several times slower than this desktop on other models, so the phone number
+has to be measured before promising voice input. It has not been measured yet.
+
+Three things to know:
+
+- **It always takes the most likely word.** The same clip gives the same text every time on
+  the same machine. Across machines, or with a different number of threads, a capital letter
+  can differ ("Men Walk on Moon" or "Men walk on moon"); the words stay.
+- **Silence gives an empty text.** A 2-second tone came back as nothing, not as invented words.
+- **A clip has to fit in the context.** At 13 tokens a second the default context holds a few
+  minutes. A longer recording is refused, and the app cuts it into pieces.
+
+Memory with Qwen3-ASR 0.6B at 8 bits: 1.5 GB while it works (the text model is 805 MB, the
+encoder 214 MB). kiln takes a file or the bytes of a file, so an app records to a wav first.
+
+Run so far on Linux x86 only, through the C API and `kiln-cli --transcribe`.
+
 ## Chat templates
 
 Each model was trained on conversations formatted a specific way: special tokens around

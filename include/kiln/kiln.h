@@ -25,8 +25,8 @@ extern "C" {
 #endif
 
 #define KILN_VERSION_MAJOR 0
-#define KILN_VERSION_MINOR 3
-#define KILN_VERSION_PATCH 1
+#define KILN_VERSION_MINOR 4
+#define KILN_VERSION_PATCH 0
 
 /* ------------------------------------------------------------------ */
 /* Status                                                              */
@@ -351,10 +351,11 @@ typedef struct kiln_projector_info {
     bool supports_audio;
 } kiln_projector_info;
 
-/* Loads the image / audio encoders that belong to an embedding model (its mmproj GGUF).
- * Call once after kiln_model_load, before embedding media; freed with the model. The
+/* Loads the image / audio encoders that belong to a model (its mmproj GGUF): an embedding
+ * model that takes media, or a speech model (see kiln_transcribe).
+ * Call once after kiln_model_load, before using media; freed with the model. The
  * encoders stay in memory, often more than the text model itself. params and out may be NULL.
- * Returns KILN_ERR_NOT_SUPPORTED on a model that is not an embedding model. */
+ * Returns KILN_ERR_NOT_SUPPORTED on a decision model. */
 KILN_API kiln_status kiln_model_load_projector(kiln_model* m, const char* path,
                                                const kiln_projector_params* params,
                                                kiln_projector_info* out);
@@ -381,6 +382,54 @@ KILN_API kiln_status kiln_embed_media(kiln_context* c, const char* text,
                                       const kiln_embed_options* opts,
                                       float* out, int32_t out_cap,
                                       kiln_embed_stats* stats);
+
+/* ------------------------------------------------------------------ */
+/* Speech to text                                                      */
+/* ------------------------------------------------------------------ */
+
+/* A speech model writes down what is said in an audio clip. It comes as two files: a small
+ * text model and an audio encoder (its projector, an "mmproj" GGUF). Load the model, load the
+ * projector with kiln_model_load_projector, create a context, then call kiln_transcribe.
+ * Tested with Qwen3-ASR 0.6B. */
+
+typedef struct kiln_transcribe_options {
+    const char* language;         /* the language spoken, e.g. "English", when known. NULL = the model works it out */
+    const char* prompt;           /* replaces the instruction kiln gives the model. NULL = "Transcribe audio to text" */
+    int32_t     max_tokens;       /* <= 0 = until the model stops or the context is full */
+} kiln_transcribe_options;
+
+KILN_API kiln_transcribe_options kiln_transcribe_options_default(void);
+
+typedef struct kiln_transcribe_stats {
+    double  audio_seconds;        /* length of the clip */
+    int32_t audio_tokens;         /* tokens the clip took in the context */
+    int32_t prompt_tokens;        /* instruction and audio together */
+    int32_t generated_tokens;
+    double  encode_ms;            /* audio encoder: sound to audio tokens */
+    double  prompt_ms;            /* the model reading the instruction and the audio tokens */
+    double  gen_ms;               /* the model writing the words */
+    double  ms;                   /* whole call, reading the file included. Faster than real time when ms < audio_seconds * 1000 */
+    char    language[32];         /* the language as the model named it, e.g. "English"; empty if it did not say.
+                                     Qwen3-ASR writes "None" when it hears no speech */
+    bool    stopped_by_eos;       /* the model finished by itself (false = cut by max_tokens, the context or the caller) */
+    bool    stopped_by_user;
+} kiln_transcribe_stats;
+
+/* Writes down one audio clip (wav, mp3 or flac: a file path or the bytes of such a file) and
+ * streams the words to cb, on KILN_CHANNEL_ANSWER, as they are produced. Always picks the most
+ * likely word, so the same clip gives the same text. Blocking; kiln_cancel stops it.
+ * Each call stands alone and clears the context: a conversation held in it is forgotten.
+ * A clip with no speech in it gives an empty text and KILN_OK.
+ * The clip and its text have to fit in the context (13 tokens per second of audio with
+ * Qwen3-ASR; the default context of 4096 holds a few minutes), else KILN_ERR_CONTEXT_FULL:
+ * cut long recordings into pieces. A clip that is too long is refused before any work; one
+ * that just fits can still run out of room while the words are written, after part of the
+ * text was streamed. opts, cb and stats may be NULL.
+ * Returns KILN_ERR_NOT_SUPPORTED when no projector that takes audio is loaded. */
+KILN_API kiln_status kiln_transcribe(kiln_context* c, const kiln_media* audio,
+                                     const kiln_transcribe_options* opts,
+                                     kiln_token_cb cb, void* user,
+                                     kiln_transcribe_stats* stats);
 
 /* ------------------------------------------------------------------ */
 /* Logging                                                             */

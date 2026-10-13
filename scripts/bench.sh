@@ -2,7 +2,7 @@
 # Run kiln-bench on the host and (if a device is attached) on Android, then plot.
 # Every model in models/ is benchmarked the way it is used: chat models generate text, decision
 # models answer questions, embedding models embed texts and, when their projector file is there,
-# an image and an audio clip from tests/media.
+# an image and an audio clip from tests/media; speech models write down two clips from tests/media.
 # usage: scripts/bench.sh [runs] [tokens]
 #   KILN_BENCH_ONLY=<substring>     only models whose file name contains it
 #   KILN_BENCH_SKIP_HOST=1          device only (do not overwrite the host's results)
@@ -17,7 +17,7 @@ CPU_NAME="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || sed -n 's/^model n
 HOST_TAG="${KILN_BENCH_TAG:-$(printf '%s' "${CPU_NAME:-host}" | tr -d ' ()' | tr '[:upper:]' '[:lower:]' | sed 's/^apple//')}"
 DEV=/data/local/tmp/kiln
 
-# Model files to benchmark. A projector ("mmproj") is an add-on to an embedding model, not a model.
+# Model files to benchmark. A projector ("mmproj") is an add-on to an embedding or speech model, not a model.
 models() {
   local m
   for m in "$ROOT"/models/*.gguf; do
@@ -27,7 +27,7 @@ models() {
   done
 }
 
-# Extra arguments for an embedding model whose projector is in models/: "<projector file> <media file>..."
+# Extra arguments for an embedding or speech model whose projector is in models/: "<projector file> <media file>..."
 # (file names only; the caller adds the directories). Prints nothing for every other model.
 media_for() {
   case "$1" in
@@ -35,6 +35,8 @@ media_for() {
       [ -f "$ROOT/models/mmproj-embeddinggemma-2-Q8_0.gguf" ] && echo "mmproj-embeddinggemma-2-Q8_0.gguf red_circle.png speech_train.wav" ;;
     jina-embeddings-v5-omni-nano-retrieval-Q4_K_M)   # its vision projector takes images only
       [ -f "$ROOT/models/jina-embeddings-v5-omni-nano-retrieval-vision-mmproj-F16.gguf" ] && echo "jina-embeddings-v5-omni-nano-retrieval-vision-mmproj-F16.gguf red_circle.png" ;;
+    Qwen3-ASR-0.6B-Q8_0)   # a speech model: without its projector it would be benchmarked as a chat model
+      [ -f "$ROOT/models/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf" ] && echo "mmproj-Qwen3-ASR-0.6B-Q8_0.gguf speech_train.wav speech_recipe.wav" ;;
   esac
   return 0
 }

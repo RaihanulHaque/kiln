@@ -1,3 +1,10 @@
+## 0.4.0 (not published)
+
+- The native core is 0.4.0 and can write down speech (`kiln_transcribe` in C). **The plugin
+  has no Dart API for it yet**: the bindings were not regenerated and nothing was run on a
+  phone. Existing calls are unchanged. Do not publish this version before `transcribe` is
+  added and tested on a device.
+
 ## 0.3.1
 
 - **Phones whose chip has no little cores now use more of it.** On a Galaxy S26 Ultra

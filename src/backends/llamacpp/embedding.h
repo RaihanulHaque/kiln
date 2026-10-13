@@ -2,63 +2,19 @@
 // The model gives one vector per token; its GGUF says how to combine them (pooling), and
 // llama.cpp does that. What kiln adds: detection, the task prefix the model was trained with,
 // optional shortening of the vector, and normalising to length 1.
-// Images and audio go through llama.cpp's mtmd library: an encoder (the projector file) turns
-// each one into vectors of the same kind the model uses for text tokens, and they are fed in
-// next to the text. The way they are batched follows llama.cpp's server (add_prompt_mixed).
+// Images and audio go through the model's projector (media.h): they are fed in next to the
+// text. The way they are batched follows llama.cpp's server (add_prompt_mixed).
 #pragma once
-#include "../../core/internal.h"
-
-#include "llama.h"
-#include "mtmd.h"
-#include "mtmd-helper.h"
+#include "media.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
-#include <mutex>
 #include <string>
 #include <vector>
 
-#if defined(__linux__)
-#include <sched.h>
-#endif
-
 namespace kiln {
-
-// Lets the calling thread run on every core of `mask` for as long as it lives, then puts the
-// old setting back.
-// Why: kiln's pinned threadpool ties the thread that calls into kiln to one core (it is worker 0
-// of the pool). The image / audio encoder starts its own threads, and new threads inherit the
-// caller's setting, so all of them landed on that single core: one small image took 14 s on a
-// Pixel 8 instead of about 3 s. Widening the caller first lets the encoder spread over the fast
-// cores. mask == 0 does nothing. Only Linux and Android pin threads this way.
-class AffinityScope {
-public:
-    explicit AffinityScope(uint64_t mask) {
-#if defined(__linux__)
-        if (!mask || sched_getaffinity(0, sizeof old_, &old_) != 0) return;
-        cpu_set_t wide;
-        CPU_ZERO(&wide);
-        for (int i = 0; i < 64; ++i) if (mask & (1ull << i)) CPU_SET(i, &wide);
-        active_ = sched_setaffinity(0, sizeof wide, &wide) == 0;
-#else
-        (void)mask;
-#endif
-    }
-    ~AffinityScope() {
-#if defined(__linux__)
-        if (active_) sched_setaffinity(0, sizeof old_, &old_);
-#endif
-    }
-    AffinityScope(const AffinityScope&) = delete;
-    AffinityScope& operator=(const AffinityScope&) = delete;
-private:
-#if defined(__linux__)
-    cpu_set_t old_;
-    bool      active_ = false;
-#endif
-};
 
 class EmbeddingHead {
 public:
@@ -99,29 +55,6 @@ public:
     bool    is_embedding_model() const { return is_embedding_; }
     int32_t n_embd() const { return n_embd_; }
 
-    ~EmbeddingHead() { free_projector(); }
-    void free_projector() { if (mctx_) { mtmd_free(mctx_); mctx_ = nullptr; } }
-
-    // cpu_mask: the cores the encoders may use (0 = leave thread placement to the system)
-    kiln_status load_projector(const llama_model* model, const char* path, const kiln_projector_params& p, bool use_gpu, int n_threads, uint64_t cpu_mask, kiln_projector_info& out) {
-        std::lock_guard<std::mutex> lock(media_mutex_);
-        if (mctx_) return kiln::set_error(KILN_ERR_INVALID_ARG, "a projector is already loaded for this model");
-        mtmd_context_params mp = mtmd_context_params_default();
-        mp.use_gpu       = use_gpu;
-        mp.n_threads     = n_threads;
-        mp.print_timings = false;
-        mp.warmup        = false;
-        // A phone photo at the model's own limit can take over a thousand tokens and many
-        // seconds in the encoder; 280 is what EmbeddingGemma's card uses by default.
-        mp.image_max_tokens = p.image_max_tokens == 0 ? kDefaultImageTokens : p.image_max_tokens < 0 ? -1 : p.image_max_tokens;
-        mctx_ = mtmd_init_from_file(path, model, mp);
-        if (!mctx_) return kiln::set_error(KILN_ERR_MODEL_LOAD, std::string("failed to load projector ") + path + " (missing, corrupt, or made for another model)");
-        out.supports_images = mtmd_support_vision(mctx_);
-        out.supports_audio  = mtmd_support_audio(mctx_);
-        media_mask_ = cpu_mask;
-        return KILN_OK;
-    }
-
     // These models are not causal: every token looks at every other one, so a text has to go
     // through in a single batch. The context is sized to the longest text it will accept.
     void configure(llama_context_params& cp, int32_t requested_n_ctx) const {
@@ -133,7 +66,7 @@ public:
         cp.embeddings = true;                           // pooling type stays the model's own
     }
 
-    kiln_status embed(llama_context* ctx, const char* text, const kiln_media* media, int32_t n_media,
+    kiln_status embed(llama_context* ctx, const MediaProjector& proj, const char* text, const kiln_media* media, int32_t n_media,
                       const kiln_embed_options& o, float* out, int32_t out_cap, kiln_embed_stats& st) const {
         if (!is_embedding_) return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not an embedding model");
         const auto t0 = std::chrono::steady_clock::now();
@@ -145,7 +78,7 @@ public:
         }
         if (out_cap < dim) return kiln::set_error(KILN_ERR_INVALID_ARG, "out holds " + std::to_string(out_cap) + " floats, need " + std::to_string(dim));
 
-        kiln_status s = n_media > 0 ? decode_media(ctx, text, media, n_media, st) : decode_text(ctx, text, o, st);
+        kiln_status s = n_media > 0 ? decode_media(ctx, proj, text, media, n_media, st) : decode_text(ctx, text, o, st);
         if (s != KILN_OK) return s;
 
         const float* e = llama_get_embeddings_seq(ctx, 0);
@@ -211,30 +144,13 @@ private:
     // Text with images / audio, or media alone. mtmd splits the input into chunks: runs of
     // text tokens, and one chunk per media item. Each media chunk is run through its encoder,
     // then everything goes to the model as one batch that mixes token ids and vectors.
-    kiln_status decode_media(llama_context* ctx, const char* text, const kiln_media* media, int32_t n_media, kiln_embed_stats& st) const {
-        std::lock_guard<std::mutex> lock(media_mutex_);     // the encoders are not thread-safe
-        if (!mctx_) return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "no projector loaded; call kiln_model_load_projector with the model's mmproj file");
+    kiln_status decode_media(llama_context* ctx, const MediaProjector& proj, const char* text, const kiln_media* media, int32_t n_media, kiln_embed_stats& st) const {
+        std::lock_guard<std::mutex> lock(proj.mutex());     // the encoders are not thread-safe
+        mtmd_context* mctx = proj.ctx();
+        if (!mctx) return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "no projector loaded; call kiln_model_load_projector with the model's mmproj file");
 
-        struct Bitmaps {
-            std::vector<mtmd_bitmap*> v;
-            ~Bitmaps() { for (auto* b : v) mtmd_bitmap_free(b); }
-        } bitmaps;
-        for (int32_t i = 0; i < n_media; ++i) {
-            const mtmd_helper_init_opt opt = mtmd_helper_init_opt_default();
-            mtmd_helper_bitmap_wrapper w = media[i].path
-                ? mtmd_helper_bitmap_init_from_file(mctx_, media[i].path, false, opt)
-                : mtmd_helper_bitmap_init_from_buf(mctx_, media[i].data, media[i].size, false, opt);
-            if (w.video_ctx) { mtmd_helper_video_free(w.video_ctx); return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "video is not supported"); }
-            if (!w.bitmap) {
-                const bool both = mtmd_support_vision(mctx_) && mtmd_support_audio(mctx_);
-                return kiln::set_error(KILN_ERR_INVALID_ARG, "media item " + std::to_string(i) + " could not be read as an image or audio file"
-                                       + (both ? "" : mtmd_support_vision(mctx_) ? " (this projector takes images only)" : " (this projector takes audio only)"));
-            }
-            bitmaps.v.push_back(w.bitmap);
-            const bool audio = mtmd_bitmap_is_audio(w.bitmap);
-            if (audio ? !mtmd_support_audio(mctx_) : !mtmd_support_vision(mctx_))
-                return kiln::set_error(KILN_ERR_NOT_SUPPORTED, std::string("the loaded projector does not take ") + (audio ? "audio" : "images"));
-        }
+        MediaProjector::Bitmaps bitmaps;
+        if (kiln_status s = proj.read(media, n_media, bitmaps); s != KILN_OK) return s;
 
         // markers written by the caller are used as they are; otherwise the media follow the text
         const std::string marker = mtmd_default_marker();
@@ -252,7 +168,7 @@ private:
             ~Chunks() { mtmd_input_chunks_free(c); }
         } chunks;
         mtmd_input_text in{input.c_str(), input.size(), true, true};
-        const int32_t trc = mtmd_tokenize(mctx_, chunks.c, &in, const_cast<const mtmd_bitmap**>(bitmaps.v.data()), bitmaps.v.size());
+        const int32_t trc = mtmd_tokenize(mctx, chunks.c, &in, const_cast<const mtmd_bitmap**>(bitmaps.v.data()), bitmaps.v.size());
         if (trc != 0) return kiln::set_error(KILN_ERR_BACKEND, "could not prepare the media for the model (mtmd_tokenize rc=" + std::to_string(trc) + ")");
 
         const int n     = (int)mtmd_helper_get_n_tokens(chunks.c);
@@ -266,7 +182,7 @@ private:
         } batch{llama_batch_ext_init(ctx)};
         const llama_model* model   = llama_get_model(ctx);
         const size_t n_embd_inp    = (size_t)llama_model_n_embd_inp(model);
-        const bool   mrope         = mtmd_decode_use_mrope(mctx_);
+        const bool   mrope         = mtmd_decode_use_mrope(mctx);
         std::vector<std::vector<float>> encoded;            // must outlive llama_process
         double encoder_ms = 0.0;                            // time inside the encoders only
         llama_pos pos = 0;
@@ -285,14 +201,14 @@ private:
                 continue;
             }
             {
-                AffinityScope spread(media_mask_);          // see AffinityScope: the encoder's threads inherit this
+                AffinityScope spread(proj.cpu_mask());          // see AffinityScope: the encoder's threads inherit this
                 const auto te = std::chrono::steady_clock::now();
-                const int32_t erc = mtmd_encode_chunk(mctx_, chunk);
+                const int32_t erc = mtmd_encode_chunk(mctx, chunk);
                 encoder_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - te).count();
                 if (erc != 0) return kiln::set_error(KILN_ERR_BACKEND, "the image / audio encoder failed");
             }
             const size_t nt   = mtmd_input_chunk_get_n_tokens(chunk);
-            const float* embd = mtmd_get_output_embd(mctx_);
+            const float* embd = mtmd_get_output_embd(mctx);
             encoded.emplace_back(embd, embd + nt * n_embd_inp);
             const float* rows = encoded.back().data();
             const mtmd_image_tokens* image = mtmd_input_chunk_get_tokens_image(chunk);
@@ -324,7 +240,6 @@ private:
     // Longest text accepted when the caller does not ask for more. Cost grows faster than
     // length, and some GGUFs state a training context far above what the model was built for.
     static constexpr uint32_t kDefaultCtx = 2048;
-    static constexpr int kDefaultImageTokens = 280;
 
     bool        is_embedding_ = false;
     int32_t     n_embd_       = 0;
@@ -332,10 +247,6 @@ private:
     std::string query_prefix_;
     std::string doc_prefix_;
     bool        doc_titled_   = false;
-
-    mtmd_context*      mctx_ = nullptr;     // image / audio encoders, loaded on request
-    uint64_t           media_mask_ = 0;     // cores the encoders may use; 0 = not restricted
-    mutable std::mutex media_mutex_;
 };
 
 } // namespace kiln

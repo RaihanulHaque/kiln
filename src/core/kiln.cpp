@@ -189,4 +189,22 @@ kiln_status kiln_embed_media(kiln_context* c, const char* text, const kiln_media
     return s;
 }
 
+kiln_transcribe_options kiln_transcribe_options_default(void) {
+    kiln_transcribe_options o{}; o.language = nullptr; o.prompt = nullptr; o.max_tokens = 0; return o;
+}
+
+kiln_status kiln_transcribe(kiln_context* c, const kiln_media* audio, const kiln_transcribe_options* opts,
+                            kiln_token_cb cb, void* user, kiln_transcribe_stats* stats) {
+    kiln_transcribe_stats st{};
+    if (stats) *stats = st;
+    if (!c || !audio) return set_error(KILN_ERR_INVALID_ARG, "null handle/audio");
+    if (!audio->path && (!audio->data || audio->size == 0)) return set_error(KILN_ERR_INVALID_ARG, "audio without path or data");
+    kiln_transcribe_options o = opts ? *opts : kiln_transcribe_options_default();
+    RenderedPrompt r;
+    kiln_status s = c->model->render_transcribe(o, r);
+    if (s == KILN_OK) s = c->impl->transcribe(r, *audio, o.max_tokens, cb, user, st);
+    if (stats) *stats = st;
+    return s;
+}
+
 }

@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.4.0
+
+Speech to text. The C ABI changed: two new functions (`kiln_transcribe`,
+`kiln_transcribe_options_default`) and two new structs (`kiln_transcribe_options`,
+`kiln_transcribe_stats`). No existing struct or function changed, so code built against 0.3.x
+headers keeps working. The llama.cpp submodule is unchanged (781dbc5ac).
+
+- **`kiln_transcribe` writes down what is said in an audio clip.** A speech model is two
+  files: a small text model and an audio encoder (its `mmproj`). Load the model, load the
+  encoder with `kiln_model_load_projector`, and call `kiln_transcribe` with a wav, mp3 or flac
+  file (a path, or the bytes). The words are streamed to the same callback `kiln_chat` uses.
+  `kiln_transcribe_stats` gives the length of the clip, the time in the encoder, in reading
+  and in writing, and the language the model heard. `kiln_transcribe_options` takes a language
+  hint, another instruction, and a token limit.
+- Tested with **Qwen3-ASR 0.6B** (Q8_0, 805 MB, with its 214 MB encoder; Apache 2.0). On the
+  Linux desktop (Ryzen 5 8500G, CPU, 8 threads) a 3-second clip takes 0.6 to 0.8 s and a
+  17-second clip 3.0 to 3.4 s, about 5 times faster than real time, with 1.5 GB of memory in
+  use. The desktop was in normal use during these runs; they are not a quiet-machine
+  benchmark. A clip with no speech in it gives an empty text.
+- The text is what llama.cpp's `llama-server` returns from `/v1/audio/transcriptions` for the
+  same file, when both run with the same number of threads (compared on four clips at 6
+  threads and on the 17-second one at 8; the token counts of the prompts match too). Between 6 and 8 threads one headline in that clip
+  changes from "Men Walk on Moon" to "Men walk on moon", in the server and in kiln alike:
+  processors round differently with a different split of the work, and two near-equal
+  spellings can swap. The words do not change.
+- Qwen3-ASR starts its answer with `language English<asr_text>`. kiln removes that header and
+  reports the language in the stats.
+- `kiln_model_load_projector` now also works on a chat-style model (before: embedding models
+  only). It still returns `KILN_ERR_NOT_SUPPORTED` on a decision model.
+- A transcription clears the context: a conversation held in it is forgotten, and the audio
+  leaves nothing behind for the next `kiln_chat`.
+- Fix: a context smaller than 512 tokens kept a batch size of 512 where llama.cpp had lowered
+  it. Harmless for chat, where the prompt has to fit in the context anyway; it would have
+  aborted on audio.
+- `kiln-cli`: `--transcribe clip.wav` (repeatable) and `--language`. `kiln-bench`: a chat-style
+  model given `--mmproj` and `--media` is benchmarked as a speech model (series
+  `transcribe-<file>`); `scripts/bench.sh` does that for Qwen3-ASR.
+- `scripts/fetch_models.sh --speech` downloads the speech model and its encoder (1.0 GB).
+- Internal: the projector code moved from `embedding.h` to `media.h`, shared by embeddings and
+  speech; the sampling loop of `generate` is now a method that `transcribe` also uses.
+
+Verified with `kiln-tests` on Linux x86_64 (Ryzen 5 8500G, CPU) on 2026-10-13: 398 checks with
+the speech model, 349 without it (334 before, plus 8 for the transcript header and 7 for the
+new error paths). This is also the first full run of the suite on that machine since 0.3.0.
+
+Not run: macOS, Android, iOS. No phone was attached, so there is no phone speed yet, and that
+is the number that decides whether this is usable for voice. The Flutter plugin has no
+`transcribe` yet: its bindings were not regenerated (no Flutter on the machine this was
+written on), so `kiln_flutter` 0.4.0 must not be published before that is done.
+
+Known gaps: one clip per call; files or file bytes only (no raw microphone samples, so an app
+records to a wav first); nothing is streamed in while the person is still speaking; a
+recording longer than the context has to be cut by the app; only the Q8_0 file was tried.
+
 ## 0.3.1
 
 No ABI change: code built against 0.3.0 headers keeps working.
