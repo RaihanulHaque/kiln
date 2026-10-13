@@ -122,6 +122,8 @@ typedef struct kiln_model_info {
     bool     is_decision_model;   /* answers typed questions with kiln_decide; cannot generate text */
     bool     is_embedding_model;  /* turns text into a vector with kiln_embed; cannot generate text */
     int32_t  n_embd;              /* embedding models: length of the vector kiln_embed returns; else 0 */
+    bool     is_speech_model;     /* writes down audio with kiln_transcribe and needs no projector (Whisper, Parakeet);
+                                     cannot generate text. Qwen3-ASR is a chat-style model plus a projector, so it reads false */
 } kiln_model_info;
 
 KILN_API kiln_status kiln_model_get_info(const kiln_model* m, kiln_model_info* out);
@@ -387,15 +389,20 @@ KILN_API kiln_status kiln_embed_media(kiln_context* c, const char* text,
 /* Speech to text                                                      */
 /* ------------------------------------------------------------------ */
 
-/* A speech model writes down what is said in an audio clip. It comes as two files: a small
- * text model and an audio encoder (its projector, an "mmproj" GGUF). Load the model, load the
- * projector with kiln_model_load_projector, create a context, then call kiln_transcribe.
- * Tested with Qwen3-ASR 0.6B. */
+/* A speech model writes down what is said in an audio clip. Two kinds are supported:
+ *  - Whisper and Parakeet files from whisper.cpp ("ggml-base-q5_1.bin", "ggml-parakeet-tdt-0.6b-v3-q8_0.bin").
+ *    kiln_model_load takes them like a GGUF; the encoder is built in, so no projector is
+ *    needed and kiln_model_info.is_speech_model is true. Create a context and call kiln_transcribe.
+ *  - Qwen3-ASR, a small text model plus an audio encoder (its projector, an "mmproj" GGUF):
+ *    load the model, load the projector with kiln_model_load_projector, then transcribe.
+ * Tested with Whisper base (q5_1), Parakeet TDT 0.6B v3 (q8_0) and Qwen3-ASR 0.6B (Q8_0). */
 
 typedef struct kiln_transcribe_options {
-    const char* language;         /* the language spoken, e.g. "English", when known. NULL = the model works it out */
-    const char* prompt;           /* replaces the instruction kiln gives the model. NULL = "Transcribe audio to text" */
-    int32_t     max_tokens;       /* <= 0 = until the model stops or the context is full */
+    const char* language;         /* the language spoken, e.g. "English", when known. NULL = the model works it out.
+                                     Parakeet does not take a hint; an English-only Whisper file refuses another language */
+    const char* prompt;           /* Qwen3-ASR: replaces the instruction (NULL = "Transcribe audio to text").
+                                     Whisper: a text the words may follow on from (names, spellings). Parakeet: ignored */
+    int32_t     max_tokens;       /* <= 0 = until the model stops or the context is full. Whisper: per 30-second window. Parakeet: ignored */
 } kiln_transcribe_options;
 
 KILN_API kiln_transcribe_options kiln_transcribe_options_default(void);
@@ -409,8 +416,8 @@ typedef struct kiln_transcribe_stats {
     double  prompt_ms;            /* the model reading the instruction and the audio tokens */
     double  gen_ms;               /* the model writing the words */
     double  ms;                   /* whole call, reading the file included. Faster than real time when ms < audio_seconds * 1000 */
-    char    language[32];         /* the language as the model named it, e.g. "English"; empty if it did not say.
-                                     Qwen3-ASR writes "None" when it hears no speech */
+    char    language[32];         /* the language as the model named it, e.g. "English"; empty if it did not say
+                                     (Parakeet never does). Qwen3-ASR writes "None" when it hears no speech */
     bool    stopped_by_eos;       /* the model finished by itself (false = cut by max_tokens, the context or the caller) */
     bool    stopped_by_user;
 } kiln_transcribe_stats;
@@ -425,7 +432,9 @@ typedef struct kiln_transcribe_stats {
  * cut long recordings into pieces. A clip that is too long is refused before any work; one
  * that just fits can still run out of room while the words are written, after part of the
  * text was streamed. opts, cb and stats may be NULL.
- * Returns KILN_ERR_NOT_SUPPORTED when no projector that takes audio is loaded. */
+ * Whisper works on 30-second windows and takes any length; Parakeet takes the clip whole.
+ * Returns KILN_ERR_NOT_SUPPORTED on a model that cannot transcribe, or a Qwen3-ASR model
+ * whose projector is not loaded yet. */
 KILN_API kiln_status kiln_transcribe(kiln_context* c, const kiln_media* audio,
                                      const kiln_transcribe_options* opts,
                                      kiln_token_cb cb, void* user,

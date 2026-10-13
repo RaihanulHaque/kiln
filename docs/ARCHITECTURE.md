@@ -16,6 +16,7 @@ flowchart TB
         H["kiln.h · stable C ABI<br/>opaque handles, status codes, callbacks"]
         C["core<br/>kiln.cpp · registry · error · probe"]
         B["backend: llama.cpp<br/>templates (minja) · prefix reuse · sampling · reasoning splitter · pinned threadpool"]
+        Bw["backend: whisper.cpp<br/>Whisper · Parakeet (same ggml)"]
         Bq["backend: QNN (planned)"]
         Bl["backend: LiteRT-LM (planned)"]
     end
@@ -110,12 +111,10 @@ One source tree, three outputs, no copies.
 - [ ] Embeddings: iOS run, several inputs per call, video, raw pixels and samples, rerankers
 - [x] First Snapdragon run and core selection for chips with no little cores (Galaxy S26 Ultra); OpenCL on Adreno tried, slower than CPU for sub-1B models
 - [ ] Images and audio for chat models (the projector plumbing is now in the build; decision models are tracked above)
-- [x] v0.4.0: ASR (speech to text): `kiln_transcribe`, a chat-style call that takes an audio clip and streams the words. Qwen3-ASR 0.6B,
-      same text as `llama-server`; Linux x86 only so far. (The Whisper and Parakeet files in `mtmd` are encoders that feed a text model,
-      not recognisers by themselves, so a plain Whisper or Parakeet GGUF does not work here.)
-- [ ] ASR: phone run and speed (Pixel 8), macOS, Flutter `transcribe`, raw microphone samples, cutting long recordings, a 4-bit file
-- [ ] ASR: a second engine for Parakeet (ONNX Runtime) or Whisper (whisper.cpp)? Parakeet was more accurate and faster than Qwen3-ASR
-      on English on the desktop (docs/ASR_COMPARISON.md). Decide after the phone run; nothing built
+- [x] v0.4.0: ASR (speech to text): `kiln_transcribe`. Qwen3-ASR 0.6B through llama.cpp (a chat-style call with an audio clip
+      attached, same text as `llama-server`), and Whisper and Parakeet through a second engine, whisper.cpp, sharing llama.cpp's
+      ggml. Run on the Pixel 8, the M4 Pro and Linux; Flutter `transcribe` with a recording example app.
+- [ ] ASR: iOS build with whisper.cpp, raw microphone samples, Whisper small / large and other Parakeet quantisations, speaker turns
 - [ ] TTS (text to speech): `mtmd` has Qwen3-TTS and PocketTTS, but its header marks audio generation as experimental and subject
       to breaking changes. Needs a new output kind in `kiln.h` (audio samples). Check how stable that API is in a newer llama.cpp first. Nothing run yet
 - [ ] Voice loop in the example app once both exist: ASR -> chat -> embeddings lookup -> TTS, all offline from GGUF files

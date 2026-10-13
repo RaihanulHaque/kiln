@@ -13,7 +13,7 @@ PKG="$ROOT/flutter/kiln_flutter"
 DST="$PKG/src/core"
 
 rm -rf "$DST"
-mkdir -p "$DST/third_party/llama.cpp"
+mkdir -p "$DST/third_party/llama.cpp" "$DST/third_party/whisper.cpp"
 
 # --- kiln core
 cp -R "$ROOT/include" "$ROOT/src" "$ROOT/CMakeLists.txt" "$ROOT/LICENSE" "$DST/"
@@ -22,6 +22,10 @@ cp -R "$ROOT/include" "$ROOT/src" "$ROOT/CMakeLists.txt" "$ROOT/LICENSE" "$DST/"
 LLAMA_SHA="$(git -C "$ROOT/third_party/llama.cpp" rev-parse HEAD)"
 LLAMA_TAG="$(git -C "$ROOT/third_party/llama.cpp" describe --tags --exact-match 2>/dev/null || echo "$LLAMA_SHA")"
 git -C "$ROOT/third_party/llama.cpp" archive --format=tar HEAD | tar -x -C "$DST/third_party/llama.cpp"
+WHISPER_SHA="$(git -C "$ROOT/third_party/whisper.cpp" rev-parse HEAD)"
+git -C "$ROOT/third_party/whisper.cpp" archive --format=tar HEAD | tar -x -C "$DST/third_party/whisper.cpp"
+rm -rf "$DST/third_party/whisper.cpp/ggml" "$DST/third_party/whisper.cpp/examples" "$DST/third_party/whisper.cpp/tests" \
+       "$DST/third_party/whisper.cpp/bindings" "$DST/third_party/whisper.cpp/models" "$DST/third_party/whisper.cpp/samples"   # its own ggml copy and extras are not built
 
 # --- prune what the CPU/Metal/Vulkan build never reads
 L="$DST/third_party/llama.cpp"
@@ -40,6 +44,7 @@ Vendored copy of the kiln core. Do not edit here; edit the monorepo and re-run s
 
 kiln:      $(git -C "$ROOT" describe --tags --always --dirty)
 llama.cpp: $LLAMA_TAG ($LLAMA_SHA)
+whisper.cpp: $WHISPER_SHA
 date:      $(date -u +%Y-%m-%dT%H:%MZ)
 STAMP
 
@@ -57,6 +62,7 @@ if [[ "${1:-}" == "--check" ]]; then
   N="$(wc -l < "$TMP/files.txt" | tr -d ' ')"
   grep -q '^src/core/CMakeLists.txt$' "$TMP/files.txt" || { echo "error: src/core is not in pub's file set ($N files); check .pubignore and .gitignore" >&2; exit 1; }
   grep -q '^src/core/third_party/llama.cpp/src/llama.cpp$' "$TMP/files.txt" || { echo "error: llama.cpp sources are not in pub's file set" >&2; exit 1; }
+  grep -q '^src/core/third_party/whisper.cpp/src/whisper.cpp$' "$TMP/files.txt" || { echo "error: whisper.cpp sources are not in pub's file set" >&2; exit 1; }
   ( cd "$PKG" && rsync -a --files-from="$TMP/files.txt" . "$TMP/kiln_flutter/" )
   echo "pub file set: $N files, $(du -sh "$TMP/kiln_flutter" | cut -f1)"
   ( cd "$TMP/kiln_flutter/example" && flutter pub get >/dev/null && flutter build apk --release --target-platform android-arm64 2>&1 | grep -E "✓|error|Error|FAILURE" )

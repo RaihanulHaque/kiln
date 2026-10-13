@@ -7,8 +7,9 @@
 //   decision model   each run asks --calls questions (kiln_decide)     speed = ms per question
 //   embedding model  each run embeds --calls texts (kiln_embed), and with --mmproj and --media
 //                    each media file --media-calls times               speed = ms per input
-//   speech model     a chat-style model given --mmproj and --media: each run writes down every
-//                    audio file --media-calls times (kiln_transcribe)  speed = ms per clip
+//   speech model     a Whisper or Parakeet file, or a chat-style model given --mmproj, with
+//                    --media: each run writes down every audio file --media-calls times
+//                    (kiln_transcribe)  speed = ms per clip
 // Runs come back to back, so the later ones show what heat does to the speed.
 #include "kiln/kiln.h"
 
@@ -272,7 +273,7 @@ int main(int argc, char** argv) {
                             "  decision models:  [--calls questions per run]              (default 40)\n"
                             "  embedding models: [--calls texts per run]                  (default 150)\n"
                             "                    [--mmproj projector.gguf --media file]... [--media-calls per run] (default 5)\n"
-                            "  speech models:    --mmproj projector.gguf --media clip.wav [--media clip2.wav]... [--media-calls per run] (default 5)\n"
+                            "  speech models:    --media clip.wav [--media clip2.wav]... [--media-calls per run] (default 5); Qwen3-ASR also --mmproj projector.gguf\n"
                             "  -o x.csv also writes x.runs.csv with one line per run\n");
             return 2;
         }
@@ -364,15 +365,19 @@ int main(int argc, char** argv) {
             }
         }
         failed = !ok;
-    } else if (!mmproj.empty()) {
+    } else if (!mmproj.empty() || mi.is_speech_model) {
         // a speech model: one run = each audio file written down `media_calls` times
         if (media_calls <= 0) media_calls = 5;
         s.phase = 1;
         const double tp = now_ms(), rss_before = rss_mb();
         kiln_projector_info pi{};
-        bool ok = kiln_model_load_projector(m, mmproj.c_str(), nullptr, &pi) == KILN_OK;
-        if (!ok) fprintf(stderr, "projector: %s\n", kiln_last_error());
-        else fprintf(stderr, "projector: load %.0f ms, +%.0f MB rss, images=%d audio=%d\n", now_ms() - tp, rss_mb() - rss_before, pi.supports_images, pi.supports_audio);
+        bool ok = true;
+        if (!mmproj.empty()) {
+            ok = kiln_model_load_projector(m, mmproj.c_str(), nullptr, &pi) == KILN_OK;
+            if (!ok) fprintf(stderr, "projector: %s\n", kiln_last_error());
+            else fprintf(stderr, "projector: load %.0f ms, +%.0f MB rss, images=%d audio=%d\n", now_ms() - tp, rss_mb() - rss_before, pi.supports_images, pi.supports_audio);
+        }
+        if (media.empty()) { fprintf(stderr, "a speech model needs --media clip.wav\n"); ok = false; }
         s.phase = 0;
         std::this_thread::sleep_for(std::chrono::seconds(1));
         for (const std::string& f : media) {

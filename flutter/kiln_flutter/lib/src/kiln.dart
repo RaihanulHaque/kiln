@@ -93,6 +93,26 @@ class KilnGeneration {
       pieces.where((p) => !p.isReasoning).map((p) => p.text).join();
 }
 
+/// A transcription in progress. See [KilnContext.transcribe].
+class KilnTranscription {
+  KilnTranscription._(this.pieces, this.stats, this._cancel);
+
+  /// The words as they are produced. Whisper and Parakeet give a sentence at a time,
+  /// Qwen3-ASR a token at a time.
+  final Stream<String> pieces;
+
+  /// Resolves when the call ends, with the clip length, the time taken and the language.
+  final Future<KilnTranscribeStats> stats;
+
+  final void Function() _cancel;
+
+  /// Stops the call. [stats] still resolves, with stoppedByUser = true.
+  void cancel() => _cancel();
+
+  /// Convenience: the whole text.
+  Future<String> get text => pieces.join();
+}
+
 class KilnContext {
   KilnContext._(this.model, this._handle);
   final KilnModel model;
@@ -238,6 +258,62 @@ class KilnContext {
       // room for the answer; the C side rejects a `dimensions` above the model's size
       'cap': dimensions > 0 && dimensions < n ? dimensions : n,
     }));
+  }
+
+  /// Write down what is said in an audio clip (wav, mp3 or flac; a file or its bytes).
+  ///
+  /// ```dart
+  /// final model = await kiln.loadModel('/path/to/ggml-parakeet-tdt-0.6b-v3-q8_0.bin');
+  /// final ctx = await model.createContext();
+  /// final t = ctx.transcribe(KilnMedia.file('/path/to/voice_note.wav'));
+  /// print(await t.text);          // "The train to London leaves at nine in the morning."
+  /// print((await t.stats).speed); // times faster than real time
+  /// ```
+  ///
+  /// Works with a Whisper or Parakeet file ([KilnModelInfo.isSpeechModel]), or with Qwen3-ASR
+  /// after [KilnModel.loadProjector]. Always picks the most likely word, so the same clip
+  /// gives the same text. Each call stands alone; with Qwen3-ASR it also clears the
+  /// context's conversation. [language] is a hint such as `'English'` (Parakeet ignores it; an
+  /// English-only Whisper file refuses another language). [prompt] replaces Qwen3-ASR's
+  /// instruction, or gives Whisper words the text may follow on from. [maxTokens] caps the
+  /// text (Whisper: per 30-second window; Parakeet: ignored), 0 = no cap.
+  ///
+  /// Throws `KILN_ERR_NOT_SUPPORTED` on a model that cannot transcribe, `KILN_ERR_INVALID_ARG`
+  /// for a file that is not audio, and with Qwen3-ASR `KILN_ERR_CONTEXT_FULL` for a clip
+  /// longer than the context (cut long recordings into pieces).
+  KilnTranscription transcribe(
+    KilnMedia audio, {
+    String? language,
+    String? prompt,
+    int maxTokens = 0,
+  }) {
+    if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
+    _busy = true;
+    final port = ReceivePort();
+    final ctrl = StreamController<String>();
+    port.listen((msg) => ctrl.add(msg as String));
+    final stats = model._kiln._worker
+        .call<Map>('transcribe', {
+          'context': _handle,
+          'audio': audio.toMap(),
+          'language': language,
+          'prompt': prompt,
+          'maxTokens': maxTokens,
+        }, stream: port.sendPort)
+        .then((r) => KilnTranscribeStats.fromMap(r['stats'] as Map))
+        .catchError((Object e) {
+          if (!ctrl.isClosed) ctrl.addError(e);
+          throw e;
+        })
+        .whenComplete(() async {
+          _busy = false;
+          await Future<void>.delayed(Duration.zero);
+          port.close();
+          unawaited(ctrl.close());
+        });
+    return KilnTranscription._(ctrl.stream, stats, () {
+      KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
+    });
   }
 
   /// Clears the KV cache. Next chat starts from scratch.

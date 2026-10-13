@@ -47,6 +47,8 @@ Not yet done, and required:
 - [x] A new app can follow `docs/GETTING_STARTED.md`: done on 2026-10-12 with a fresh
       `flutter create` project and the GitHub dependency, on the Pixel 8 (by the author, not
       yet by an outside person; see the last item)
+- [ ] iOS: `scripts/build_ios.sh` does not build whisper.cpp yet (added in 0.4.0), so the
+      framework would lack Whisper and Parakeet; fix that before any iOS claim
 - [ ] iOS: xcframework + podspec exist and the app runs on an iPhone 16 Pro via Metal
       (A18 Pro GPU, 7 of 9 integration tests passed). Still needed before claiming support:
       rerun the suite after the Dart deadlock fix, add the simulator slice to CI

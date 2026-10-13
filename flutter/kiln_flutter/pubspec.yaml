@@ -1,5 +1,5 @@
 name: kiln_flutter
-description: "On-device LLM runtime for Flutter on Android: chat, thinking and decision models from GGUF files, with honest stats about what actually ran."
+description: "On-device AI runtime for Flutter on Android: chat, thinking, decision, embedding and speech-to-text models (GGUF, Whisper, Parakeet), with honest stats about what actually ran."
 version: 0.4.0
 repository: https://github.com/RaihanulHaque/kiln
 issue_tracker: https://github.com/RaihanulHaque/kiln/issues

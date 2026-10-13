@@ -31,7 +31,8 @@ static void usage() {
         "  --dim    keep only the first N numbers of each vector\n"
         "speech models:\n"
         "       kiln-cli -m model.gguf --mmproj projector.gguf --transcribe clip.wav [--transcribe clip2.mp3]... [--language English] [-n max_tokens]\n"
-        "  --transcribe  an audio file (wav, mp3, flac) to write down; needs --mmproj\n"
+        "       kiln-cli -m ggml-base-q5_1.bin --transcribe clip.wav            (Whisper and Parakeet files: no --mmproj)\n"
+        "  --transcribe  an audio file (wav, mp3, flac) to write down; Qwen3-ASR needs --mmproj, Whisper and Parakeet do not\n"
         "  --language    the language spoken, when known; without it the model works it out\n");
 }
 
@@ -131,7 +132,7 @@ int main(int argc, char** argv) {
     fprintf(stderr, "device:   %s | %s | %d cores | %.1f GB RAM\n", dev.soc, dev.abi, dev.cpu_cores, dev.ram_total_bytes / 1e9);
     fprintf(stderr, "backend:  %s (gpu layers: %d)\n", mi.backend_name, mi.n_gpu_layers_used);
     fprintf(stderr, "model:    %s %s, %.2fB params, %.2f GB resident, ctx_train=%d, thinking=%s\n",
-            mi.arch, mi.quant, mi.n_params / 1e9, mi.model_bytes / 1e9, mi.n_ctx_train, mi.is_decision_model ? "n/a (decision model)" : mi.is_embedding_model ? "n/a (embedding model)" : mi.supports_thinking ? "yes" : "no");
+            mi.arch, mi.quant, mi.n_params / 1e9, mi.model_bytes / 1e9, mi.n_ctx_train, mi.is_decision_model ? "n/a (decision model)" : mi.is_embedding_model ? "n/a (embedding model)" : mi.is_speech_model ? "n/a (speech model)" : mi.supports_thinking ? "yes" : "no");
 
     if (!mmproj.empty()) {
         kiln_projector_info pi;

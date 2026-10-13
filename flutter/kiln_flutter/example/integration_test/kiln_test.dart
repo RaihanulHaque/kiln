@@ -41,6 +41,18 @@ const gemmaEmbedUrl = 'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/reso
 const gemmaProjector = 'mmproj-embeddinggemma-2-Q8_0.gguf';
 const gemmaProjectorUrl = 'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/mmproj-Q8_0.gguf';
 const bool mediaTests = bool.fromEnvironment('KILN_MEDIA');
+// Speech models in whisper.cpp's format. Whisper base (60 MB) is fetched on demand by its test;
+// Parakeet (669 MB) only when KILN_SPEECH=true.
+const whisperBase = 'ggml-base-q5_1.bin';
+const whisperBaseUrl = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin';
+const parakeet = 'ggml-parakeet-tdt-0.6b-v3-q8_0.bin';
+const parakeetUrl = 'https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-q8_0.bin';
+const bool speechTests = bool.fromEnvironment('KILN_SPEECH');
+
+/// Lower-case letters and digits, one space between words: capitals and punctuation do not
+/// count, and "9" is accepted for "nine".
+String words(String s) => s.toLowerCase().replaceAll(RegExp('[^a-z0-9]+'), ' ').trim().replaceAll(' 9 ', ' nine ').replaceAll(' 2 ', ' two ').replaceAll(' 1 ', ' one ');
+
 
 /// Download to a .part file and rename when complete, so a dropped connection never leaves a
 /// truncated file that a later run would take for a model. Three attempts.
@@ -216,7 +228,19 @@ void main() {
       try {
         await expectLater(ctx.embed('some text'),
             throwsA(isA<KilnException>().having((e) => e.status.name, 'status', 'KILN_ERR_NOT_SUPPORTED')));
+        // a chat model may take a projector since 0.4.0 (Qwen3-ASR is one), so a missing
+        // file is a load error, not "not supported"
         await expectLater(m.loadProjector('${dir.path}/nothing.gguf'),
+            throwsA(isA<KilnException>().having((e) => e.status.name, 'status', 'KILN_ERR_MODEL_LOAD')));
+      } finally {
+        await ctx.dispose();
+      }
+    });
+
+    test('transcribe on a chat model is refused', () async {
+      final ctx = await m.createContext();
+      try {
+        await expectLater(ctx.transcribe(KilnMedia.bytes(speechTrainWav)).stats,
             throwsA(isA<KilnException>().having((e) => e.status.name, 'status', 'KILN_ERR_NOT_SUPPORTED')));
       } finally {
         await ctx.dispose();
@@ -531,5 +555,72 @@ void main() {
       await expectLater(ctx.embedMedia([KilnMedia.bytes(Uint8List.fromList(List.filled(64, 7)))]), status('KILN_ERR_INVALID_ARG'));
       await expectLater(m.loadProjector(p.path), status('KILN_ERR_INVALID_ARG')); // already loaded
     }, timeout: const Timeout(Duration(minutes: 15)));
+  });
+
+  group('speech to text (whisper.cpp)', () {
+    Future<void> check(KilnModel m, {required String language}) async {
+      expect(m.info.isSpeechModel, isTrue);
+      expect(m.info.isDecisionModel, isFalse);
+      expect(m.info.isEmbeddingModel, isFalse);
+      expect(m.info.backendName, startsWith('whisper.cpp/'));
+      // ignore: avoid_print
+      print('model: ${m.info}');
+      final ctx = await m.createContext();
+      try {
+        final file = File('${dir.path}/speech_train.wav')..writeAsBytesSync(speechTrainWav);
+        final t = ctx.transcribe(KilnMedia.file(file.path));
+        final pieces = <String>[];
+        t.pieces.listen(pieces.add);
+        final st = await t.stats;
+        final text = pieces.join();
+        // ignore: avoid_print
+        print('transcribe: "$text" ($st)');
+        expect(words(text), 'the train to london leaves at nine in the morning');
+        expect(text, isNot(startsWith(' ')));
+        expect(st.audioSeconds, inInclusiveRange(3.0, 3.3));
+        expect(st.generatedTokens, greaterThan(5));
+        expect(st.encodeMs, greaterThan(0));
+        expect(st.ms, greaterThan(st.encodeMs));
+        expect(st.stoppedByEos, isTrue);
+        expect(st.stoppedByUser, isFalse);
+        expect(st.language, language);
+        // the bytes of the file give the same text; a second run too
+        expect(await ctx.transcribe(KilnMedia.bytes(speechTrainWav)).text, text);
+        expect(await ctx.transcribe(KilnMedia.file(file.path)).text, text);
+        // what these models do not do
+        Matcher status(String name) => throwsA(isA<KilnException>().having((e) => e.status.name, 'status', name));
+        await expectLater(ctx.chat([const KilnChatMessage('user', 'Hi')]).stats, status('KILN_ERR_NOT_SUPPORTED'));
+        await expectLater(ctx.embed('text'), status('KILN_ERR_NOT_SUPPORTED'));
+        await expectLater(m.loadProjector('${dir.path}/nothing.gguf'), status('KILN_ERR_NOT_SUPPORTED'));
+        await expectLater(ctx.transcribe(KilnMedia.bytes(redCirclePng)).stats, status('KILN_ERR_INVALID_ARG'));
+        await expectLater(ctx.transcribe(KilnMedia.file('${dir.path}/nothing.wav')).stats, status('KILN_ERR_INVALID_ARG'));
+      } finally {
+        await ctx.dispose();
+      }
+    }
+
+    test('Whisper base writes down a clip', () async {
+      final f = await fetch(whisperBase, whisperBaseUrl);
+      final m = await kiln.loadModel(f.path);
+      try {
+        await check(m, language: 'English');
+      } finally {
+        await m.dispose();
+      }
+    }, timeout: const Timeout(Duration(minutes: 10)));
+
+    test('Parakeet TDT 0.6B v3 writes down a clip', () async {
+      if (!speechTests) {
+        markTestSkipped('run with --dart-define=KILN_SPEECH=true (downloads a 669 MB model)');
+        return;
+      }
+      final f = await fetch(parakeet, parakeetUrl);
+      final m = await kiln.loadModel(f.path);
+      try {
+        await check(m, language: '');
+      } finally {
+        await m.dispose();
+      }
+    }, timeout: const Timeout(Duration(minutes: 20)));
   });
 }

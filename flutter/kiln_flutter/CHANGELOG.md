@@ -1,9 +1,26 @@
-## 0.4.0 (not published)
+## 0.4.0
 
-- The native core is 0.4.0 and can write down speech (`kiln_transcribe` in C). **The plugin
-  has no Dart API for it yet**: the bindings were not regenerated and nothing was run on a
-  phone. Existing calls are unchanged. Do not publish this version before `transcribe` is
-  added and tested on a device.
+Speech to text. Verified on a Pixel 8 (Tensor G3): 25 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1), and the example
+app's new Transcribe screen (record, or pick a file). Android arm64 only, as before.
+
+- `KilnContext.transcribe(KilnMedia audio, {language, prompt, maxTokens})`: writes down a
+  wav, mp3 or flac clip (a file or its bytes) and streams the words; `KilnTranscription.text`
+  collects them, `.stats` gives the clip length, the time taken, how many times faster than
+  real time, and the language the model heard. `cancel()` stops it.
+- Three model families. **Parakeet TDT 0.6B v3** (669 MB) and **Whisper base** (60 MB) come
+  as one `.bin` file each in whisper.cpp's format; `loadModel` takes them like a GGUF,
+  `KilnModelInfo.isSpeechModel` is true, and they need no projector. **Qwen3-ASR 0.6B** is a
+  GGUF plus its projector (`loadProjector`), like the embedding media models, and
+  `isSpeechModel` is false for it.
+- Speed on the Pixel 8 for a 3-second clip: 0.3 s with Parakeet (0.8 to 1.5 s once the phone is
+  hot), 3.0 s with Whisper base, 3.8 s with Qwen3-ASR (slower than the clip; its encoder takes
+  2.5 s on that CPU). Through the plugin: Parakeet 1.2 s on a phone that had been running tests
+  for an hour, Whisper base 7 s.
+- Example app: a Transcribe screen with a microphone button (records a 16 kHz wav with the
+  `record` package, needs `RECORD_AUDIO`) and a file picker; Parakeet and Whisper base in the
+  download list; `.bin` files in the model list and the paste-a-link box.
+- `KilnModelInfo.toString()` says "speech model"; `KilnMedia` is shared by `embedMedia` and
+  `transcribe`.
 
 ## 0.3.1
 

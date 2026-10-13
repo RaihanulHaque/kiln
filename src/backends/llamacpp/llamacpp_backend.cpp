@@ -211,8 +211,9 @@ public:
     // Speech to text: the instruction and the audio go in as one prompt, then the model writes
     // the words like any other answer. Follows llama.cpp's mtmd helper (mtmd_helper_eval_chunks),
     // with the encoder timed on its own and spread over the fast cores.
-    kiln_status transcribe(const kiln::RenderedPrompt& in, const kiln_media& audio, int32_t max_tokens,
+    kiln_status transcribe(const kiln::RenderedPrompt& in, const kiln_transcribe_options& o, const kiln_media& audio,
                            kiln_token_cb cb, void* user, kiln_transcribe_stats& st) override {
+        const int32_t max_tokens = o.max_tokens;
         cancel_.store(false);
         if ((decision_ && decision_->is_decision_model()) || (embedding_ && embedding_->is_embedding_model()))
             return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not a speech model");
@@ -456,6 +457,7 @@ public:
         out.is_decision_model = decision_.is_decision_model();
         out.is_embedding_model = embedding_.is_embedding_model();
         out.n_embd            = embedding_.n_embd();
+        out.is_speech_model   = false;   // Qwen3-ASR is a chat-style model; its encoder comes as a projector
         return KILN_OK;
     }
 
@@ -612,6 +614,15 @@ public:
             case KILN_BACKEND_GPU: return d.has_gpu;
             default: return false;
         }
+    }
+
+    bool can_load(const char* path) const override {
+        char magic[4] = {0};
+        FILE* f = fopen(path, "rb");
+        if (!f) return true;                      // let the loader report the missing file
+        const size_t n = fread(magic, 1, 4, f);
+        fclose(f);
+        return n < 4 || memcmp(magic, "GGUF", 4) == 0;
     }
 
     kiln_status load_model(const char* path, const kiln_model_params& p,

@@ -23,8 +23,9 @@ first look, and repeat it before deciding anything on it.
 
 "q5_1" and "int8" mean the weights are stored with fewer bits (5 and 8) to make the file smaller.
 
-Only Qwen3-ASR ran through kiln. The others ran in their own programs, because kiln cannot
-load them (section 5).
+At the time of this run only Qwen3-ASR ran through kiln; the others ran in their own programs.
+Since then kiln has gained a whisper.cpp backend, and Whisper and Parakeet now load into it
+(section 5). The accuracy numbers below are unchanged by that: they are the models' own.
 
 ## 2. The recordings
 
@@ -125,9 +126,17 @@ Limits of this run:
   writing); the others always take the single most likely word.
 - No phone. The phone speed is what decides whether a model is usable for voice input.
 
-## 5. Why kiln cannot load Whisper or Parakeet
+## 5. Why llama.cpp alone could not load Whisper or Parakeet, and what was done
 
-kiln has one engine, llama.cpp. llama.cpp runs one kind of model: a text model that reads
+**Update:** kiln 0.4.0 runs Whisper and Parakeet through a second engine, whisper.cpp, which
+ships both (`libwhisper` and `libparakeet`) on the same ggml that llama.cpp uses. The backend
+is `src/backends/whispercpp/`; the files are whisper.cpp's own format (`ggml-base-q5_1.bin`,
+`ggml-parakeet-tdt-0.6b-v3-q8_0.bin`), loaded with `kiln_model_load` like any model. On the
+M4 Pro the 3-second test clip takes 53 ms with Parakeet and 84 ms with Whisper base; on the
+Pixel 8 CPU 0.3 s and 3.0 s, against 3.8 s for Qwen3-ASR. The reasoning below
+is kept because it explains why a second engine was needed.
+
+kiln's first engine is llama.cpp. llama.cpp runs one kind of model: a text model that reads
 tokens and writes the next one. Sound gets in only through an encoder (the `mmproj` file) that
 turns it into vectors the text model reads as if they were words.
 
@@ -155,9 +164,9 @@ has the `Backend` interface and `src/core/registry.cpp` the list.
 | Whisper | whisper.cpp | The smaller step: it is built on ggml, the same maths library as llama.cpp. But two copies of ggml in one library have to be kept apart, and Whisper was the weakest family here. |
 | Parakeet | ONNX Runtime, through sherpa-onnx | A second, unrelated engine: a larger app (the Android library alone is in the tens of megabytes; not measured here), its own build for Android and iOS, and model files that are not GGUF. It was the best model here. |
 
-Neither was tried. The sensible order is to measure Qwen3-ASR on the Pixel 8 first
-(`KILN_BENCH_ONLY=asr scripts/bench.sh`). If it is fast enough there, no second engine is
-needed. If it is not, Parakeet is the one worth the work.
+What happened: Qwen3-ASR measured 3.8 s for a 3-second clip on the Pixel 8, so a second engine
+was needed, and whisper.cpp turned out to carry Parakeet as well as Whisper, so one engine gave
+both at the cost of one more submodule and no second copy of ggml.
 
 ## 6. Repeating it on a Mac
 

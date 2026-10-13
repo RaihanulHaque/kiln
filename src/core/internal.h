@@ -35,7 +35,9 @@ public:
     virtual kiln_status embed(const char* text, const kiln_media* media, int32_t n_media, const kiln_embed_options& o,
                               float* out, int32_t out_cap, kiln_embed_stats& stats) = 0;
     // in: the instruction from Model::render_transcribe, with the media marker where the audio goes
-    virtual kiln_status transcribe(const RenderedPrompt& in, const kiln_media& audio, int32_t max_tokens,
+    // (empty for a model that takes no instruction); o: the caller's options, for the fields a
+    // backend reads directly (language, max_tokens)
+    virtual kiln_status transcribe(const RenderedPrompt& in, const kiln_transcribe_options& o, const kiln_media& audio,
                                    kiln_token_cb cb, void* user, kiln_transcribe_stats& stats) = 0;
 };
 
@@ -60,6 +62,10 @@ public:
     virtual void              annotate_device(kiln_device_info& d) const = 0;
     // Can this backend serve the requested kind on this device?
     virtual bool              supports(kiln_backend_kind kind, const kiln_device_info& d) const = 0;
+    // Is this a file format the backend reads? Looks at the first bytes only (GGUF for
+    // llama.cpp, ggml's older "lmgg" header for whisper.cpp); a false means the file is not
+    // even tried, so an explicit backend request fails with a clear message.
+    virtual bool              can_load(const char* path) const = 0;
     virtual kiln_status       load_model(const char* path, const kiln_model_params& p,
                                          const kiln_device_info& d, std::unique_ptr<Model>& out) = 0;
 };

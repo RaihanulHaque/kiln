@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:kiln_flutter/kiln_flutter.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 
 void main() => runApp(const KilnApp());
 
@@ -69,7 +70,7 @@ class KilnApp extends StatelessWidget {
 
 // ---------------------------------------------------------------- data
 
-enum _Kind { chat, decision, embedding }
+enum _Kind { chat, decision, embedding, speech }
 
 /// A model the app offers to download. All three are small enough for a mid-range phone.
 class _CatalogModel {
@@ -84,7 +85,7 @@ class _CatalogModel {
   final String? projectorFile;
   final int projectorMegabytes;
 
-  /// Which screen the model opens: chat, Decide or Search.
+  /// Which screen the model opens: chat, Decide, Search or Transcribe.
   final _Kind kind;
   final String name, blurb, url;
   final int megabytes;
@@ -112,7 +113,24 @@ const _catalog = [
       null, _Kind.embedding,
       'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/mmproj-Q8_0.gguf',
       'mmproj-embeddinggemma-2-Q8_0.gguf', 555),
+  // Speech models, in whisper.cpp's file format: they open the Transcribe screen. The encoder
+  // is built in, so no projector. Parakeet: CC-BY-4.0 (NVIDIA). Whisper: MIT (OpenAI).
+  _CatalogModel('Parakeet TDT 0.6B v3', 'Speech to text. The most accurate small model; 25 European languages.', 669,
+      'https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-q8_0.bin', null, _Kind.speech),
+  _CatalogModel('Whisper base', 'Speech to text in 99 languages. Small and quick, less exact.', 60,
+      'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin', null, _Kind.speech),
 ];
+
+const _audioExtensions = ['wav', 'mp3', 'flac'];
+
+/// One audio clip on the Transcribe screen: recorded here or picked from the device.
+class _Clip {
+  _Clip(this.path, this.name);
+  final String path, name;
+  String text = '';
+  String info = 'listening…';
+  bool done = false, failed = false;
+}
 
 /// Ready-made questions for the Decide screen, one of each kind.
 class _Preset {
@@ -190,7 +208,7 @@ String _prettyName(String file) {
   for (final m in _catalog) {
     if (m.matches(file)) return m.name;
   }
-  return file.replaceAll('.gguf', '');
+  return file.replaceAll('.gguf', '').replaceAll('.bin', '');
 }
 String _size(num bytes) =>
     bytes >= 1e9 ? '${(bytes / 1e9).toStringAsFixed(2)} GB' : '${(bytes / 1e6).round()} MB';
@@ -251,6 +269,14 @@ class _HomePageState extends State<HomePage> {
 
   bool get _isEmbedding => _model?.info.isEmbeddingModel ?? false;
 
+  // Transcribe screen (shown when the loaded model is a speech model: Whisper or Parakeet)
+  final _clips = <_Clip>[];
+  final _recorder = AudioRecorder();
+  bool _recording = false;
+  bool _transcribing = false;
+  final _transcribeScroll = ScrollController();
+  bool get _isSpeech => _model?.info.isSpeechModel ?? false;
+
   bool get _inChat => _ctx != null && !_showLibrary;
 
   @override
@@ -273,6 +299,8 @@ class _HomePageState extends State<HomePage> {
     _notes.dispose();
     _query.dispose();
     _searchScroll.dispose();
+    _transcribeScroll.dispose();
+    _recorder.dispose();
     super.dispose();
   }
 
@@ -297,8 +325,9 @@ class _HomePageState extends State<HomePage> {
     final files = dir
         .listSync()
         .whereType<File>()
-        // a projector (mmproj) is an add-on to an embedding model, not a model to open
-        .where((f) => f.path.endsWith('.gguf') && !_fileName(f).startsWith('mmproj'))
+        // a projector (mmproj) is an add-on to an embedding model, not a model to open;
+        // .bin is whisper.cpp's format (Whisper, Parakeet)
+        .where((f) => (f.path.endsWith('.gguf') || f.path.endsWith('.bin')) && !_fileName(f).startsWith('mmproj'))
         .toList()
       ..sort((a, b) => _prettyName(_fileName(a)).toLowerCase().compareTo(_prettyName(_fileName(b)).toLowerCase()));
     if (mounted) setState(() => _models = files);
@@ -317,8 +346,8 @@ class _HomePageState extends State<HomePage> {
   /// truncated file that would later be loaded as a model.
   Future<void> _download(String url, {String? saveAs}) async {
     final uri = Uri.tryParse(url.trim());
-    if (uri == null || !uri.hasScheme || !uri.path.endsWith('.gguf')) {
-      _toast('That does not look like a link to a .gguf file.');
+    if (uri == null || !uri.hasScheme || !(uri.path.endsWith('.gguf') || uri.path.endsWith('.bin'))) {
+      _toast('That does not look like a link to a .gguf (or whisper.cpp .bin) file.');
       return;
     }
     final name = saveAs ?? uri.pathSegments.last;
@@ -378,13 +407,14 @@ class _HomePageState extends State<HomePage> {
       _model = model;
       // A decision model reads one short prompt per question, so the default context is enough.
       _ctx = await model.createContext(
-          params: model.info.isDecisionModel || model.info.isEmbeddingModel
+          params: model.info.isDecisionModel || model.info.isEmbeddingModel || model.info.isSpeechModel
               ? const KilnContextParams()
               : const KilnContextParams(nCtx: 4096));
       _decision = null;
       _hits = null;
       _noteVectors.clear(); // vectors of one model mean nothing to another
       _media.clear();
+      _clips.clear();
       _projector = null; // the encoders belong to the model and went away with it
       _loadedPath = f.path;
       _thinking = false;
@@ -515,7 +545,9 @@ class _HomePageState extends State<HomePage> {
                     ? _decideView(scheme)
                     : _isEmbedding
                         ? _searchView(scheme)
-                        : _chatView(scheme)),
+                        : _isSpeech
+                            ? _transcribeView(scheme)
+                            : _chatView(scheme)),
       ),
     );
   }
@@ -536,7 +568,7 @@ class _HomePageState extends State<HomePage> {
               child: FilledButton.tonalIcon(
                 onPressed: _openChat,
                 icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
-                label: Text(_isDecision || _isEmbedding ? 'Back to model' : 'Back to chat'),
+                label: Text(_isDecision || _isEmbedding || _isSpeech ? 'Back to model' : 'Back to chat'),
               ),
             ),
         ],
@@ -641,6 +673,7 @@ class _HomePageState extends State<HomePage> {
                 _size(f.lengthSync()),
                 if (_catalog.any((m) => m.kind == _Kind.decision && m.matches(_fileName(f)))) 'decision model',
                 if (_catalog.any((m) => m.kind == _Kind.embedding && m.matches(_fileName(f)))) 'embedding model',
+                if (_fileName(f).endsWith('.bin')) 'speech model',
                 if (loaded) 'loaded',
               ].join('  ·  '),
         style: TextStyle(color: loaded || loading ? scheme.primary : scheme.onSurfaceVariant),
@@ -711,7 +744,7 @@ class _HomePageState extends State<HomePage> {
             autocorrect: false,
             style: const TextStyle(fontSize: 14),
             decoration: InputDecoration(
-              hintText: 'Paste a link to a .gguf file',
+              hintText: 'Paste a link to a .gguf or whisper.cpp .bin file',
               isDense: true,
               filled: true,
               fillColor: scheme.surfaceContainerLow,
@@ -1340,6 +1373,131 @@ class _HomePageState extends State<HomePage> {
       ],
     );
   }
+
+  // ---- transcribe view
+
+  /// Records from the microphone into a 16 kHz wav, the format speech models want, then
+  /// writes it down. Tap again to stop.
+  Future<void> _toggleRecording() async {
+    if (_recording) {
+      final path = await _recorder.stop();
+      if (mounted) setState(() => _recording = false);
+      if (path != null) await _transcribeFile(path, 'Recording ${_clips.length + 1}');
+      return;
+    }
+    if (!await _recorder.hasPermission()) {
+      _toast('kiln needs the microphone to record.');
+      return;
+    }
+    final dir = Directory('${_modelDir!.path}/clips')..createSync(recursive: true);
+    final path = '${dir.path}/rec_${DateTime.now().millisecondsSinceEpoch}.wav';
+    try {
+      await _recorder.start(
+          const RecordConfig(encoder: AudioEncoder.wav, sampleRate: 16000, numChannels: 1), path: path);
+      if (mounted) setState(() => _recording = true);
+    } catch (e) {
+      _toast('Could not record: $e');
+    }
+  }
+
+  Future<void> _pickClip() async {
+    final List<PlatformFile> picked;
+    try {
+      picked = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: _audioExtensions);
+    } catch (e) {
+      _toast('Could not open the file picker: $e');
+      return;
+    }
+    for (final f in picked) {
+      if (f.path != null) await _transcribeFile(f.path!, f.name);
+    }
+  }
+
+  /// One clip at a time: the words stream into the card as the model writes them.
+  Future<void> _transcribeFile(String path, String name) async {
+    final ctx = _ctx;
+    if (ctx == null || _transcribing) return;
+    final clip = _Clip(path, name);
+    setState(() { _clips.insert(0, clip); _transcribing = true; });
+    try {
+      final t = ctx.transcribe(KilnMedia.file(path));
+      t.pieces.listen((piece) {
+        clip.text += piece;
+        if (mounted) setState(() {});
+      }, onError: (_) {});
+      final st = await t.stats;
+      clip.info = [
+        '${st.audioSeconds.toStringAsFixed(1)} s of audio',
+        '${(st.ms / 1000).toStringAsFixed(2)} s',
+        '${st.speed.toStringAsFixed(1)}x real time',
+        if (st.language.isNotEmpty) st.language,
+      ].join('  ·  ');
+      if (clip.text.trim().isEmpty) clip.text = '(no speech heard)';
+    } catch (e) {
+      clip.failed = true;
+      clip.info = e is KilnException ? e.message : '$e';
+    } finally {
+      clip.done = true;
+      if (mounted) setState(() => _transcribing = false);
+    }
+  }
+
+  Widget _transcribeView(ColorScheme scheme) {
+    final name = _loadedCatalog?.name ?? _prettyName(_fileName(File(_loadedPath ?? '')));
+    return SingleChildScrollView(
+        controller: _transcribeScroll,
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 32),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _hint('$name is a speech model: it writes down what is said in a recording, on the phone, '
+          'with nothing sent anywhere. Record something, or pick a wav, mp3 or flac file.', scheme),
+      const SizedBox(height: 16),
+      FilledButton.icon(
+        onPressed: _transcribing && !_recording ? null : _toggleRecording,
+        icon: Icon(_recording ? Icons.stop_rounded : Icons.mic_rounded),
+        label: Text(_recording ? 'Stop and transcribe' : 'Record', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        style: FilledButton.styleFrom(
+            minimumSize: const Size.fromHeight(52),
+            backgroundColor: _recording ? scheme.error : null,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+      ),
+      const SizedBox(height: 10),
+      OutlinedButton.icon(
+        onPressed: _transcribing || _recording ? null : _pickClip,
+        icon: const Icon(Icons.audio_file_outlined, size: 20),
+        label: const Text('Add an audio file'),
+        style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(48),
+            side: BorderSide(color: scheme.outlineVariant),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+      ),
+      for (final c in _clips) _clipCard(c, scheme),
+    ]));
+  }
+
+  Widget _clipCard(_Clip c, ColorScheme scheme) => Container(
+        margin: const EdgeInsets.only(top: 16),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(Icons.graphic_eq_rounded, size: 18, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(c.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.4, color: scheme.onSurfaceVariant)),
+            ),
+            if (!c.done) const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+          ]),
+          const SizedBox(height: 10),
+          Text(c.text.isEmpty && !c.done ? '…' : c.text,
+              style: TextStyle(fontSize: 17, height: 1.4, color: c.failed ? scheme.error : scheme.onSurface)),
+          const SizedBox(height: 10),
+          Text(c.info, style: TextStyle(fontSize: 12, color: c.failed ? scheme.error : scheme.onSurfaceVariant)),
+        ]),
+      );
 
   Widget _chatView(ColorScheme scheme) => Column(children: [
         Expanded(child: _turns.isEmpty ? _emptyChat(scheme) : _turnList(scheme)),

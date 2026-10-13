@@ -10,10 +10,10 @@ include/kiln/kiln.h                 the public C API. The only header bindings s
 src/core/internal.h                 C++ interfaces Backend / Model / Context that backends implement
 src/core/kiln.cpp                   C API functions: validate args, pick a backend, forward
 src/core/error.cpp                  thread-local last-error string, logging
-src/core/registry.cpp               ordered list of backends (today: llama.cpp only)
+src/core/registry.cpp               ordered list of backends: llama.cpp, then whisper.cpp; each reads its own file format
 src/probe/probe.cpp                 device probe: SoC, cores, clocks -> fast-core mask, RAM, ISA bits
 src/backends/llamacpp/
-    llamacpp_backend.cpp            the one backend: load, template, generate, threadpool pinning
+    llamacpp_backend.cpp            the main backend: load, template, generate, threadpool pinning
     reasoning_splitter.h            splits streamed text into answer / reasoning by think tags
     decision.h                      decision models: render the systemone template, one pass, scores -> probabilities
     embedding.h                     embedding models: detect, add the task prefix, one pass, shorten and normalise the vector;
@@ -21,6 +21,9 @@ src/backends/llamacpp/
     media.h                         the projector (llama.cpp's mtmd): load it, decode image / audio files, AffinityScope;
                                     shared by embedding models and speech models
     transcript_filter.h             speech models: removes the "language English<asr_text>" header from the streamed text
+src/backends/whispercpp/
+    whispercpp_backend.cpp          Whisper and Parakeet through whisper.cpp's two libraries: sniff the file, load, decode
+                                    the audio (its own static miniaudio), stream the segments, timings
 tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query / --mmproj / --media (embedding models), --transcribe (speech models)
 tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark for chat, decision, embedding and speech models
 tools/barrier-lab/main.cpp          standalone experiment (not in the CMake build): split work + ggml-style barrier
@@ -43,6 +46,7 @@ scripts/
     build_ios.sh                    static libs + xcframework for iOS
     brand.py, export_brand.py, make_promo.py    logo, assets, promo video
 third_party/llama.cpp               git submodule, pinned to a tag
+third_party/whisper.cpp             git submodule, pinned; built without its own ggml, against llama.cpp's
 ```
 
 ## The three objects
@@ -199,8 +203,19 @@ read `media_marker` from `/props`, and POST `{"content": {"prompt_string": "<mar
 
 ## One `kiln_transcribe` call
 
-A speech model is a chat model with an audio encoder in front. So this call is `kiln_chat`
-with the question written by kiln and an audio clip attached.
+Two paths, chosen by the model that was loaded.
+
+**Whisper or Parakeet** (`whispercpp_backend.cpp`): `kiln_model_load` reads the first twelve
+bytes of the file: ggml's old magic says "whisper.cpp format", and the vocabulary size tells
+Whisper (51864 to 51866) from Parakeet (1024 or 8192). `SpeechContext::transcribe` decodes
+the file to 16 kHz samples, then calls `whisper_full` or `parakeet_full` with greedy sampling
+and a segment callback that hands each finished sentence to the caller; `kiln_cancel` and a
+callback that returns false both end the run through the engine's abort callback. The stats
+come from the engine's own timings. The model's one working state is shared by all contexts
+under a mutex.
+
+**Qwen3-ASR** (`llamacpp_backend.cpp`): a chat model with an audio encoder in front. So this
+call is `kiln_chat` with the question written by kiln and an audio clip attached.
 
 1. **Load.** `kiln_model_load` for the text model, then `kiln_model_load_projector` for the
    encoder (`MediaProjector::load` in `media.h`). Nothing in the GGUF marks a speech model:
@@ -282,7 +297,7 @@ calling thread; the Dart layer turns that into an async stream.
 |---|---|
 | add an API call | `kiln.h`, `kiln.cpp`, then the backend; re-run ffigen; add to `kiln.dart` |
 | change thread/pin policy | `probe.cpp` (which cores are "fast") and `create_context` in the backend |
-| support a new engine | implement `Backend/Model/Context` from `internal.h`, register in `registry.cpp` |
+| support a new engine | implement `Backend/Model/Context` from `internal.h` (`whispercpp_backend.cpp` is the small example), register in `registry.cpp` |
 | change how thinking is detected | `LlamaModel` constructor (empirical on/off render) |
 | change the thinking budget behaviour | the end of the sampling loop, `LlamaContext::sample_loop` |
 | support a speech model that writes another header | `transcript_filter.h`, and a case in `test_transcript_filter` with the pieces it writes |

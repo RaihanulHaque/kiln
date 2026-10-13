@@ -43,4 +43,7 @@ if [ "$SPEECH" = 1 ]; then
   Q=https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/main
   fetch Qwen3-ASR-0.6B-Q8_0.gguf        "$Q/Qwen3-ASR-0.6B-Q8_0.gguf"
   fetch mmproj-Qwen3-ASR-0.6B-Q8_0.gguf "$Q/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf"
+  # Whisper and Parakeet in whisper.cpp's own file format (not GGUF); the encoder is built in
+  fetch ggml-base-q5_1.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
+  fetch ggml-parakeet-tdt-0.6b-v3-q8_0.bin "https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-q8_0.bin"
 fi
