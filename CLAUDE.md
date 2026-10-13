@@ -158,7 +158,8 @@ through llama.cpp): `kiln-tests models` gives 476 passed on macOS (M4 Pro, Metal
   quantisations (only base q5_1 and TDT 0.6B v3 q8_0 were run).
 - `docs/ASR_COMPARISON.md` (accuracy of Whisper, Moonshine, Parakeet, Qwen3-ASR) is one Linux
   run whose raw files were lost; it has the steps to repeat it, not run on the Mac.
-- pub.dev: `kiln_flutter` 0.4.0 was published on 2026-10-13 from the `v0.4.0` tag.
+- pub.dev: `kiln_flutter` 0.4.0 was published on 2026-10-13 from the `v0.4.0` tag; a fresh app installed
+  it from pub.dev and transcribed with Parakeet on the Pixel 8 (312 ms for the 3-second clip).
 
 The notes below are from 0.3.1 and earlier.
 
