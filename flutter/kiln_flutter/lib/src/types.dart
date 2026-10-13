@@ -437,13 +437,101 @@ class KilnMedia {
 
 /// What a projector file can encode. See [KilnModel.loadProjector].
 class KilnProjectorInfo {
-  const KilnProjectorInfo({required this.supportsImages, required this.supportsAudio});
+  const KilnProjectorInfo({
+    required this.supportsImages,
+    required this.supportsAudio,
+    this.generatesAudio = false,
+    this.sampleRate = 0,
+  });
   final bool supportsImages, supportsAudio;
-  Map<String, Object> toMap() => {'supportsImages': supportsImages, 'supportsAudio': supportsAudio};
-  factory KilnProjectorInfo.fromMap(Map m) =>
-      KilnProjectorInfo(supportsImages: m['supportsImages'], supportsAudio: m['supportsAudio']);
+
+  /// A text-to-speech projector: the model can [KilnContext.speak]. [sampleRate] is that
+  /// of the generated audio (24000 for Pocket TTS).
+  final bool generatesAudio;
+  final int sampleRate;
+  Map<String, Object> toMap() => {
+        'supportsImages': supportsImages, 'supportsAudio': supportsAudio,
+        'generatesAudio': generatesAudio, 'sampleRate': sampleRate,
+      };
+  factory KilnProjectorInfo.fromMap(Map m) => KilnProjectorInfo(
+      supportsImages: m['supportsImages'], supportsAudio: m['supportsAudio'],
+      generatesAudio: m['generatesAudio'] ?? false, sampleRate: m['sampleRate'] ?? 0);
   @override
-  String toString() => 'projector: images ${supportsImages ? 'yes' : 'no'}, audio ${supportsAudio ? 'yes' : 'no'}';
+  String toString() =>
+      'projector: images ${supportsImages ? 'yes' : 'no'}, audio ${supportsAudio ? 'yes' : 'no'}'
+      '${generatesAudio ? ', speaks at $sampleRate Hz' : ''}';
+}
+
+/// What happened in one [KilnContext.speak] call.
+class KilnSpeakStats {
+  KilnSpeakStats({
+    required this.audioSeconds,
+    required this.sampleRate,
+    required this.frames,
+    required this.promptTokens,
+    required this.promptMs,
+    required this.genMs,
+    required this.ms,
+    required this.stoppedByEos,
+    required this.stoppedByUser,
+  });
+  factory KilnSpeakStats.fromNative(b.kiln_speak_stats s) => KilnSpeakStats(
+        audioSeconds: s.audio_seconds, sampleRate: s.sample_rate, frames: s.frames,
+        promptTokens: s.prompt_tokens, promptMs: s.prompt_ms, genMs: s.gen_ms, ms: s.ms,
+        stoppedByEos: s.stopped_by_eos, stoppedByUser: s.stopped_by_user,
+      );
+
+  /// Length of the generated audio, and its sample rate.
+  final double audioSeconds;
+  final int sampleRate;
+
+  /// Frames the model generated (80 ms each for Pocket TTS), and tokens read (text and voice).
+  final int frames, promptTokens;
+
+  /// Time reading the text and voice, generating, and the whole call, in milliseconds.
+  final double promptMs, genMs, ms;
+
+  /// The model ended the sentence itself, or the caller / `maxFrames` stopped it.
+  final bool stoppedByEos, stoppedByUser;
+
+  /// How many times faster than real time: 2.0 means 10 seconds of speech took 5 seconds.
+  double get speed => ms > 0 ? audioSeconds * 1000 / ms : 0;
+
+  Map<String, Object> toMap() => {
+        'audioSeconds': audioSeconds, 'sampleRate': sampleRate, 'frames': frames, 'promptTokens': promptTokens,
+        'promptMs': promptMs, 'genMs': genMs, 'ms': ms, 'stoppedByEos': stoppedByEos, 'stoppedByUser': stoppedByUser,
+      };
+  factory KilnSpeakStats.fromMap(Map m) => KilnSpeakStats(
+        audioSeconds: m['audioSeconds'], sampleRate: m['sampleRate'], frames: m['frames'],
+        promptTokens: m['promptTokens'], promptMs: m['promptMs'], genMs: m['genMs'], ms: m['ms'],
+        stoppedByEos: m['stoppedByEos'], stoppedByUser: m['stoppedByUser'],
+      );
+
+  @override
+  String toString() =>
+      '${audioSeconds.toStringAsFixed(1)} s of audio in ${ms.round()} ms (${speed.toStringAsFixed(1)}x real time), '
+      '$frames frames${stoppedByEos ? '' : ' [cut]'}';
+}
+
+/// Turns float samples (-1..1) into a 16-bit mono wav file's bytes, for saving or playing.
+Uint8List pcmToWav(Float32List samples, int sampleRate) {
+  final n = samples.length;
+  final out = ByteData(44 + n * 2);
+  void str(int at, String s) {
+    for (var i = 0; i < s.length; i++) {
+      out.setUint8(at + i, s.codeUnitAt(i));
+    }
+  }
+  str(0, 'RIFF'); out.setUint32(4, 36 + n * 2, Endian.little); str(8, 'WAVEfmt ');
+  out.setUint32(16, 16, Endian.little); out.setUint16(20, 1, Endian.little); out.setUint16(22, 1, Endian.little);
+  out.setUint32(24, sampleRate, Endian.little); out.setUint32(28, sampleRate * 2, Endian.little);
+  out.setUint16(32, 2, Endian.little); out.setUint16(34, 16, Endian.little);
+  str(36, 'data'); out.setUint32(40, n * 2, Endian.little);
+  for (var i = 0; i < n; i++) {
+    final v = samples[i].clamp(-1.0, 1.0);
+    out.setInt16(44 + i * 2, (v * 32767).round(), Endian.little);
+  }
+  return out.buffer.asUint8List();
 }
 
 /// The vector an embedding model made for a text, an image or an audio clip.

@@ -1,0 +1,2 @@
+/Users/rahi/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar qc libllama-common-base.a "CMakeFiles/llama-common-base.dir/build-info.cpp.o"
+/Users/rahi/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ranlib libllama-common-base.a

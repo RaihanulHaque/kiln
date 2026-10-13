@@ -886,6 +886,116 @@ static void test_speech_builtin(const std::string& path, const char* label, cons
     kiln_model_free(m);
 }
 
+
+// Text to speech: Pocket TTS speaks a sentence in the voice of a reference clip. The audio is
+// checked the honest way, by writing it down again with Parakeet (through kiln) when that model
+// is there; otherwise only the shape of the result is checked.
+static void test_speak(const std::string& path, const std::string& mmproj, const std::string& asr, const std::string& media) {
+    SECTION("Pocket TTS (text to speech)");
+    if (!exists(path) || !exists(mmproj)) { fprintf(stderr, "  SKIP (missing %s)\n", exists(path) ? mmproj.c_str() : path.c_str()); return; }
+    const std::string voice_path = media + "/speech_train.wav";
+    if (!exists(voice_path)) { fprintf(stderr, "  SKIP (missing %s)\n", voice_path.c_str()); return; }
+    kiln_model* m = nullptr;
+    kiln_model_params mp = kiln_model_params_default();
+    CHECK(kiln_model_load(path.c_str(), &mp, &m) == KILN_OK, "%s", kiln_last_error());
+    if (!m) return;
+    kiln_context* c = nullptr;
+    CHECK(kiln_context_create(m, nullptr, &c) == KILN_OK, "%s", kiln_last_error());
+    if (!c) { kiln_model_free(m); return; }
+    struct Audio { std::vector<float> pcm; int32_t rate = 0; int pieces = 0, stop_after = 0; };
+    auto cb = [](const float* smp, int32_t n, int32_t rate, void* u) {
+        auto* a = static_cast<Audio*>(u); a->pcm.insert(a->pcm.end(), smp, smp + n); a->rate = rate; ++a->pieces;
+        return !(a->stop_after > 0 && a->pieces >= a->stop_after);
+    };
+    const char* kText = "The train to London leaves at nine in the morning.";
+    kiln_media voice = {voice_path.c_str(), nullptr, 0};
+    kiln_speak_options o = kiln_speak_options_default();
+    o.voice = &voice; o.seed = 7;
+    CHECK(kiln_speak(c, kText, &o, nullptr, nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "speak before the projector is loaded");
+
+    kiln_projector_info pi;
+    CHECK(kiln_model_load_projector(m, mmproj.c_str(), nullptr, &pi) == KILN_OK, "%s", kiln_last_error());
+    CHECK(pi.generates_audio && pi.sample_rate == 24000, "generates_audio=%d rate=%d", pi.generates_audio, pi.sample_rate);
+
+    Audio a; kiln_speak_stats st;
+    CHECK(kiln_speak(c, kText, &o, cb, &a, &st) == KILN_OK, "%s", kiln_last_error());
+    CHECK(a.rate == 24000 && st.sample_rate == 24000, "rate %d / %d", a.rate, st.sample_rate);
+    CHECK(st.audio_seconds > 1.5 && st.audio_seconds < 8.0 && (double)a.pcm.size() / 24000 > 1.5, "audio_seconds=%.2f samples=%zu", st.audio_seconds, a.pcm.size());
+    CHECK(a.pieces >= 2 && st.frames > 20 && st.prompt_tokens > 10, "pieces=%d frames=%d prompt=%d", a.pieces, st.frames, st.prompt_tokens);
+    CHECK(st.prompt_ms > 0 && st.gen_ms > 0 && st.ms >= st.prompt_ms + st.gen_ms, "ms: prompt=%.0f gen=%.0f all=%.0f", st.prompt_ms, st.gen_ms, st.ms);
+    CHECK(st.stopped_by_eos && !st.stopped_by_user, "eos=%d user=%d", st.stopped_by_eos, st.stopped_by_user);
+    float peak = 0; for (float v : a.pcm) peak = std::max(peak, std::fabs(v));
+    CHECK(peak > 0.05f && peak <= 1.0f, "peak %.3f", peak);
+    fprintf(stderr, "  %.2f s of audio in %.0f ms (%d frames, %d pieces, prompt %.0f ms)\n", st.audio_seconds, st.ms, st.frames, a.pieces, st.prompt_ms);
+
+    // the same text with the same seed gives audio of about the same length (identical on the
+    // Mac and the Pixel 8; a Linux arm64 run once differed by three frames); stop from the
+    // callback; a frame limit
+    {
+        Audio b; kiln_speak_stats sb;
+        CHECK(kiln_speak(c, kText, &o, cb, &b, &sb) == KILN_OK && b.pcm.size() > a.pcm.size() * 0.75 && b.pcm.size() < a.pcm.size() * 1.25, "same seed, different length: %zu vs %zu", b.pcm.size(), a.pcm.size());
+        Audio s1; s1.stop_after = 1; kiln_speak_stats ss;
+        CHECK(kiln_speak(c, kText, &o, cb, &s1, &ss) == KILN_OK && ss.stopped_by_user && !ss.stopped_by_eos && s1.pieces == 1, "stop from the callback: pieces=%d user=%d", s1.pieces, ss.stopped_by_user);
+        CHECK(kiln_speak(c, kText, &o, nullptr, nullptr, &ss) == KILN_OK && ss.frames > 20, "no callback: %s", kiln_last_error());
+        kiln_speak_options nv = kiln_speak_options_default(); nv.max_frames = 10;
+        Audio s2; kiln_speak_stats s2s;
+        CHECK(kiln_speak(c, kText, &nv, cb, &s2, &s2s) == KILN_OK && s2s.frames == 10 && !s2s.stopped_by_eos, "max_frames: frames=%d eos=%d %s", s2s.frames, s2s.stopped_by_eos, kiln_last_error());
+    }
+    // bad input
+    {
+        const std::string png_path = media + "/invoice.png";
+        kiln_media png = {png_path.c_str(), nullptr, 0}, missing = {"/nonexistent/voice.wav", nullptr, 0}, empty = {nullptr, nullptr, 0};
+        kiln_speak_options bad = kiln_speak_options_default();
+        bad.voice = &png;     CHECK(kiln_speak(c, kText, &bad, nullptr, nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "an image taken as a voice");   // the projector reads it as an image and refuses images
+        bad.voice = &missing; CHECK(kiln_speak(c, kText, &bad, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "missing voice file accepted");
+        bad.voice = &empty;   CHECK(kiln_speak(c, kText, &bad, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "voice without path or data accepted");
+        CHECK(kiln_speak(c, "", &o, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "empty text accepted");
+        CHECK(kiln_speak(c, nullptr, &o, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "null text accepted");
+        CHECK(kiln_speak(nullptr, kText, &o, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "null context accepted");
+    }
+    // the chat context is untouched by speaking
+    {
+        kiln_chat_message msg[] = { {"user", "Say hello."} };
+        kiln_sampling_params sp = greedy(4);
+        kiln_gen_stats gs;
+        CHECK(kiln_chat(c, msg, 1, nullptr, &sp, nullptr, nullptr, &gs) == KILN_OK, "chat on the TTS backbone: %s", kiln_last_error());
+        CHECK(kiln_speak(c, kText, &o, nullptr, nullptr, &st) == KILN_OK, "speak after chat");
+        CHECK(kiln_chat(c, msg, 1, nullptr, &sp, nullptr, nullptr, &gs) == KILN_OK && gs.cached_tokens > 0, "speaking cleared the chat cache: cached=%d", gs.cached_tokens);
+    }
+    kiln_context_free(c);
+    kiln_model_free(m);
+
+    // round trip: write the audio to a wav and have Parakeet read it back
+    if (!exists(asr)) { fprintf(stderr, "  (no %s: the words were not checked)\n", asr.c_str()); return; }
+    const std::string wav_path = path + ".speak_test.wav";
+    {
+        std::vector<uint8_t> w(44 + a.pcm.size() * 2);
+        auto u32 = [&](size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) w[at + i] = (uint8_t)(v >> (8 * i)); };
+        auto u16 = [&](size_t at, uint16_t v) { w[at] = (uint8_t)v; w[at + 1] = (uint8_t)(v >> 8); };
+        memcpy(&w[0], "RIFF", 4); u32(4, 36 + (uint32_t)a.pcm.size() * 2); memcpy(&w[8], "WAVEfmt ", 8);
+        u32(16, 16); u16(20, 1); u16(22, 1); u32(24, 24000); u32(28, 48000); u16(32, 2); u16(34, 16);
+        memcpy(&w[36], "data", 4); u32(40, (uint32_t)a.pcm.size() * 2);
+        for (size_t i = 0; i < a.pcm.size(); ++i) u16(44 + i * 2, (uint16_t)(int16_t)(std::max(-1.0f, std::min(1.0f, a.pcm[i])) * 32767.0f));
+        std::ofstream f(wav_path, std::ios::binary); f.write((const char*)w.data(), (std::streamsize)w.size());
+    }
+    kiln_model* am = nullptr;
+    CHECK(kiln_model_load(asr.c_str(), &mp, &am) == KILN_OK, "%s", kiln_last_error());
+    if (am) {
+        kiln_context* ac = nullptr;
+        CHECK(kiln_context_create(am, nullptr, &ac) == KILN_OK, "%s", kiln_last_error());
+        if (ac) {
+            Capture cap; kiln_media clip = {wav_path.c_str(), nullptr, 0};
+            CHECK(kiln_transcribe(ac, &clip, nullptr, Capture::cb, &cap, nullptr) == KILN_OK, "%s", kiln_last_error());
+            const std::string w = words_only(cap.answer);
+            CHECK(w == "the train to london leaves at nine in the morning" || w == "the train to london leaves at 9 in the morning", "Parakeet heard '%s'", cap.answer.c_str());
+            fprintf(stderr, "  Parakeet heard: \"%s\"\n", cap.answer.c_str());
+            kiln_context_free(ac);
+        }
+        kiln_model_free(am);
+    }
+    remove(wav_path.c_str());
+}
+
 int main(int argc, char** argv) {
     std::string dir = argc > 1 ? argv[1] : "models";
     kiln_set_log_level(KILN_LOG_ERROR);
@@ -915,6 +1025,7 @@ int main(int argc, char** argv) {
     test_transcribe(dir + "/Qwen3-ASR-0.6B-Q8_0.gguf", dir + "/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf", media);
     test_speech_builtin(dir + "/ggml-base-q5_1.bin", "Whisper base q5_1 (speech to text, whisper.cpp)", "whisper", "English", media);
     test_speech_builtin(dir + "/ggml-parakeet-tdt-0.6b-v3-q8_0.bin", "Parakeet TDT 0.6B v3 q8_0 (speech to text, whisper.cpp)", "parakeet", "", media);
+    test_speak(dir + "/pocket-tts-en.gguf", dir + "/mmproj-pocket-tts-en.gguf", dir + "/ggml-parakeet-tdt-0.6b-v3-q8_0.bin", media);
     fprintf(stderr, "\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

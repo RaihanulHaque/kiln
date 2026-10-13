@@ -84,6 +84,8 @@ public:
         : model_(model), vocab_(llama_model_get_vocab(model)), tags_(tags),
           partial_state_(llama_model_is_recurrent(model) || llama_model_is_hybrid(model)) {}
     ~LlamaContext() override {
+        if (gen_) mtmd_helper_gen_audio_free(gen_);
+        if (tts_ctx_) { if (tp_) llama_detach_threadpool(tts_ctx_); llama_free(tts_ctx_); }
         if (ctx_) { if (tp_) llama_detach_threadpool(ctx_); llama_free(ctx_); }
         if (tp_) ggml_threadpool_free(tp_);
     }
@@ -92,6 +94,8 @@ public:
     llama_context*    ctx_ = nullptr;
     ggml_threadpool_t tp_  = nullptr;
     int               n_batch_ = 512;
+    llama_context*    tts_ctx_ = nullptr;   // for kiln_speak: needs embeddings on, made on first use, shares tp_
+    mtmd_helper_gen_audio* gen_ = nullptr;  // kiln_speak's helper, kept between calls (making one copies the token table)
     std::atomic<bool> cancel_{false};
     const kiln::DecisionHead* decision_ = nullptr;   // owned by the model; set for decision models
     const kiln::EmbeddingHead* embedding_ = nullptr; // owned by the model; set for embedding models
@@ -299,6 +303,116 @@ public:
         strncpy(st.language, filter.language().c_str(), sizeof st.language - 1);
         st.ms = ms_since(t_all);
         return result;
+    }
+
+    // Text to speech: the text (and the voice reference) go through the backbone, then one
+    // frame at a time the backbone's hidden state is turned into audio codes and the codes
+    // into samples (llama.cpp's mtmd audio-generation helper, the same path as llama-tts).
+    // The audio is handed to the caller in pieces of about a second, so playback can start
+    // before the sentence is finished.
+    kiln_status speak(const char* text, const kiln_speak_options& o, kiln_audio_cb cb, void* user,
+                      kiln_speak_stats& st) override {
+        cancel_.store(false);
+        if ((decision_ && decision_->is_decision_model()) || (embedding_ && embedding_->is_embedding_model()))
+            return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not a text-to-speech model");
+        const auto t_all = clock_t_::now();
+
+        std::unique_lock<std::mutex> lock(media_->mutex());    // the projector is not thread-safe
+        mtmd_context* mctx = media_->ctx();
+        if (!mctx || !media_->generates_audio())
+            return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "no text-to-speech projector loaded; call kiln_model_load_projector with the model's mmproj file");
+        const mtmd_gen_audio_info gi = mtmd_gen_audio_get_info(mctx);
+
+        // a context of its own: the backbone must return hidden states (embeddings), which
+        // the chat context does not, and the conversation in ctx_ must stay untouched
+        if (!tts_ctx_) {
+            llama_context_params cp = llama_context_default_params();
+            cp.n_ctx = 4096; cp.n_batch = 512; cp.embeddings = true;
+            cp.n_threads = llama_n_threads(ctx_); cp.n_threads_batch = llama_n_threads_batch(ctx_);
+            cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+            cp.abort_callback = abort_cb; cp.abort_callback_data = this;
+            tts_ctx_ = llama_init_from_model(model_, cp);
+            if (!tts_ctx_) return kiln::set_error(KILN_ERR_OUT_OF_MEMORY, "could not create the voice context");
+            if (tp_) llama_attach_threadpool(tts_ctx_, tp_, tp_);
+        }
+        llama_memory_clear(llama_get_memory(tts_ctx_), true);
+
+        kiln::MediaProjector::Bitmaps voice;
+        if (o.voice) {
+            if (kiln_status s = media_->read(o.voice, 1, voice); s != KILN_OK) return s;
+            if (!mtmd_bitmap_is_audio(voice.v[0])) return kiln::set_error(KILN_ERR_INVALID_ARG, "the voice reference must be an audio clip, not an image");
+        }
+
+        if (!gen_) gen_ = mtmd_helper_gen_audio_init(tts_ctx_, mctx);
+        else mtmd_helper_gen_audio_reset(gen_);
+        if (!gen_) return kiln::set_error(KILN_ERR_BACKEND, "could not start audio generation");
+        struct Gen { mtmd_helper_gen_audio* g; } gen{gen_};
+        mtmd_helper_gen_audio_inp inp{};
+        inp.seq_id = 0; inp.prompt = text; inp.prompt_len = strlen(text);
+        inp.speaker_ref = voice.v.empty() ? nullptr : voice.v[0];
+        inp.lang  = o.language && *o.language ? o.language : (gi.type == MTMD_GEN_AUDIO_TYPE_QWEN3TTS ? "en" : nullptr);
+        inp.top_k = o.top_k > 0 ? o.top_k : 40;
+        inp.top_p = o.top_p > 0 ? o.top_p : 0.95f;
+        inp.seed  = o.seed;
+        inp.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
+
+        kiln::AffinityScope spread(media_->cpu_mask());   // the audio encoder and decoder start threads of their own
+        // set_input encodes the voice reference (about a second on a phone): it is part of "prompt"
+        const auto t0 = clock_t_::now();
+        if (mtmd_helper_gen_audio_set_input(gen.g, &inp) != 0) return kiln::set_error(KILN_ERR_BACKEND, "the model could not take this text (set_input failed)");
+        for (;;) {
+            if (cancel_.load()) return KILN_ERR_CANCELLED;
+            const int32_t left = mtmd_helper_gen_audio_step_prompt(gen.g, n_batch_);
+            if (left < 0) return kiln::set_error(KILN_ERR_BACKEND, "reading the text failed (step_prompt)");
+            if (left == 0) break;
+        }
+        st.prompt_tokens = llama_memory_seq_pos_max(llama_get_memory(tts_ctx_), 0) + 1;
+        st.prompt_ms = ms_since(t0);
+
+        // the semantic codes are sampled like text tokens
+        llama_sampler* smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(inp.top_k));
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_p(inp.top_p, 1));
+        llama_sampler_chain_add(smpl, llama_sampler_init_dist(o.seed == UINT32_MAX ? LLAMA_DEFAULT_SEED : o.seed));
+        struct SmplGuard { llama_sampler* s; ~SmplGuard() { llama_sampler_free(s); } } guard{smpl};
+        auto sample = [&]() { llama_token t = llama_sampler_sample(smpl, tts_ctx_, -1); llama_sampler_accept(smpl, t); return t; };
+
+        const int max_frames = o.max_frames > 0 ? o.max_frames : 512;
+        const auto t1 = clock_t_::now();
+        llama_token sampled = sample();
+        const float* h = llama_get_embeddings_ith(tts_ctx_, -1);
+        int64_t emitted = 0;
+        st.sample_rate = gi.sample_rate;
+        const int frames_per_piece = 12;                       // about a second of audio per callback
+        auto emit = [&](bool final_piece) -> bool {           // hands the samples made since the last call to cb
+            int32_t rate = 0; const char* data = nullptr; size_t len = 0; int64_t n = 0;
+            if (mtmd_helper_gen_audio_get_output(gen.g, &rate, &data, &len, &n) != 0) return true;
+            st.sample_rate = rate;
+            if (n > emitted) {
+                const float* pcm = reinterpret_cast<const float*>(data);
+                if (cb && !cb(pcm + emitted, (int32_t)(n - emitted), rate, user)) { st.stopped_by_user = true; return false; }
+                emitted = n;
+            }
+            (void)final_piece;
+            return true;
+        };
+        bool stop = false;
+        while (!stop && st.frames < max_frames) {
+            if (cancel_.load()) { st.gen_ms = ms_since(t1); return KILN_ERR_CANCELLED; }
+            const float* h_next = nullptr;
+            if (mtmd_helper_gen_audio_step_gen(gen.g, sampled, h, &h_next, &stop) != 0) return kiln::set_error(KILN_ERR_BACKEND, "generating a frame failed (step_gen)");
+            if (!h_next) break;
+            ++st.frames;
+            h = h_next;
+            sampled = sample();
+            if (st.frames % frames_per_piece == 0 && !emit(false)) break;
+        }
+        if (!st.stopped_by_user) emit(true);
+        st.stopped_by_eos = stop;
+        st.gen_ms = ms_since(t1);
+        st.audio_seconds = st.sample_rate > 0 ? (double)emitted / st.sample_rate : 0.0;
+        st.ms = ms_since(t_all);
+        return KILN_OK;
     }
 
 private:

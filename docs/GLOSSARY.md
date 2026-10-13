@@ -106,6 +106,9 @@ confuses you, it should be here. If it is not, add it.
   speech recognition). `kiln_transcribe`. Whisper and Parakeet are whole speech models in one
   file (through whisper.cpp; `is_speech_model`); Qwen3-ASR is a small text model plus an audio
   encoder (through llama.cpp, with a projector).
+- **text to speech / TTS**: a model that turns text into audio, in the voice of a short
+  reference recording. `kiln_speak`. Pocket TTS (Kyutai) is the tested one on phones; the
+  audio is 24 kHz mono floats, streamed in pieces of about a second.
 - **real-time factor**: seconds of audio divided by the seconds it took to write them down.
   5 means five times faster than the speaker; below 1 the app cannot keep up.
 - **hybrid model**: mixes attention layers with recurrent / state-space layers (LFM2, Qwen3.5).

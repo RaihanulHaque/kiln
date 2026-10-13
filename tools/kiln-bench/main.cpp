@@ -7,6 +7,9 @@
 //   decision model   each run asks --calls questions (kiln_decide)     speed = ms per question
 //   embedding model  each run embeds --calls texts (kiln_embed), and with --mmproj and --media
 //                    each media file --media-calls times               speed = ms per input
+//   text to speech   a chat-style model whose --mmproj generates audio: each run speaks --speak
+//                    (or a stock sentence) --media-calls times with the first --media file as the voice
+//                    (kiln_speak)  speed = ms per call, and audio seconds per second of work
 //   speech model     a Whisper or Parakeet file, or a chat-style model given --mmproj, with
 //                    --media: each run writes down every audio file --media-calls times
 //                    (kiln_transcribe)  speed = ms per clip
@@ -16,6 +19,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -129,7 +133,7 @@ struct Sampler {
     std::atomic<int>  phase{0};          // index into phase_names
     std::atomic<int>  tokens{0};
     std::atomic<int>  run{0};
-    std::vector<const char*> phase_names{"idle", "load", "prompt", "generate", "cooldown", "decide", "embed", "encode", "transcribe"};
+    std::vector<const char*> phase_names{"idle", "load", "prompt", "generate", "cooldown", "decide", "embed", "encode", "transcribe / speak"};
     FILE* out;
     uint64_t fast_mask;
     std::vector<ThermalZone> zones;
@@ -249,6 +253,7 @@ int main(int argc, char** argv) {
     std::string model, out_path;
     int runs = 5, n_gen = 256, cooldown_s = 5, interval_ms = 250, threads = 0, calls = 0, media_calls = 0;
     std::string mmproj;
+    std::string speak_text;
     std::vector<std::string> media;
     std::string prompt = "You are a helpful assistant. Write a detailed, multi-paragraph explanation of how a kiln works, "
                          "covering the history of kilns, the physics of heat transfer inside them, the chemistry of firing clay, "
@@ -266,6 +271,7 @@ int main(int argc, char** argv) {
         else if (a == "--calls") calls = atoi(next());
         else if (a == "--media-calls") media_calls = atoi(next());
         else if (a == "--mmproj") mmproj = next();
+        else if (a == "--speak") speak_text = next();
         else if (a == "--media") media.push_back(next());
         else {
             fprintf(stderr, "usage: kiln-bench -m model.gguf [-o out.csv] [-r runs] [-t threads] [--cooldown s]\n"
@@ -378,15 +384,26 @@ int main(int argc, char** argv) {
             else fprintf(stderr, "projector: load %.0f ms, +%.0f MB rss, images=%d audio=%d\n", now_ms() - tp, rss_mb() - rss_before, pi.supports_images, pi.supports_audio);
         }
         if (media.empty()) { fprintf(stderr, "a speech model needs --media clip.wav\n"); ok = false; }
-        s.phase = 0;
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        for (const std::string& f : media) {
-            if (!ok) break;
-            ok = burst(s, 8, "transcribe-" + base_name(f), runs, media_calls, run_no, peak_rss, [&](int) {
-                kiln_media clip = {f.c_str(), nullptr, 0};
-                kiln_transcribe_stats ts;
-                return kiln_transcribe(c, &clip, nullptr, nullptr, nullptr, &ts) == KILN_OK ? ts.prompt_tokens : -1;
+        if (ok && pi.generates_audio) {
+            // text to speech: one run = the sentence spoken `media_calls` times in the voice of the first media file
+            const std::string text = speak_text.empty() ? "The train to London leaves at nine in the morning, so please be at the station by half past eight." : speak_text;
+            kiln_media voice = {media[0].c_str(), nullptr, 0};
+            kiln_speak_options so = kiln_speak_options_default(); so.voice = &voice; so.seed = 7;
+            ok = burst(s, 8, "speak", runs, media_calls, run_no, peak_rss, [&](int) {
+                kiln_speak_stats ss;
+                return kiln_speak(c, text.c_str(), &so, nullptr, nullptr, &ss) == KILN_OK ? (int)std::lround(ss.audio_seconds * 1000) : -1;   // tokens column = audio ms
             });
+        } else {
+            s.phase = 0;
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            for (const std::string& f : media) {
+                if (!ok) break;
+                ok = burst(s, 8, "transcribe-" + base_name(f), runs, media_calls, run_no, peak_rss, [&](int) {
+                    kiln_media clip = {f.c_str(), nullptr, 0};
+                    kiln_transcribe_stats ts;
+                    return kiln_transcribe(c, &clip, nullptr, nullptr, nullptr, &ts) == KILN_OK ? ts.prompt_tokens : -1;
+                });
+            }
         }
         failed = !ok;
     } else {

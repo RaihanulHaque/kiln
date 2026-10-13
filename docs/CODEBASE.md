@@ -24,7 +24,7 @@ src/backends/llamacpp/
 src/backends/whispercpp/
     whispercpp_backend.cpp          Whisper and Parakeet through whisper.cpp's two libraries: sniff the file, load, decode
                                     the audio (its own static miniaudio), stream the segments, timings
-tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query / --mmproj / --media (embedding models), --transcribe (speech models)
+tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query / --mmproj / --media (embedding models), --transcribe (speech models), --speak / --voice (text to speech)
 tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark for chat, decision, embedding and speech models
 tools/barrier-lab/main.cpp          standalone experiment (not in the CMake build): split work + ggml-style barrier
 tests/test_core.cpp                 the C test suite (host and device)
@@ -200,6 +200,30 @@ gives the same numbers as `kiln-cli --embed "text"`. For images and audio, start
 `llama-server -m model.gguf --mmproj projector.gguf --embeddings -c 2048 -b 2048 -ub 2048`,
 read `media_marker` from `/props`, and POST `{"content": {"prompt_string": "<marker>",
 "multimodal_data": ["<base64 of the file>"]}}` to `/embedding`.
+
+## One `kiln_speak` call
+
+`LlamaContext::speak` in `llamacpp_backend.cpp`. The model is a chat-style backbone whose
+projector generates audio (`MediaProjector::generates_audio`, from `mtmd_gen_audio_get_info`).
+
+1. **A voice context.** The backbone must return hidden states, which the chat context does
+   not, so the first call makes `tts_ctx_` (`embeddings = true`, same threadpool) and every
+   call clears it. The chat context is untouched.
+2. **Input.** llama.cpp's helper (`mtmd_helper_gen_audio_init` once, then `reset` per call,
+   and `set_input`) takes the text, the voice reference (decoded by `MediaProjector::read`)
+   and, for Qwen3-TTS, the language.
+3. **Prompt.** `step_prompt` until it returns 0, under `AffinityScope` (the voice encoder
+   starts threads of its own).
+4. **Frames.** A sampler chain (top-k, top-p, dist with the caller's seed) picks each semantic
+   code from the backbone's logits; `step_gen` turns the code and the hidden state into audio
+   codes and then samples, and returns the next hidden state, until the model signals the end
+   or `max_frames`.
+5. **Pieces.** Every 12 frames (about a second) `get_output` is called with the PCM output type
+   and the samples beyond what was already handed over go to `kiln_audio_cb`; a false stops
+   the loop. The stats count frames, prompt tokens and the two phases.
+
+To check a change: `llama-tts` from the submodule with the same model, voice and seed, then
+Parakeet on both outputs; the words must match (`test_speak` does the round trip).
 
 ## One `kiln_transcribe` call
 

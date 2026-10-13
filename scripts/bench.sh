@@ -40,6 +40,8 @@ media_for() {
       [ -f "$ROOT/models/jina-embeddings-v5-omni-nano-retrieval-vision-mmproj-F16.gguf" ] && echo "jina-embeddings-v5-omni-nano-retrieval-vision-mmproj-F16.gguf red_circle.png" ;;
     Qwen3-ASR-0.6B-Q8_0)   # a speech model: without its projector it would be benchmarked as a chat model
       [ -f "$ROOT/models/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf" ] && echo "mmproj-Qwen3-ASR-0.6B-Q8_0.gguf speech_train.wav speech_recipe.wav" ;;
+    pocket-tts-en)          # text to speech: the first media file is the voice to imitate
+      [ -f "$ROOT/models/mmproj-pocket-tts-en.gguf" ] && echo "mmproj-pocket-tts-en.gguf speech_train.wav" ;;
     ggml-*)                 # Whisper and Parakeet: the encoder is in the file
       echo "- speech_train.wav speech_recipe.wav" ;;
   esac

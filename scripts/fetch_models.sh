@@ -46,4 +46,7 @@ if [ "$SPEECH" = 1 ]; then
   # Whisper and Parakeet in whisper.cpp's own file format (not GGUF); the encoder is built in
   fetch ggml-base-q5_1.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
   fetch ggml-parakeet-tdt-0.6b-v3-q8_0.bin "https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-q8_0.bin"
+  # text to speech: Pocket TTS (Kyutai, CC-BY-4.0), English, in llama.cpp's format (backbone + mmproj)
+  fetch pocket-tts-en.gguf        "https://huggingface.co/EryriLabs/pocket-tts-GGUF/resolve/main/pocket-tts-en.gguf"
+  fetch mmproj-pocket-tts-en.gguf "https://huggingface.co/EryriLabs/pocket-tts-GGUF/resolve/main/mmproj-pocket-tts-en.gguf"
 fi

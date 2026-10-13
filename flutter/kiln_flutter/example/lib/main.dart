@@ -11,6 +11,7 @@ import 'package:http/http.dart' as http;
 import 'package:kiln_flutter/kiln_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 void main() => runApp(const KilnApp());
 
@@ -70,7 +71,7 @@ class KilnApp extends StatelessWidget {
 
 // ---------------------------------------------------------------- data
 
-enum _Kind { chat, decision, embedding, speech }
+enum _Kind { chat, decision, embedding, speech, tts }
 
 /// A model the app offers to download. All three are small enough for a mid-range phone.
 class _CatalogModel {
@@ -119,6 +120,18 @@ const _catalog = [
       'https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-q8_0.bin', null, _Kind.speech),
   _CatalogModel('Whisper base', 'Speech to text in 99 languages. Small and quick, less exact.', 60,
       'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin', null, _Kind.speech),
+  // Text to speech: a small text model plus its projector, like the embedding media models.
+  // Kyutai's Pocket TTS, English, CC-BY-4.0. It opens the Speak screen.
+  _CatalogModel('Pocket TTS', 'Text to speech in English, in the voice of a short recording.', 159,
+      'https://huggingface.co/EryriLabs/pocket-tts-GGUF/resolve/main/pocket-tts-en.gguf', null, _Kind.tts,
+      'https://huggingface.co/EryriLabs/pocket-tts-GGUF/resolve/main/mmproj-pocket-tts-en.gguf',
+      'mmproj-pocket-tts-en.gguf', 60),
+];
+
+const _sampleSentences = [
+  'The train to London leaves at nine in the morning.',
+  'Your parcel will arrive on Thursday, between two and four.',
+  'Knead the dough and let it rise for an hour before baking.',
 ];
 
 const _audioExtensions = ['wav', 'mp3', 'flac'];
@@ -277,6 +290,17 @@ class _HomePageState extends State<HomePage> {
   final _transcribeScroll = ScrollController();
   bool get _isSpeech => _model?.info.isSpeechModel ?? false;
 
+  // Speak screen (shown when the loaded model is a text-to-speech model from the catalog)
+  final _sayText = TextEditingController(text: _sampleSentences[0]);
+  String? _voicePath;          // the voice to imitate: a recording, a picked file, or the bundled sample
+  String _voiceLabel = 'sample voice';
+  bool _speaking = false;
+  bool _recordingVoice = false;
+  String _speakInfo = '';
+  String? _lastWavPath;
+  final _player = AudioPlayer();
+  bool get _isTts => _loadedCatalog?.kind == _Kind.tts;
+
   bool get _inChat => _ctx != null && !_showLibrary;
 
   @override
@@ -301,6 +325,8 @@ class _HomePageState extends State<HomePage> {
     _searchScroll.dispose();
     _transcribeScroll.dispose();
     _recorder.dispose();
+    _sayText.dispose();
+    _player.dispose();
     super.dispose();
   }
 
@@ -415,6 +441,8 @@ class _HomePageState extends State<HomePage> {
       _noteVectors.clear(); // vectors of one model mean nothing to another
       _media.clear();
       _clips.clear();
+      _speakInfo = '';
+      _lastWavPath = null;
       _projector = null; // the encoders belong to the model and went away with it
       _loadedPath = f.path;
       _thinking = false;
@@ -547,7 +575,9 @@ class _HomePageState extends State<HomePage> {
                         ? _searchView(scheme)
                         : _isSpeech
                             ? _transcribeView(scheme)
-                            : _chatView(scheme)),
+                            : _isTts
+                                ? _speakView(scheme)
+                                : _chatView(scheme)),
       ),
     );
   }
@@ -568,7 +598,7 @@ class _HomePageState extends State<HomePage> {
               child: FilledButton.tonalIcon(
                 onPressed: _openChat,
                 icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
-                label: Text(_isDecision || _isEmbedding || _isSpeech ? 'Back to model' : 'Back to chat'),
+                label: Text(_isDecision || _isEmbedding || _isSpeech || _isTts ? 'Back to model' : 'Back to chat'),
               ),
             ),
         ],
@@ -674,6 +704,7 @@ class _HomePageState extends State<HomePage> {
                 if (_catalog.any((m) => m.kind == _Kind.decision && m.matches(_fileName(f)))) 'decision model',
                 if (_catalog.any((m) => m.kind == _Kind.embedding && m.matches(_fileName(f)))) 'embedding model',
                 if (_fileName(f).endsWith('.bin')) 'speech model',
+                if (_catalog.any((m) => m.kind == _Kind.tts && m.matches(_fileName(f)))) 'text to speech',
                 if (loaded) 'loaded',
               ].join('  ·  '),
         style: TextStyle(color: loaded || loading ? scheme.primary : scheme.onSurfaceVariant),
@@ -1498,6 +1529,141 @@ class _HomePageState extends State<HomePage> {
           Text(c.info, style: TextStyle(fontSize: 12, color: c.failed ? scheme.error : scheme.onSurfaceVariant)),
         ]),
       );
+
+  // ---- speak view
+
+  Future<String> _sampleVoiceFile() async {
+    final f = File('${_modelDir!.path}/clips/sample_voice.wav');
+    if (!f.existsSync()) {
+      f.parent.createSync(recursive: true);
+      f.writeAsBytesSync((await rootBundle.load('assets/sample_voice.wav')).buffer.asUint8List());
+    }
+    return f.path;
+  }
+
+  /// Records a few seconds of the user's own voice, which the model then imitates.
+  Future<void> _toggleVoiceRecording() async {
+    if (_recordingVoice) {
+      final path = await _recorder.stop();
+      if (!mounted) return;
+      setState(() {
+        _recordingVoice = false;
+        if (path != null) { _voicePath = path; _voiceLabel = 'your recording'; }
+      });
+      return;
+    }
+    if (!await _recorder.hasPermission()) {
+      _toast('kiln needs the microphone to record a voice.');
+      return;
+    }
+    final dir = Directory('${_modelDir!.path}/clips')..createSync(recursive: true);
+    final path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.wav';
+    try {
+      await _recorder.start(const RecordConfig(encoder: AudioEncoder.wav, sampleRate: 16000, numChannels: 1), path: path);
+      if (mounted) setState(() => _recordingVoice = true);
+    } catch (e) {
+      _toast('Could not record: $e');
+    }
+  }
+
+  Future<void> _pickVoice() async {
+    final List<PlatformFile> picked;
+    try {
+      picked = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: _audioExtensions);
+    } catch (e) {
+      _toast('Could not open the file picker: $e');
+      return;
+    }
+    final f = picked.isEmpty ? null : picked.first;
+    if (f?.path != null && mounted) setState(() { _voicePath = f!.path; _voiceLabel = f.name; });
+  }
+
+  /// Generates the sentence, writes it to a wav and plays it. The audio arrives in pieces
+  /// while the model is still speaking; this simple version waits for all of them.
+  Future<void> _speak() async {
+    final ctx = _ctx;
+    final text = _sayText.text.trim();
+    if (ctx == null || _speaking || _projector == null) return;
+    if (text.isEmpty) { _toast('Type something to say.'); return; }
+    FocusScope.of(context).unfocus();
+    setState(() { _speaking = true; _speakInfo = 'speaking…'; });
+    try {
+      final voice = _voicePath ?? await _sampleVoiceFile();
+      final s = ctx.speak(text, voice: KilnMedia.file(voice));
+      final wav = await s.wav;
+      final st = await s.stats;
+      final out = File('${_modelDir!.path}/clips/said_${DateTime.now().millisecondsSinceEpoch}.wav')..writeAsBytesSync(wav);
+      _lastWavPath = out.path;
+      await _player.play(DeviceFileSource(out.path));
+      if (!mounted) return;
+      setState(() => _speakInfo = '${st.audioSeconds.toStringAsFixed(1)} s of speech in ${(st.ms / 1000).toStringAsFixed(2)} s  ·  '
+          '${st.speed.toStringAsFixed(1)}x real time  ·  ${st.frames} frames');
+    } catch (e) {
+      if (mounted) setState(() => _speakInfo = e is KilnException ? e.message : '$e');
+    } finally {
+      if (mounted) setState(() => _speaking = false);
+    }
+  }
+
+  Widget _speakView(ColorScheme scheme) {
+    final cat = _loadedCatalog!;
+    final ready = _projector?.generatesAudio ?? false;
+    return SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 32),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _hint('${cat.name} turns text into speech, on the phone, in the voice of a short recording: '
+          'the bundled sample, a file, or three seconds of your own voice.', scheme),
+      if (!ready) ...[
+        _sectionTitle('Voice engine', scheme),
+        if (_projectorOnDisk == null)
+          FilledButton.tonal(
+            onPressed: _downloading == null ? _getProjector : null,
+            child: Text(_downloading == cat.projectorFile ? 'Downloading…' : 'Get the voice engine (${cat.projectorMegabytes} MB)'),
+          )
+        else
+          FilledButton.tonal(onPressed: _loadingProjector ? null : _enableMedia, child: Text(_loadingProjector ? 'Loading…' : 'Load the voice engine')),
+        if (_downloading == cat.projectorFile) _progressBar(scheme),
+      ] else ...[
+        _sectionTitle('Say', scheme),
+        Wrap(spacing: 8, runSpacing: 4, children: [
+          for (final t in _sampleSentences)
+            ActionChip(
+              label: Text(t, maxLines: 1, overflow: TextOverflow.ellipsis),
+              side: BorderSide(color: scheme.outlineVariant),
+              shape: const StadiumBorder(),
+              onPressed: _speaking ? null : () => setState(() => _sayText.text = t),
+            ),
+        ]),
+        const SizedBox(height: 12),
+        TextField(controller: _sayText, minLines: 2, maxLines: 5, decoration: _fieldStyle(scheme, 'What should it say?')),
+        _sectionTitle('Voice', scheme),
+        Row(children: [
+          Expanded(child: Text('Imitating: $_voiceLabel', style: TextStyle(color: scheme.onSurfaceVariant))),
+          TextButton.icon(
+            onPressed: _speaking ? null : _toggleVoiceRecording,
+            icon: Icon(_recordingVoice ? Icons.stop_rounded : Icons.mic_rounded, size: 18),
+            label: Text(_recordingVoice ? 'Stop' : 'Record'),
+          ),
+          TextButton.icon(onPressed: _speaking || _recordingVoice ? null : _pickVoice, icon: const Icon(Icons.audio_file_outlined, size: 18), label: const Text('File')),
+        ]),
+        const SizedBox(height: 16),
+        FilledButton.icon(
+          onPressed: _speaking || _recordingVoice ? null : _speak,
+          icon: const Icon(Icons.volume_up_rounded),
+          label: Text(_speaking ? 'Speaking…' : 'Speak', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+        ),
+        if (_speakInfo.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(child: Text(_speakInfo, style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant))),
+            if (_lastWavPath != null)
+              IconButton(tooltip: 'Play again', icon: const Icon(Icons.replay_rounded), onPressed: () => _player.play(DeviceFileSource(_lastWavPath!))),
+          ]),
+        ],
+      ],
+    ]));
+  }
 
   Widget _chatView(ColorScheme scheme) => Column(children: [
         Expanded(child: _turns.isEmpty ? _emptyChat(scheme) : _turnList(scheme)),

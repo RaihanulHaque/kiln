@@ -317,6 +317,28 @@ Memory: Whisper base 60 MB on disk, Parakeet 669 MB, Qwen3-ASR 1.5 GB while it w
 model is 805 MB, the encoder 214 MB). kiln takes a file or the bytes of a file, so an app
 records to a wav first; the example app does exactly that.
 
+## Text to speech
+
+The other direction: text in, a voice out. A text-to-speech model like Pocket TTS is again a
+small text model plus a second file. The text model reads the sentence and, frame by frame
+(80 ms each), produces a hidden state; the second file turns each state into a few numbers
+that describe the sound (the "codes"), and then into the samples themselves. kiln hands the
+samples to the app about once a second, so the first second can be playing while the rest is
+still being made.
+
+The voice comes from a short recording. The model listens to about three seconds of someone
+speaking and imitates that voice for the sentence; Pocket TTS produces almost nothing without
+one. The example app bundles a sample voice and lets you record your own.
+
+What the numbers look like for "The train to London leaves at nine in the morning." (2.7 s of
+speech): on a Pixel 8 3.4 to 4.1 s, on the M4 Pro 0.22 s. On the phone that is 0.7 to 0.9x real
+time, a little slower than the speaker; about a second of it is encoding the voice recording,
+the rest is the frames. Above 1x real time a sentence can be played as it is produced without
+stalling; below it, as on the Pixel 8, an app lets a piece or two arrive first.
+
+How kiln checks that the audio is right: it writes it down again with Parakeet and compares
+the words. That round trip is in the test suite.
+
 ## Chat templates
 
 Each model was trained on conversations formatted a specific way: special tokens around
