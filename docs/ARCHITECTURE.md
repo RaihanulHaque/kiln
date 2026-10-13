@@ -114,6 +114,8 @@ One source tree, three outputs, no copies.
       same text as `llama-server`; Linux x86 only so far. (The Whisper and Parakeet files in `mtmd` are encoders that feed a text model,
       not recognisers by themselves, so a plain Whisper or Parakeet GGUF does not work here.)
 - [ ] ASR: phone run and speed (Pixel 8), macOS, Flutter `transcribe`, raw microphone samples, cutting long recordings, a 4-bit file
+- [ ] ASR: a second engine for Parakeet (ONNX Runtime) or Whisper (whisper.cpp)? Parakeet was more accurate and faster than Qwen3-ASR
+      on English on the desktop (docs/ASR_COMPARISON.md). Decide after the phone run; nothing built
 - [ ] TTS (text to speech): `mtmd` has Qwen3-TTS and PocketTTS, but its header marks audio generation as experimental and subject
       to breaking changes. Needs a new output kind in `kiln.h` (audio samples). Check how stable that API is in a newer llama.cpp first. Nothing run yet
 - [ ] Voice loop in the example app once both exist: ASR -> chat -> embeddings lookup -> TTS, all offline from GGUF files

@@ -132,6 +132,8 @@ That machine has no Flutter, no adb and no Android NDK. Still open for it:
 - Flutter: no `transcribe` in the plugin. Run ffigen, add it to `kiln.dart` and the worker, test
   on a device. `pubspec.yaml` and the podspec already say 0.4.0; do not publish before this.
 - Raw microphone samples, long recordings, and a 4-bit file (ggml-org publishes Q8_0 and bf16 only).
+- `docs/ASR_COMPARISON.md` (Whisper, Moonshine, Parakeet against Qwen3-ASR) is one Linux run whose
+  raw files were lost; it has the steps to repeat it on the Mac, which were not run there.
 
 The notes below are from 0.3.1 and earlier.
 

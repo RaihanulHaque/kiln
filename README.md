@@ -278,6 +278,7 @@ per-model speed run through the plugin.
 Start with [CONCEPTS](docs/CONCEPTS.md), then the [codebase walkthrough](docs/CODEBASE.md).
 Also: [architecture and roadmap](docs/ARCHITECTURE.md), [CPU notes](docs/CPU.md),
 [glossary](docs/GLOSSARY.md), [benchmarks](docs/bench/README.md),
+[speech models compared](docs/ASR_COMPARISON.md),
 [release checklist](docs/RELEASE.md).
 
 ## License
