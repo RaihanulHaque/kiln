@@ -21,8 +21,8 @@ maintainers happened to own. kiln is built the other way round:
 ## Status
 
 v0.3.0 added embedding models (text, images and audio); v0.3.1 fixes core selection on chips
-with no little cores; v0.4.0 adds speech to text (`kiln_transcribe`), so far run on the Linux
-desktop only. Run on 2026-10-12 and 2026-10-13 on the phones, the MacBook, the Linux
+with no little cores; v0.4.0 adds speech to text (`kiln_transcribe`), run on the Linux
+desktop and the MacBook, not yet on a phone. Run on 2026-10-12 and 2026-10-13 on the phones, the MacBook, the Linux
 desktop and a Linux container. The iPhone row is still from
 v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 
@@ -31,15 +31,15 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 | Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5, Android 17), v0.3.1 | llama.cpp CPU, 6 threads pinned | 319 C checks, 26 Flutter integration tests, example app, benchmarks; [profile](docs/devices/galaxy-s26-ultra.md) |
 | Pixel 8 (Tensor G3, Android 16), v0.3.1 | llama.cpp CPU, 5 threads pinned | 334 C checks, 26 Flutter integration tests; benchmarks at v0.3.0 |
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
-| MacBook Pro M4 Pro, v0.3.1 | llama.cpp Metal | 334 C checks; chat benchmarks at v0.1.0 |
+| MacBook Pro M4 Pro, v0.4.0 | llama.cpp Metal | 398 C checks, 49 of them for the speech model; chat benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.4.0 | llama.cpp CPU, 8 threads | 398 C checks, 49 of them for the speech model |
 | Linux arm64 and emulated x86_64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.3.0 | llama.cpp CPU, OpenMP | 319 C checks on each; arm64 also with `KILN_CPU_MASK=3` |
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
 the decision model LFM2 d1-omni 600M, and the embedding models EmbeddingGemma 2 (text, images,
 audio), nomic-embed-text v1.5 (text) and jina-embeddings-v5-omni-nano (text, images). All of
-them through the C API; the speech model Qwen3-ASR 0.6B through the C API on Linux x86 only
-(a 17-second clip in about 3.3 s on the desktop CPU; no phone run and no Flutter API yet); chat, `decide`, `embed` and `embedMedia` (EmbeddingGemma 2) through the
+them through the C API; the speech model Qwen3-ASR 0.6B through the C API on Linux x86 and the M4 Pro
+(a 17-second clip in about 3.3 s on the desktop CPU, a 3-second clip in 0.13 s on the M4 Pro GPU; no phone run and no Flutter API yet); chat, `decide`, `embed` and `embedMedia` (EmbeddingGemma 2) through the
 Flutter plugin on the Pixel 8.
 **iOS is in progress.** It built and ran on an iPhone at v0.1.0, but it has not been re-run for
 v0.2.0 and is not part of the pub.dev package. Use Android for now.

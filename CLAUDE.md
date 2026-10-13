@@ -124,10 +124,10 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 ## Not yet verified (as of 0.4.0)
 
 0.4.0 (speech to text, `kiln_transcribe`, Qwen3-ASR 0.6B): `kiln-tests models` gives 398 passed
-on Linux x86 (Ryzen 5 8500G) on 2026-10-13, after `scripts/fetch_models.sh --media --speech`.
+on Linux x86 (Ryzen 5 8500G) and on macOS (M4 Pro, Metal) on 2026-10-13, after `scripts/fetch_models.sh --media --speech`.
 That machine has no Flutter, no adb and no Android NDK. Still open for it:
 
-- macOS, Android (Pixel 8) and iOS: not built, not run. The phone speed is the open question:
+- Android (Pixel 8) and iOS: not built, not run. The phone speed is the open question:
   run `KILN_BENCH_ONLY=asr scripts/bench.sh` with the phone attached.
 - Flutter: no `transcribe` in the plugin. Run ffigen, add it to `kiln.dart` and the worker, test
   on a device. `pubspec.yaml` and the podspec already say 0.4.0; do not publish before this.

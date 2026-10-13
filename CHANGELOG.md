@@ -41,11 +41,12 @@ headers keeps working. The llama.cpp submodule is unchanged (781dbc5ac).
 - Internal: the projector code moved from `embedding.h` to `media.h`, shared by embeddings and
   speech; the sampling loop of `generate` is now a method that `transcribe` also uses.
 
-Verified with `kiln-tests` on Linux x86_64 (Ryzen 5 8500G, CPU) on 2026-10-13: 398 checks with
+Verified with `kiln-tests` on Linux x86_64 (Ryzen 5 8500G, CPU) and on macOS (M4 Pro, Metal; a
+3-second clip in 130 ms, the same text for both test clips from `kiln-cli --transcribe`) on 2026-10-13: 398 checks with
 the speech model, 349 without it (334 before, plus 8 for the transcript header and 7 for the
 new error paths). This is also the first full run of the suite on that machine since 0.3.0.
 
-Not run: macOS, Android, iOS. No phone was attached, so there is no phone speed yet, and that
+Not run: Android, iOS. No phone was attached, so there is no phone speed yet, and that
 is the number that decides whether this is usable for voice. The Flutter plugin has no
 `transcribe` yet: its bindings were not regenerated (no Flutter on the machine this was
 written on), so `kiln_flutter` 0.4.0 must not be published before that is done.
