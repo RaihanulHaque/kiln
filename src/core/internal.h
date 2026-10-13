@@ -39,6 +39,8 @@ public:
     // backend reads directly (language, max_tokens)
     virtual kiln_status transcribe(const RenderedPrompt& in, const kiln_transcribe_options& o, const kiln_media& audio,
                                    kiln_token_cb cb, void* user, kiln_transcribe_stats& stats) = 0;
+    virtual kiln_status speak(const char* text, const kiln_speak_options& o, kiln_audio_cb cb, void* user,
+                              kiln_speak_stats& stats) = 0;
 };
 
 class Model {

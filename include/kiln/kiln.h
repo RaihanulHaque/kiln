@@ -25,7 +25,7 @@ extern "C" {
 #endif
 
 #define KILN_VERSION_MAJOR 0
-#define KILN_VERSION_MINOR 4
+#define KILN_VERSION_MINOR 5
 #define KILN_VERSION_PATCH 0
 
 /* ------------------------------------------------------------------ */
@@ -351,6 +351,8 @@ KILN_API kiln_projector_params kiln_projector_params_default(void);
 typedef struct kiln_projector_info {
     bool supports_images;
     bool supports_audio;
+    bool generates_audio;         /* a text-to-speech projector: the model can kiln_speak */
+    int32_t sample_rate;          /* of the generated audio, e.g. 24000; 0 when generates_audio is false */
 } kiln_projector_info;
 
 /* Loads the image / audio encoders that belong to a model (its mmproj GGUF): an embedding
@@ -439,6 +441,55 @@ KILN_API kiln_status kiln_transcribe(kiln_context* c, const kiln_media* audio,
                                      const kiln_transcribe_options* opts,
                                      kiln_token_cb cb, void* user,
                                      kiln_transcribe_stats* stats);
+
+/* ------------------------------------------------------------------ */
+/* Text to speech                                                      */
+/* ------------------------------------------------------------------ */
+
+/* A text-to-speech model turns text into audio. Like Qwen3-ASR it is a small text model plus
+ * a second file: load the model, load its projector with kiln_model_load_projector
+ * (kiln_projector_info.generates_audio reads true), create a context, then call kiln_speak.
+ * Tested with Pocket TTS (Kyutai, English, 220 MB for both files) on a Pixel 8, and with
+ * Qwen3-TTS 1.7B on the desktop. Both copy the voice of a short reference clip. */
+
+typedef struct kiln_speak_options {
+    const kiln_media* voice;      /* a few seconds of someone speaking (wav, mp3, flac; a path or the bytes).
+                                     The output imitates that voice. Pocket TTS produces almost nothing without one */
+    const char* language;         /* Qwen3-TTS: "en", "zh", "de", ... (NULL = "en"). Pocket TTS: ignored, the language
+                                     is a property of the weights */
+    int32_t     max_frames;       /* longest output in frames (80 ms each for Pocket TTS); <= 0 = 512 */
+    int32_t     top_k;            /* sampling of the semantic codes; <= 0 = 40 */
+    float       top_p;            /* <= 0 = 0.95 */
+    uint32_t    seed;             /* UINT32_MAX = random; any other value makes the same text give the same audio */
+} kiln_speak_options;
+
+KILN_API kiln_speak_options kiln_speak_options_default(void);
+
+/* Called with each piece of audio as it is produced: `n` samples, mono, floats in -1..1 at
+ * `sample_rate` Hz. Pieces arrive about once a second of audio; play them as they come or
+ * collect them. Return false to stop. */
+typedef bool (*kiln_audio_cb)(const float* samples, int32_t n, int32_t sample_rate, void* user);
+
+typedef struct kiln_speak_stats {
+    double  audio_seconds;        /* length of the generated audio */
+    int32_t sample_rate;
+    int32_t frames;               /* frames the model generated */
+    int32_t prompt_tokens;        /* text and voice reference together */
+    double  prompt_ms;            /* encoding the voice reference and reading the text (the voice is most of it) */
+    double  gen_ms;               /* generating the frames, audio decoding included */
+    double  ms;                   /* whole call. Faster than real time when ms < audio_seconds * 1000 */
+    bool    stopped_by_eos;       /* the model ended the sentence itself (false = max_frames or the caller) */
+    bool    stopped_by_user;
+} kiln_speak_stats;
+
+/* Speaks `text`. Blocking; kiln_cancel stops it. Each call stands alone and uses a voice
+ * context of its own, so the conversation in this context is kept. opts, cb and stats may be
+ * NULL (with a NULL cb the audio is generated and dropped; use the stats for timing).
+ * Returns KILN_ERR_NOT_SUPPORTED when the loaded projector does not generate audio. */
+KILN_API kiln_status kiln_speak(kiln_context* c, const char* text,
+                                const kiln_speak_options* opts,
+                                kiln_audio_cb cb, void* user,
+                                kiln_speak_stats* stats);
 
 /* ------------------------------------------------------------------ */
 /* Logging                                                             */

@@ -1,8 +1,8 @@
 # kiln
 
-On-device LLM runtime (chat, decision, embedding and speech models): a C core (`include/kiln/kiln.h`)
-over llama.cpp, plus whisper.cpp for Whisper and Parakeet, with a device probe, CLI and benchmark
-tools, and a Flutter plugin. Targets are Android, iOS and desktop.
+On-device LLM runtime (chat, decision, embedding, speech-to-text and text-to-speech models): a C core
+(`include/kiln/kiln.h`) over llama.cpp, plus whisper.cpp for Whisper and Parakeet, with a device probe,
+CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desktop.
 `docs/CODEBASE.md` is the file-by-file map; `docs/CONCEPTS.md` explains the ideas in plain words.
 
 ## Rules for this repo
@@ -26,8 +26,8 @@ tools, and a Flutter plugin. Targets are Android, iOS and desktop.
 ```bash
 git submodule update --init --recursive      # CMake also does this if the submodule is empty
 cmake --preset host && cmake --build --preset host -j
-scripts/fetch_models.sh --media --speech     # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders and 1.7 GB for three speech models)
-./build/host/kiln-tests models               # 476 checks at 0.4.0 (349 without --speech); without --media the image / audio tests are skipped
+scripts/fetch_models.sh --media --speech     # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders and 1.9 GB for the speech models)
+./build/host/kiln-tests models               # 505 checks at 0.5.0 (349 without --speech); without --media the image / audio tests are skipped
 ./build/host/kiln-cli -m models/<file>.gguf --chat
 ```
 
@@ -101,6 +101,18 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   encoder: Whisper always encodes a 30-second window). `kiln_model_info.is_speech_model` is
   false for Qwen3-ASR (it is a chat-style model plus projector); the example app lists only
   the other two.
+- **Text to speech (`kiln_speak`) is llama.cpp's audio-generation helper** (`mtmd_helper_gen_audio_*`,
+  the path of `llama-tts`), which llama.cpp marks experimental: check `tools/mtmd/mtmd-helper.h`
+  and `tools/tts/tts.cpp` after every submodule bump. The backbone must return hidden states,
+  so `LlamaContext` makes a second llama context with `embeddings = true` on the first call
+  (`tts_ctx_`), sharing the pinned threadpool; the chat context is never touched. The helper
+  is kept between calls (`gen_`): making one copies the whole token table, 300 ms on the Mac CPU.
+  The audio reaches the callback by calling the helper's `get_output` every 12 frames and
+  handing over the new samples. The reference for correctness is a round trip: the test writes
+  the audio to a wav and has Parakeet read it back. Pocket TTS files in llama.cpp's format come
+  from EryriLabs/pocket-tts-GGUF; the Serveurperso ones are for another project and do not load.
+  A fixed seed repeats the audio on the Mac and the Pixel 8; a Linux arm64 run differed by three
+  frames between two calls, so no test may demand sample-exact repeats.
 - **llama.cpp changes a small context behind your back.** Asked for `n_ctx = 32` it gave a
   context of 256 and a batch size below 52. Read both back (`llama_n_ctx`, `llama_n_batch`)
   instead of trusting what was asked for; a batch larger than `llama_n_batch` aborts inside `mtmd`.
@@ -147,7 +159,18 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   reproduces the table (KL divergence from F16 on the host, kiln-bench on the phone).
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
 
-## Not yet verified (as of 0.4.0)
+## Not yet verified (as of 0.5.0)
+
+0.5.0 (text to speech, `kiln_speak`, Pocket TTS): `kiln-tests models` gives 505 passed on macOS
+(M4 Pro, Metal), Android (Pixel 8) and Linux arm64 (Docker) on 2026-10-13. Flutter `speak` with
+26 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1) on the Pixel 8, and the example app's Speak screen. Still open:
+
+- Linux x86 (the Ryzen): not run since 0.4.0's 398.
+- iOS, as before.
+- Qwen3-TTS on a phone (1.5 GB); the other Pocket TTS languages; streaming playback in the
+  example app; caching the encoded voice between calls (0.75 s per call on the Pixel 8).
+
+## Earlier (0.4.0)
 
 0.4.0 (speech to text, `kiln_transcribe`: Whisper and Parakeet through whisper.cpp, Qwen3-ASR
 through llama.cpp): `kiln-tests models` gives 476 passed on macOS (M4 Pro, Metal) and Android
@@ -164,6 +187,7 @@ through llama.cpp): `kiln-tests models` gives 476 passed on macOS (M4 Pro, Metal
   run whose raw files were lost; it has the steps to repeat it, not run on the Mac.
 - pub.dev: `kiln_flutter` 0.4.0 was published on 2026-10-13 from the `v0.4.0` tag; a fresh app installed
   it from pub.dev and transcribed with Parakeet on the Pixel 8 (312 ms for the 3-second clip).
+  0.5.0: PUBLISH_0_5_0
 
 The notes below are from 0.3.1 and earlier.
 

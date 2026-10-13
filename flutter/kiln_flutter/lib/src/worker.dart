@@ -171,6 +171,9 @@ class KilnWorker {
 
       case 'transcribe':
         return _transcribe(k, r);
+
+      case 'speak':
+        return _speak(k, r);
     }
     throw KilnException(b.kiln_status.KILN_ERR_INVALID_ARG, 'unknown op ${r.op}');
   }
@@ -324,8 +327,65 @@ class KilnWorker {
       pp.ref.image_max_tokens = r.args['imageMaxTokens'] as int;
       final s = k.kiln_model_load_projector(Pointer.fromAddress(r.args['model'] as int), path.cast(), pp, info);
       if (s != b.kiln_status.KILN_OK) _fail(k, s);
-      return KilnProjectorInfo(supportsImages: info.ref.supports_images, supportsAudio: info.ref.supports_audio).toMap();
+      return KilnProjectorInfo(supportsImages: info.ref.supports_images, supportsAudio: info.ref.supports_audio,
+          generatesAudio: info.ref.generates_audio, sampleRate: info.ref.sample_rate).toMap();
     } finally { calloc.free(path); calloc.free(pp); calloc.free(info); }
+  }
+
+  static Map<String, Object?> _speak(b.KilnBindings k, _Req r) {
+    final voice = r.args['voice'] == null ? null : KilnMedia.fromMap(r.args['voice'] as Map);
+    final stream = r.stream!;
+    final frees = <Pointer>[];
+    Pointer<Char> str(String? s) {
+      if (s == null) return nullptr;
+      final p = s.toNativeUtf8();
+      frees.add(p);
+      return p.cast();
+    }
+
+    // each piece of audio is copied out of native memory and sent to the main isolate
+    final cb = NativeCallable<b.kiln_audio_cbFunction>.isolateLocal(
+      (Pointer<Float> samples, int n, int rate, Pointer<Void> user) {
+        stream.send([Float32List.fromList(samples.asTypedList(n)), rate]);
+        return true;
+      },
+      exceptionalReturn: false,
+    );
+    final text = str(r.args['text'] as String);
+    final item = calloc<b.kiln_media>();
+    final opts = calloc<b.kiln_speak_options>();
+    final st = calloc<b.kiln_speak_stats>();
+    try {
+      opts.ref = k.kiln_speak_options_default();
+      if (voice != null) {
+        final bytes = voice.bytes;
+        if (bytes == null) {
+          item.ref.path = str(voice.path);
+        } else {
+          final buf = calloc<Uint8>(bytes.isEmpty ? 1 : bytes.length);
+          frees.add(buf);
+          buf.asTypedList(bytes.length).setAll(0, bytes);
+          item.ref.path = nullptr;
+          item.ref.data = buf;
+          item.ref.size = bytes.length;
+        }
+        opts.ref.voice = item;
+      }
+      opts.ref.language = str(r.args['language'] as String?);
+      opts.ref.max_frames = r.args['maxFrames'] as int;
+      opts.ref.seed = r.args['seed'] as int;
+      final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
+      final s = k.kiln_speak(ctx, text, opts, cb.nativeFunction, nullptr, st);
+      final stats = KilnSpeakStats.fromNative(st.ref).toMap();
+      if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) _fail(k, s);
+      return {'status': s.value, 'stats': stats};
+    } finally {
+      cb.close();
+      calloc.free(item); calloc.free(opts); calloc.free(st);
+      for (final p in frees) {
+        calloc.free(p);
+      }
+    }
   }
 
   static Map<String, Object?> _transcribe(b.KilnBindings k, _Req r) {

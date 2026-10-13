@@ -1,3 +1,22 @@
+## 0.5.0
+
+Text to speech. Verified on a Pixel 8: 26 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1), and the example app's new
+Speak screen. Android arm64 only, as before.
+
+- `KilnContext.speak(text, {voice, language, maxFrames, seed})`: says the text in the voice of a
+  short recording (`KilnMedia`, a file or its bytes) and streams the audio as `KilnAudioPiece`s
+  (mono floats, 24 kHz) about once a second; `KilnSpeech.wav` collects them into a wav file's
+  bytes, `.stats` gives the length, the time and how many times faster than real time.
+  `pcmToWav` is public for your own pieces.
+- `KilnProjectorInfo.generatesAudio` and `.sampleRate`: a text-to-speech projector.
+- Tested with Pocket TTS (Kyutai, English, 159 MB + 60 MB projector; CC-BY-4.0): 2.7 s of speech
+  in 3.4 to 4.1 s (0.7 to 0.9x real time; about a second of it is encoding the voice) on the Pixel 8. The example app's Speak screen bundles a sample voice, records
+  your own, plays the result with `audioplayers`, and has Pocket TTS in its download list.
+- The integration test checks the audio by having Parakeet transcribe it. Through the plugin the
+  sentence took 4 to 8 s on a Pixel 8 that had been running tests for hours (0.4 to 0.6x real
+  time), 5.3 s in the example app; the C API on a rested phone does it in 3.4 to 4.1 s. Let a
+  piece or two arrive before playing, or keep sentences short.
+
 ## 0.4.0
 
 Published 2026-10-13. Speech to text. Verified on a Pixel 8 (Tensor G3): 25 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1), and the example

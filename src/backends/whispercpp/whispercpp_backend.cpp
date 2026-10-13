@@ -153,6 +153,9 @@ public:
     }
     kiln_status transcribe(const kiln::RenderedPrompt& in, const kiln_transcribe_options& o, const kiln_media& audio,
                            kiln_token_cb cb, void* user, kiln_transcribe_stats& st) override;
+    kiln_status speak(const char*, const kiln_speak_options&, kiln_audio_cb, void*, kiln_speak_stats&) override {
+        return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not a text-to-speech model");
+    }
 
     // Checked by the engine before every piece of work: kiln_cancel, or the caller's callback
     // having answered "stop", ends the run at the next check.

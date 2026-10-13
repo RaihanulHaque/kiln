@@ -1,0 +1,23 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/rahi/Code/kiln/build-android/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/ggml/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/ggml/src/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/ggml/src/ggml-cpu/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/src/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/vendor/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/vendor/hash/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/vendor/miniaudio/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/vendor/nlohmann/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/vendor/sheredom/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/vendor/stb/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/vendor/cpp-httplib/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/common/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/llama.cpp/tools/mtmd/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/whisper.cpp/cmake_install.cmake",
+		"/Users/rahi/Code/kiln/build-android/third_party/whisper.cpp/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

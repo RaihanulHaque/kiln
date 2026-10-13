@@ -688,6 +688,57 @@ class KilnBindings {
         )
       >();
 
+  kiln_speak_options kiln_speak_options_default() {
+    return _kiln_speak_options_default();
+  }
+
+  late final _kiln_speak_options_defaultPtr =
+      _lookup<ffi.NativeFunction<kiln_speak_options Function()>>(
+        'kiln_speak_options_default',
+      );
+  late final _kiln_speak_options_default = _kiln_speak_options_defaultPtr
+      .asFunction<kiln_speak_options Function()>();
+
+  /// Speaks `text`. Blocking; kiln_cancel stops it. Each call stands alone and uses a voice
+  /// context of its own, so the conversation in this context is kept. opts, cb and stats may be
+  /// NULL (with a NULL cb the audio is generated and dropped; use the stats for timing).
+  /// Returns KILN_ERR_NOT_SUPPORTED when the loaded projector does not generate audio.
+  kiln_status kiln_speak(
+    ffi.Pointer<kiln_context> c,
+    ffi.Pointer<ffi.Char> text,
+    ffi.Pointer<kiln_speak_options> opts,
+    kiln_audio_cb cb,
+    ffi.Pointer<ffi.Void> user,
+    ffi.Pointer<kiln_speak_stats> stats,
+  ) {
+    return kiln_status.fromValue(_kiln_speak(c, text, opts, cb, user, stats));
+  }
+
+  late final _kiln_speakPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<kiln_context>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<kiln_speak_options>,
+            kiln_audio_cb,
+            ffi.Pointer<ffi.Void>,
+            ffi.Pointer<kiln_speak_stats>,
+          )
+        >
+      >('kiln_speak');
+  late final _kiln_speak = _kiln_speakPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<kiln_context>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<kiln_speak_options>,
+          kiln_audio_cb,
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<kiln_speak_stats>,
+        )
+      >();
+
   void kiln_set_log_callback(kiln_log_cb cb, ffi.Pointer<ffi.Void> user) {
     return _kiln_set_log_callback(cb, user);
   }
@@ -1225,6 +1276,14 @@ final class kiln_projector_info extends ffi.Struct {
 
   @ffi.Bool()
   external bool supports_audio;
+
+  /// a text-to-speech projector: the model can kiln_speak
+  @ffi.Bool()
+  external bool generates_audio;
+
+  /// of the generated audio, e.g. 24000; 0 when generates_audio is false
+  @ffi.Int32()
+  external int sample_rate;
 }
 
 /// One image or one audio clip: either a file path, or the bytes of such a file.
@@ -1307,6 +1366,93 @@ final class kiln_transcribe_stats extends ffi.Struct {
   external bool stopped_by_user;
 }
 
+/// A text-to-speech model turns text into audio. Like Qwen3-ASR it is a small text model plus
+/// a second file: load the model, load its projector with kiln_model_load_projector
+/// (kiln_projector_info.generates_audio reads true), create a context, then call kiln_speak.
+/// Tested with Pocket TTS (Kyutai, English, 220 MB for both files) on a Pixel 8, and with
+/// Qwen3-TTS 1.7B on the desktop. Both copy the voice of a short reference clip.
+final class kiln_speak_options extends ffi.Struct {
+  /// a few seconds of someone speaking (wav, mp3, flac; a path or the bytes).
+  /// The output imitates that voice. Pocket TTS produces almost nothing without one
+  external ffi.Pointer<kiln_media> voice;
+
+  /// Qwen3-TTS: "en", "zh", "de", ... (NULL = "en"). Pocket TTS: ignored, the language
+  /// is a property of the weights
+  external ffi.Pointer<ffi.Char> language;
+
+  /// longest output in frames (80 ms each for Pocket TTS); <= 0 = 512
+  @ffi.Int32()
+  external int max_frames;
+
+  /// sampling of the semantic codes; <= 0 = 40
+  @ffi.Int32()
+  external int top_k;
+
+  /// <= 0 = 0.95
+  @ffi.Float()
+  external double top_p;
+
+  /// UINT32_MAX = random; any other value makes the same text give the same audio
+  @ffi.Uint32()
+  external int seed;
+}
+
+typedef kiln_audio_cbFunction =
+    ffi.Bool Function(
+      ffi.Pointer<ffi.Float> samples,
+      ffi.Int32 n,
+      ffi.Int32 sample_rate,
+      ffi.Pointer<ffi.Void> user,
+    );
+typedef Dartkiln_audio_cbFunction =
+    bool Function(
+      ffi.Pointer<ffi.Float> samples,
+      int n,
+      int sample_rate,
+      ffi.Pointer<ffi.Void> user,
+    );
+
+/// Called with each piece of audio as it is produced: `n` samples, mono, floats in -1..1 at
+/// `sample_rate` Hz. Pieces arrive about once a second of audio; play them as they come or
+/// collect them. Return false to stop.
+typedef kiln_audio_cb = ffi.Pointer<ffi.NativeFunction<kiln_audio_cbFunction>>;
+
+final class kiln_speak_stats extends ffi.Struct {
+  /// length of the generated audio
+  @ffi.Double()
+  external double audio_seconds;
+
+  @ffi.Int32()
+  external int sample_rate;
+
+  /// frames the model generated
+  @ffi.Int32()
+  external int frames;
+
+  /// text and voice reference together
+  @ffi.Int32()
+  external int prompt_tokens;
+
+  /// reading the text and encoding the voice
+  @ffi.Double()
+  external double prompt_ms;
+
+  /// generating the frames, audio decoding included
+  @ffi.Double()
+  external double gen_ms;
+
+  /// whole call. Faster than real time when ms < audio_seconds * 1000
+  @ffi.Double()
+  external double ms;
+
+  /// the model ended the sentence itself (false = max_frames or the caller)
+  @ffi.Bool()
+  external bool stopped_by_eos;
+
+  @ffi.Bool()
+  external bool stopped_by_user;
+}
+
 /// ------------------------------------------------------------------ */
 /// /* Logging                                                             */
 /// /* ------------------------------------------------------------------
@@ -1344,7 +1490,7 @@ typedef kiln_log_cb = ffi.Pointer<ffi.NativeFunction<kiln_log_cbFunction>>;
 
 const int KILN_VERSION_MAJOR = 0;
 
-const int KILN_VERSION_MINOR = 4;
+const int KILN_VERSION_MINOR = 5;
 
 const int KILN_VERSION_PATCH = 0;
 

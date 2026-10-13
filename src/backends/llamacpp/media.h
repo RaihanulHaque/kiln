@@ -63,6 +63,7 @@ public:
     std::mutex&   mutex() const { return mutex_; }
     mtmd_context* ctx() const { return mctx_; }
     uint64_t      cpu_mask() const { return cpu_mask_; }   // cores the encoders may use; 0 = not restricted
+    bool          generates_audio() const { return mctx_ && mtmd_gen_audio_get_info(mctx_).type != MTMD_GEN_AUDIO_TYPE_NONE; }
 
     // cpu_mask: the cores the encoders may use (0 = leave thread placement to the system)
     kiln_status load(const llama_model* model, const char* path, const kiln_projector_params& p, bool use_gpu, int n_threads, uint64_t cpu_mask, kiln_projector_info& out) {
@@ -80,6 +81,9 @@ public:
         if (!mctx_) return kiln::set_error(KILN_ERR_MODEL_LOAD, std::string("failed to load projector ") + path + " (missing, corrupt, or made for another model)");
         out.supports_images = mtmd_support_vision(mctx_);
         out.supports_audio  = mtmd_support_audio(mctx_);
+        const mtmd_gen_audio_info gi = mtmd_gen_audio_get_info(mctx_);
+        out.generates_audio = gi.type != MTMD_GEN_AUDIO_TYPE_NONE;
+        out.sample_rate     = out.generates_audio ? gi.sample_rate : 0;
         cpu_mask_ = cpu_mask;
         return KILN_OK;
     }

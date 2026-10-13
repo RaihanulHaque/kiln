@@ -48,6 +48,11 @@ const whisperBaseUrl = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/mai
 const parakeet = 'ggml-parakeet-tdt-0.6b-v3-q8_0.bin';
 const parakeetUrl = 'https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-q8_0.bin';
 const bool speechTests = bool.fromEnvironment('KILN_SPEECH');
+// Text to speech: Pocket TTS backbone (159 MB) and its projector (60 MB), only when KILN_SPEECH=true.
+const pocket = 'pocket-tts-en.gguf';
+const pocketUrl = 'https://huggingface.co/EryriLabs/pocket-tts-GGUF/resolve/main/pocket-tts-en.gguf';
+const pocketProjector = 'mmproj-pocket-tts-en.gguf';
+const pocketProjectorUrl = 'https://huggingface.co/EryriLabs/pocket-tts-GGUF/resolve/main/mmproj-pocket-tts-en.gguf';
 
 /// Lower-case letters and digits, one space between words: capitals and punctuation do not
 /// count, and "9" is accepted for "nine".
@@ -608,6 +613,71 @@ void main() {
         await m.dispose();
       }
     }, timeout: const Timeout(Duration(minutes: 10)));
+
+    test('Pocket TTS speaks, and Parakeet hears the words (KILN_SPEECH)', () async {
+      if (!speechTests) {
+        markTestSkipped('run with --dart-define=KILN_SPEECH=true (downloads 220 MB of Pocket TTS and 669 MB of Parakeet)');
+        return;
+      }
+      final f = await fetch(pocket, pocketUrl);
+      final m = await kiln.loadModel(f.path);
+      try {
+        expect(m.info.isSpeechModel, isFalse);
+        final ctx = await m.createContext();
+        final voice = File('${dir.path}/speech_train.wav')..writeAsBytesSync(speechTrainWav);
+        const text = 'The train to London leaves at nine in the morning.';
+        Matcher status(String name) => throwsA(isA<KilnException>().having((e) => e.status.name, 'status', name));
+        await expectLater(ctx.speak(text, voice: KilnMedia.file(voice.path)).stats, status('KILN_ERR_NOT_SUPPORTED'));
+        final p = await fetch(pocketProjector, pocketProjectorUrl);
+        final info = await m.loadProjector(p.path);
+        // ignore: avoid_print
+        print(info);
+        expect(info.generatesAudio, isTrue);
+        expect(info.sampleRate, 24000);
+
+        final s = ctx.speak(text, voice: KilnMedia.file(voice.path), seed: 7);
+        final pieces = <KilnAudioPiece>[];
+        final wavFuture = s.pieces.map((p) { pieces.add(p); return p; }).toList();
+        final st = await s.stats;
+        await wavFuture;
+        // ignore: avoid_print
+        print('speak: $st, ${pieces.length} pieces');
+        expect(pieces.length, greaterThanOrEqualTo(2));
+        expect(st.sampleRate, 24000);
+        expect(st.audioSeconds, inInclusiveRange(1.5, 8.0));
+        expect(st.frames, greaterThan(20));
+        expect(st.stoppedByEos, isTrue);
+        expect(st.stoppedByUser, isFalse);
+        final all = Float32List.fromList([for (final p in pieces) ...p.samples]);
+        expect(all.length / 24000, closeTo(st.audioSeconds, 0.01));
+        expect(all.map((v) => v.abs()).reduce((a, b) => a > b ? a : b), greaterThan(0.05));
+        // the same seed gives audio of about the same length (sample-exact on the Mac and the
+        // Pixel 8 in the C suite, but a Linux run differed by three frames, so not demanded here)
+        final again = await ctx.speak(text, voice: KilnMedia.file(voice.path), seed: 7).wav;
+        expect((again.length - 44) ~/ 2, inInclusiveRange((all.length * 0.75).round(), (all.length * 1.25).round()));
+        // what it does not take
+        await expectLater(ctx.speak('').stats, status('KILN_ERR_INVALID_ARG'));
+        await expectLater(ctx.speak(text, voice: KilnMedia.bytes(redCirclePng)).stats, status('KILN_ERR_NOT_SUPPORTED'));   // read as an image; the projector takes audio only
+        await ctx.dispose();
+
+        // round trip: Parakeet reads the generated speech back
+        final wav = pcmToWav(all, 24000);
+        final said = File('${dir.path}/said.wav')..writeAsBytesSync(wav);
+        final asr = await kiln.loadModel((await fetch(parakeet, parakeetUrl)).path);
+        try {
+          final actx = await asr.createContext();
+          final heard = await actx.transcribe(KilnMedia.file(said.path)).text;
+          // ignore: avoid_print
+          print('Parakeet heard: "$heard"');
+          expect(words(heard), 'the train to london leaves at nine in the morning');
+          await actx.dispose();
+        } finally {
+          await asr.dispose();
+        }
+      } finally {
+        await m.dispose();
+      }
+    }, timeout: const Timeout(Duration(minutes: 25)));
 
     test('Parakeet TDT 0.6B v3 writes down a clip', () async {
       if (!speechTests) {

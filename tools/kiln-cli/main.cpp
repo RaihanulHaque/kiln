@@ -33,6 +33,8 @@ static void usage() {
         "       kiln-cli -m model.gguf --mmproj projector.gguf --transcribe clip.wav [--transcribe clip2.mp3]... [--language English] [-n max_tokens]\n"
         "       kiln-cli -m ggml-base-q5_1.bin --transcribe clip.wav            (Whisper and Parakeet files: no --mmproj)\n"
         "  --transcribe  an audio file (wav, mp3, flac) to write down; Qwen3-ASR needs --mmproj, Whisper and Parakeet do not\n"
+        "       kiln-cli -m pocket-tts-en.gguf --mmproj mmproj-pocket-tts-en.gguf --speak \"text\" --voice clip.wav [--wav out.wav] [--language en]\n"
+        "  --speak  text to say with a text-to-speech model; --voice is a few seconds of the voice to imitate; writes a 16-bit wav\n"
         "  --language    the language spoken, when known; without it the model works it out\n");
 }
 
@@ -71,6 +73,8 @@ int main(int argc, char** argv) {
     std::string mmproj;
     std::vector<std::string> clips;
     std::string language;
+    std::vector<std::string> speak;
+    std::string voice, wav_out = "out.wav";
     bool max_tokens_set = false;
     int image_tokens = 0;
     std::string embed_query;
@@ -100,6 +104,9 @@ int main(int argc, char** argv) {
         else if (a == "--mmproj") mmproj = next();
         else if (a == "--transcribe") clips.push_back(next());
         else if (a == "--language") language = next();
+        else if (a == "--speak") speak.push_back(next());
+        else if (a == "--voice") voice = next();
+        else if (a == "--wav") wav_out = next();
         else if (a == "--image-tokens") image_tokens = atoi(next());
         else if (a == "--dim")   embed_dim = atoi(next());
         else if (a == "-o") {
@@ -140,6 +147,42 @@ int main(int argc, char** argv) {
         pp.image_max_tokens = image_tokens;
         if (kiln_model_load_projector(m, mmproj.c_str(), &pp, &pi) != KILN_OK) { fprintf(stderr, "projector failed: %s\n", kiln_last_error()); return 1; }
         fprintf(stderr, "projector: images=%s audio=%s\n", pi.supports_images ? "yes" : "no", pi.supports_audio ? "yes" : "no");
+    }
+
+    if (!speak.empty()) {
+        struct Wav { std::vector<float> pcm; int32_t rate = 0; int pieces = 0; };
+        auto on_audio = [](const float* s, int32_t n, int32_t rate, void* u) {
+            auto* w_ = static_cast<Wav*>(u); w_->pcm.insert(w_->pcm.end(), s, s + n); w_->rate = rate; ++w_->pieces;
+            fprintf(stderr, "."); return true;
+        };
+        kiln_speak_options so = kiln_speak_options_default();
+        kiln_media ref = {voice.c_str(), nullptr, 0};
+        if (!voice.empty()) so.voice = &ref;
+        if (!language.empty()) so.language = language.c_str();
+        int failed = 0;
+        for (size_t si = 0; si < speak.size(); ++si) {
+        Wav w;
+        kiln_speak_stats ss;
+        const kiln_status s = kiln_speak(c, speak[si].c_str(), &so, on_audio, &w, &ss);
+        fprintf(stderr, "\n");
+        if (s != KILN_OK) { fprintf(stderr, "speak failed: %s\n", kiln_last_error()); ++failed; continue; }
+        // 16-bit mono wav; a second --speak writes <name>.2.wav and so on
+        std::string out_name = wav_out;
+        if (si > 0) { const size_t dot = out_name.rfind('.'); out_name.insert(dot == std::string::npos ? out_name.size() : dot, "." + std::to_string(si + 1)); }
+        FILE* f = fopen(out_name.c_str(), "wb");
+        if (!f) { fprintf(stderr, "cannot write %s\n", out_name.c_str()); ++failed; continue; }
+        const uint32_t n = (uint32_t)w.pcm.size(), bytes = n * 2, rate = (uint32_t)w.rate;
+        auto u32 = [&](uint32_t v) { fwrite(&v, 4, 1, f); }; auto u16 = [&](uint16_t v) { fwrite(&v, 2, 1, f); };
+        fwrite("RIFF", 1, 4, f); u32(36 + bytes); fwrite("WAVEfmt ", 1, 8, f); u32(16); u16(1); u16(1); u32(rate); u32(rate * 2); u16(2); u16(16);
+        fwrite("data", 1, 4, f); u32(bytes);
+        for (float v : w.pcm) { int16_t s16 = (int16_t)(std::max(-1.0f, std::min(1.0f, v)) * 32767.0f); fwrite(&s16, 2, 1, f); }
+        fclose(f);
+        fprintf(stderr, "          %.2f s of audio in %d pieces, %d frames, written to %s | %.0f ms = %.1fx real time | prompt %.0f ms (%d tok), generation %.0f ms%s\n",
+                ss.audio_seconds, w.pieces, ss.frames, out_name.c_str(), ss.ms, ss.ms > 0 ? ss.audio_seconds * 1000.0 / ss.ms : 0.0,
+                ss.prompt_ms, ss.prompt_tokens, ss.gen_ms, ss.stopped_by_eos ? "" : " [cut]");
+        }
+        kiln_context_free(c); kiln_model_free(m);
+        return failed ? 1 : 0;
     }
 
     if (!clips.empty()) {

@@ -115,8 +115,10 @@ One source tree, three outputs, no copies.
       attached, same text as `llama-server`), and Whisper and Parakeet through a second engine, whisper.cpp, sharing llama.cpp's
       ggml. Run on the Pixel 8, the M4 Pro and Linux; Flutter `transcribe` with a recording example app.
 - [ ] ASR: iOS build with whisper.cpp, raw microphone samples, Whisper small / large and other Parakeet quantisations, speaker turns
-- [ ] TTS (text to speech): `mtmd` has Qwen3-TTS and PocketTTS, but its header marks audio generation as experimental and subject
-      to breaking changes. Needs a new output kind in `kiln.h` (audio samples). Check how stable that API is in a newer llama.cpp first. Nothing run yet
+- [x] v0.5.0: TTS (text to speech): `kiln_speak` over `mtmd`'s audio-generation helper, audio streamed to a callback. Pocket TTS on the
+      Pixel 8 and the M4 Pro, Qwen3-TTS 1.7B on the M4 Pro; checked by a Parakeet round trip. The helper is marked experimental upstream:
+      re-check it on every llama.cpp bump
+- [ ] TTS: streaming playback in the example app, a cache for the encoded voice, the other Pocket TTS languages, Qwen3-TTS on a phone
 - [ ] Voice loop in the example app once both exist: ASR -> chat -> embeddings lookup -> TTS, all offline from GGUF files
 - [ ] Tool calling: common already parses it; expose `kiln_tool` + a TOOL_CALL channel
 - [ ] Runtime ISA dispatch (i8mm / sve) instead of one baseline build

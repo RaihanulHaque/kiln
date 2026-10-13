@@ -22,16 +22,16 @@ maintainers happened to own. kiln is built the other way round:
 
 v0.3.0 added embedding models (text, images and audio); v0.3.1 fixes core selection on chips
 with no little cores; v0.4.0 adds speech to text (`kiln_transcribe`) with Whisper, Parakeet
-and Qwen3-ASR. Run on 2026-10-12 and 2026-10-13 on the phones, the MacBook, the Linux
+and Qwen3-ASR; v0.5.0 adds text to speech (`kiln_speak`) with Pocket TTS. Run on 2026-10-12 and 2026-10-13 on the phones, the MacBook, the Linux
 desktop and a Linux container. The iPhone row is still from
 v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 
 | platform | backend | what passed |
 |---|---|---|
 | Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5, Android 17), v0.3.1 | llama.cpp CPU, 6 threads pinned | 319 C checks, 26 Flutter integration tests, example app, benchmarks; [profile](docs/devices/galaxy-s26-ultra.md) |
-| Pixel 8 (Tensor G3, Android 16), v0.4.0 | llama.cpp CPU, 5 threads pinned; whisper.cpp CPU | 476 C checks, 25 Flutter integration tests; chat, decision and embedding benchmarks at v0.3.0 |
+| Pixel 8 (Tensor G3, Android 16), v0.5.0 | llama.cpp CPU, 5 threads pinned; whisper.cpp CPU | 505 C checks, 26 integration tests (4 skipped) Flutter integration tests; chat, decision and embedding benchmarks at v0.3.0 |
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
-| MacBook Pro M4 Pro, v0.4.0 | llama.cpp Metal; whisper.cpp Metal | 476 C checks, 127 of them for the three speech models; chat benchmarks at v0.1.0 |
+| MacBook Pro M4 Pro, v0.5.0 | llama.cpp Metal; whisper.cpp Metal | 505 C checks (three speech-to-text models, one text-to-speech model); chat benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.4.0 | llama.cpp CPU, 8 threads | 398 C checks (Qwen3-ASR); not re-run since the whisper.cpp backend was added |
 | Linux arm64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.4.0 | llama.cpp CPU, OpenMP; whisper.cpp CPU | 476 C checks (Parakeet 66 ms, Whisper base 577 ms for the 3-second clip on the CPU); at v0.3.0 also emulated x86_64 (319) and `KILN_CPU_MASK=3` |
 
@@ -41,7 +41,9 @@ audio), nomic-embed-text v1.5 (text) and jina-embeddings-v5-omni-nano (text, ima
 them through the C API, and the speech models Parakeet TDT 0.6B v3 and Whisper base (through
 whisper.cpp) and Qwen3-ASR 0.6B (through llama.cpp): a 3-second clip in 0.3 s with Parakeet
 on the Pixel 8 CPU, 53 ms on the M4 Pro GPU. Chat, `decide`, `embed` / `embedMedia` (EmbeddingGemma 2)
-and `transcribe` (Whisper, Parakeet) through the Flutter plugin on the Pixel 8.
+and `transcribe` (Whisper, Parakeet) through the Flutter plugin on the Pixel 8. Text to speech: Pocket TTS
+(Kyutai, English) through the C API and the plugin on the Pixel 8, 2.7 s of speech in 3.4 to 4.1 s (0.7 to 0.9x real time; about a second of it is encoding the voice); Qwen3-TTS 1.7B
+through the C API on the M4 Pro only.
 **iOS is in progress.** It built and ran on an iPhone at v0.1.0, but it has not been re-run for
 v0.2.0 and is not part of the pub.dev package. Use Android for now.
 
@@ -82,7 +84,7 @@ a model downloader, thinking toggle, collapsible reasoning and per-reply stats, 
 screen for decision models and a Search screen for embedding models.
 
 <p>
-<img src="docs/img/app_library.png" width="180"> <img src="docs/img/app_chat_thinking.png" width="180"> <img src="docs/img/app_chat_reply.png" width="180"> <img src="docs/img/app_decide.png" width="180"> <img src="docs/img/app_search_media.png" width="180"> <img src="docs/img/app_search_result.png" width="180"> <img src="docs/img/app_transcribe.png" width="180"> <img src="docs/img/app_library_light.png" width="180">
+<img src="docs/img/app_library.png" width="180"> <img src="docs/img/app_chat_thinking.png" width="180"> <img src="docs/img/app_chat_reply.png" width="180"> <img src="docs/img/app_decide.png" width="180"> <img src="docs/img/app_search_media.png" width="180"> <img src="docs/img/app_search_result.png" width="180"> <img src="docs/img/app_transcribe.png" width="180"> <img src="docs/img/app_speak.png" width="180"> <img src="docs/img/app_library_light.png" width="180">
 </p>
 
 ### C
@@ -265,7 +267,7 @@ third_party/whisper.cpp      pinned submodule: Whisper and Parakeet, built on ll
 ## Tests
 
 ```bash
-scripts/fetch_models.sh                                      # the six test GGUFs into models/ (~1.7 GB); --media adds 0.9 GB, --speech 1.7 GB (Qwen3-ASR, Whisper base, Parakeet)
+scripts/fetch_models.sh                                      # the six test GGUFs into models/ (~1.7 GB); --media adds 0.9 GB, --speech 1.9 GB (Qwen3-ASR, Whisper base, Parakeet, Pocket TTS)
 ./build/host/kiln-tests models                               # C suite on the host
 scripts/android-test.sh                                      # C suite on a phone over adb
 cd flutter/kiln_flutter/example && flutter test integration_test -d <device>

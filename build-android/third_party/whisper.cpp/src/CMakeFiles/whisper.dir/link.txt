@@ -1,0 +1,2 @@
+/Users/rahi/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar qc libwhisper.a CMakeFiles/whisper.dir/whisper.cpp.o "CMakeFiles/whisper.dir/aneforge/whisper-aneforge.cpp.o"
+/Users/rahi/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ranlib libwhisper.a

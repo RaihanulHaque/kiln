@@ -193,6 +193,23 @@ kiln_status kiln_embed_media(kiln_context* c, const char* text, const kiln_media
     return s;
 }
 
+kiln_speak_options kiln_speak_options_default(void) {
+    kiln_speak_options o{}; o.voice = nullptr; o.language = nullptr; o.max_frames = 0; o.top_k = 0; o.top_p = 0; o.seed = UINT32_MAX; return o;
+}
+
+kiln_status kiln_speak(kiln_context* c, const char* text, const kiln_speak_options* opts,
+                       kiln_audio_cb cb, void* user, kiln_speak_stats* stats) {
+    kiln_speak_stats st{};
+    if (stats) *stats = st;
+    if (!c || !text) return set_error(KILN_ERR_INVALID_ARG, "null handle/text");
+    if (!*text) return set_error(KILN_ERR_INVALID_ARG, "text is empty");
+    kiln_speak_options o = opts ? *opts : kiln_speak_options_default();
+    if (o.voice && !o.voice->path && (!o.voice->data || o.voice->size == 0)) return set_error(KILN_ERR_INVALID_ARG, "voice without path or data");
+    kiln_status s = c->impl->speak(text, o, cb, user, st);
+    if (stats) *stats = st;
+    return s;
+}
+
 kiln_transcribe_options kiln_transcribe_options_default(void) {
     kiln_transcribe_options o{}; o.language = nullptr; o.prompt = nullptr; o.max_tokens = 0; return o;
 }

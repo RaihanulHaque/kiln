@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:ffi';
+import 'dart:typed_data';
 import 'dart:isolate';
 
 import 'kiln_bindings_generated.dart' as b;
@@ -111,6 +112,42 @@ class KilnTranscription {
 
   /// Convenience: the whole text.
   Future<String> get text => pieces.join();
+}
+
+/// Speech being generated. See [KilnContext.speak].
+class KilnSpeech {
+  KilnSpeech._(this.pieces, this.stats, this._cancel);
+
+  /// Pieces of audio as they are made, about a second each: mono float samples in -1..1.
+  /// Play them as they arrive, or collect them with [wav].
+  final Stream<KilnAudioPiece> pieces;
+
+  /// Resolves when the call ends: length, timing, and whether the model finished by itself.
+  final Future<KilnSpeakStats> stats;
+
+  final void Function() _cancel;
+
+  /// Stops generation. [stats] still resolves, with stoppedByUser = true.
+  void cancel() => _cancel();
+
+  /// Convenience: the whole utterance as the bytes of a 16-bit wav file.
+  Future<Uint8List> get wav async {
+    final all = <double>[];
+    var rate = 0;
+    await for (final p in pieces) {
+      all.addAll(p.samples);
+      rate = p.sampleRate;
+    }
+    return pcmToWav(Float32List.fromList(all), rate);
+  }
+}
+
+/// One piece of generated audio.
+class KilnAudioPiece {
+  const KilnAudioPiece(this.samples, this.sampleRate);
+  final Float32List samples;
+  final int sampleRate;
+  double get seconds => samples.length / sampleRate;
 }
 
 class KilnContext {
@@ -312,6 +349,63 @@ class KilnContext {
           unawaited(ctrl.close());
         });
     return KilnTranscription._(ctrl.stream, stats, () {
+      KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
+    });
+  }
+
+  /// Say [text] with a text-to-speech model, in the voice of [voice] (a few seconds of
+  /// someone speaking, a file or its bytes). Pieces of audio arrive about once a second.
+  ///
+  /// ```dart
+  /// final model = await kiln.loadModel('/path/to/pocket-tts-en.gguf');
+  /// await model.loadProjector('/path/to/mmproj-pocket-tts-en.gguf');   // generatesAudio: true
+  /// final ctx = await model.createContext();
+  /// final s = ctx.speak('The train leaves at nine.', voice: KilnMedia.file('/path/to/me.wav'));
+  /// final wavBytes = await s.wav;          // play it, or play s.pieces as they come
+  /// print((await s.stats).speed);          // times faster than real time
+  /// ```
+  ///
+  /// Pocket TTS produces almost nothing without a [voice]. [language] is for Qwen3-TTS
+  /// ("en", "zh", ...); Pocket TTS ignores it. [maxFrames] caps the length (80 ms a frame),
+  /// 0 = 512. The same [seed] gives the same audio; null means random. Speaking leaves the
+  /// chat in this context untouched. Throws `KILN_ERR_NOT_SUPPORTED` when the loaded
+  /// projector does not generate audio; check [KilnProjectorInfo.generatesAudio].
+  KilnSpeech speak(
+    String text, {
+    KilnMedia? voice,
+    String? language,
+    int maxFrames = 0,
+    int? seed,
+  }) {
+    if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
+    _busy = true;
+    final port = ReceivePort();
+    final ctrl = StreamController<KilnAudioPiece>();
+    port.listen((msg) {
+      final m = msg as List;
+      ctrl.add(KilnAudioPiece(m[0] as Float32List, m[1] as int));
+    });
+    final stats = model._kiln._worker
+        .call<Map>('speak', {
+          'context': _handle,
+          'text': text,
+          'voice': voice?.toMap(),
+          'language': language,
+          'maxFrames': maxFrames,
+          'seed': seed ?? 0xFFFFFFFF,
+        }, stream: port.sendPort)
+        .then((r) => KilnSpeakStats.fromMap(r['stats'] as Map))
+        .catchError((Object e) {
+          if (!ctrl.isClosed) ctrl.addError(e);
+          throw e;
+        })
+        .whenComplete(() async {
+          _busy = false;
+          await Future<void>.delayed(Duration.zero);
+          port.close();
+          unawaited(ctrl.close());
+        });
+    return KilnSpeech._(ctrl.stream, stats, () {
       KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
     });
   }

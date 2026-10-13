@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.5.0
+
+Text to speech. The C ABI changed: two new functions (`kiln_speak`, `kiln_speak_options_default`),
+two new structs (`kiln_speak_options`, `kiln_speak_stats`), a new callback type
+(`kiln_audio_cb`), and two fields at the end of `kiln_projector_info` (`generates_audio`,
+`sample_rate`), so that struct grew. Submodules unchanged (llama.cpp 781dbc5ac, whisper.cpp 0c7be696).
+
+- **`kiln_speak` turns text into audio**, in the voice of a short reference clip. A text-to-speech
+  model is a small text model plus a projector, loaded like Qwen3-ASR (`kiln_model_load`, then
+  `kiln_model_load_projector`; `kiln_projector_info.generates_audio` reads true). The audio
+  comes to a callback in pieces of about a second as it is made (mono floats, 24 kHz), so
+  playback can start before the sentence is finished. Each call uses a voice context of its
+  own, so the conversation in the context is kept. `kiln_speak_stats` gives the length, the
+  time reading the text and the voice, the time generating, and whether the model ended the
+  sentence itself; a fixed `seed` makes the same text give the same audio. This is llama.cpp's
+  audio-generation helper (the path of `llama-tts`), which llama.cpp marks experimental.
+- Tested with **Pocket TTS** (Kyutai, English, CC-BY-4.0; 159 MB backbone and 60 MB projector in
+  llama.cpp's format from EryriLabs/pocket-tts-GGUF) and, on the desktop, with **Qwen3-TTS 1.7B**
+  (ggml-org, Q4_K_M, 1.5 GB for both files).
+- `kiln-cli --speak "text" --voice clip.wav --wav out.wav`; `kiln-bench` speaks a stock
+  sentence when the projector generates audio (series `speak`, the tokens column holds the
+  audio length in ms); `scripts/fetch_models.sh --speech` fetches Pocket TTS; `scripts/bench.sh`
+  pairs it with its projector and the train clip as the voice.
+- The test suite checks the result the honest way: the generated audio is written down again
+  with Parakeet and the words compared.
+
+Speeds for "The train to London leaves at nine in the morning." (2.7 s of speech), voice from
+the 3-second test clip, whole call:
+
+| model | M4 Pro (Metal) | Pixel 8 (CPU, 5 threads pinned) |
+|---|---|---|
+| Pocket TTS, English | 0.22 s (12x real time) | 3.4 to 4.1 s (0.7 to 0.9x real time) |
+| Qwen3-TTS 1.7B, Q4_K_M | 2.0 s (1.6x) | not tried: 1.5 GB of weights |
+
+On the Pixel 8 that is a little slower than the speaker, so an app should let the first
+piece or two arrive before playing, or keep sentences short. Of the 3.4 s, about 0.8 to 0.95 s
+is encoding the 3-second voice reference (counted in `prompt_ms`; a cache per voice would
+remove it) and 1.5 to 2.4 s is the frames. Without OpenMP and pinning (llama.cpp's own
+`llama-tts` built the old way) the Pixel took 5 to 15 s for the same sentence, getting slower
+each run: the flow decoder is many small graphs, the same trap the Parakeet decoder fell into
+in 0.4.0.
+
+Verified with `kiln-tests` on 2026-10-13: 505 checks on macOS (M4 Pro, Metal) and Android
+(Pixel 8); 26 integration tests (4 skipped) on the Pixel 8 through the Flutter plugin.
+
+Not run: iOS; Linux x86. Known gaps: one language per Pocket TTS file (English is the one
+fetched; French, German, Italian, Portuguese, Spanish exist); no streaming playback in the
+example app (it collects the pieces, then plays); Qwen3-TTS not run on a phone; the voice
+reference is re-encoded on every call (about 0.75 s on the Pixel 8), a cache per voice
+would remove that.
+
+
 ## 0.4.0
 
 Speech to text, with three model families: Whisper, Parakeet and Qwen3-ASR. The C ABI changed:
