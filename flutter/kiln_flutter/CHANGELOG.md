@@ -1,6 +1,6 @@
 ## 0.4.0
 
-Speech to text. Verified on a Pixel 8 (Tensor G3): 25 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1), and the example
+Published 2026-10-13. Speech to text. Verified on a Pixel 8 (Tensor G3): 25 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1), and the example
 app's new Transcribe screen (record, or pick a file). Android arm64 only, as before.
 
 - `KilnContext.transcribe(KilnMedia audio, {language, prompt, maxTokens})`: writes down a
