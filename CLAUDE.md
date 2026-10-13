@@ -187,7 +187,8 @@ through llama.cpp): `kiln-tests models` gives 476 passed on macOS (M4 Pro, Metal
   run whose raw files were lost; it has the steps to repeat it, not run on the Mac.
 - pub.dev: `kiln_flutter` 0.4.0 was published on 2026-10-13 from the `v0.4.0` tag; a fresh app installed
   it from pub.dev and transcribed with Parakeet on the Pixel 8 (312 ms for the 3-second clip).
-  0.5.0: PUBLISH_0_5_0
+  0.5.0 was published on 2026-10-13 from the `v0.5.0` tag; a fresh app installed it from pub.dev, spoke with Pocket TTS on the Pixel 8
+  (2.7 s of speech in 4.3 s) and Parakeet read the words back.
 
 The notes below are from 0.3.1 and earlier.
 

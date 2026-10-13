@@ -2,7 +2,10 @@
 
 What has to be true before a version is tagged, and before `kiln_flutter` goes to pub.dev.
 
-**Published:** PUBLISH_0_5_0 `kiln_flutter` 0.4.0 on 2026-10-13 (speech to text: Whisper, Parakeet, Qwen3-ASR), from the
+**Published:** `kiln_flutter` 0.5.0 on 2026-10-13 (text to speech), from the `v0.5.0` tag, 1262 files,
+5 MB compressed, 0 warnings; afterwards a fresh `flutter create` app with
+`kiln_flutter: ^0.5.0` (minSdk 29) spoke the test sentence with Pocket TTS on the Pixel 8 (2.7 s of speech in 4.3 s)
+and Parakeet read it back correctly. Before it: `kiln_flutter` 0.4.0 on 2026-10-13 (speech to text: Whisper, Parakeet, Qwen3-ASR), from the
 `v0.4.0` tag, 1261 files, 5 MB compressed, 0 warnings; afterwards a fresh `flutter create` app with
 `kiln_flutter: ^0.4.0` (minSdk 29) loaded Parakeet and transcribed the test clip in 312 ms on the Pixel 8. Before it: `kiln_flutter` 0.3.1 on 2026-10-13 (core selection on chips with no little
 cores), from the `v0.3.1` tag; afterwards a fresh app installed it from pub.dev and ran an
