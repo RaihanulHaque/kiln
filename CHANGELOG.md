@@ -42,8 +42,8 @@ remove it) and 1.5 to 2.4 s is the frames. Without OpenMP and pinning (llama.cpp
 each run: the flow decoder is many small graphs, the same trap the Parakeet decoder fell into
 in 0.4.0.
 
-Verified with `kiln-tests` on 2026-10-13: 505 checks on macOS (M4 Pro, Metal) and Android
-(Pixel 8); 26 integration tests (4 skipped) on the Pixel 8 through the Flutter plugin.
+Verified with `kiln-tests` on 2026-10-13: 505 checks on macOS (M4 Pro, Metal), Android
+(Pixel 8) and Linux arm64 (Ubuntu 24.04 in Docker on the M4 Pro); 26 integration tests (4 skipped) on the Pixel 8 through the Flutter plugin.
 
 Added after the release, 2026-10-14: 505 checks on Linux x86_64 (Ryzen 5 8500G, CPU), the
 first run there with the whisper.cpp backend. On that desktop Parakeet writes down the 3-second
