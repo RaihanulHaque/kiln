@@ -165,7 +165,7 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 (M4 Pro, Metal), Android (Pixel 8) and Linux arm64 (Docker) on 2026-10-13. Flutter `speak` with
 26 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1) on the Pixel 8, and the example app's Speak screen. Still open:
 
-- Linux x86 (the Ryzen): not run since 0.4.0's 398.
+- Linux x86 (the Ryzen): done on 2026-10-14, 505 passed (the first run there with whisper.cpp and TTS).
 - iOS, as before.
 - Qwen3-TTS on a phone (1.5 GB); the other Pocket TTS languages; streaming playback in the
   example app; caching the encoded voice between calls (0.75 s per call on the Pixel 8).
@@ -178,7 +178,7 @@ through llama.cpp): `kiln-tests models` gives 476 passed on macOS (M4 Pro, Metal
 (Ryzen 5 8500G) before the whisper.cpp backend was added. The Flutter plugin has `transcribe`
 (25 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1) on the Pixel 8). Still open:
 
-- Linux x86: re-run on the Ryzen with the whisper.cpp backend (Linux arm64 in Docker gives 476 passed).
+- Linux x86: done at 0.5.0 (see above). Linux arm64 in Docker gave 476 passed at 0.4.0.
 - iOS: not built, not run; `scripts/build_ios.sh` does not know about whisper.cpp yet.
 - Raw microphone samples (the example app records to a wav first), a 4-bit Qwen3-ASR file
   (ggml-org publishes Q8_0 and bf16 only), Whisper small / large and Parakeet's other

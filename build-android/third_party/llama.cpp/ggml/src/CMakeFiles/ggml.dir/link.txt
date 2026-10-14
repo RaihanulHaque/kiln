@@ -1,2 +1,0 @@
-/Users/rahi/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar qc libggml.a "CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o" "CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o"
-/Users/rahi/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ranlib libggml.a
