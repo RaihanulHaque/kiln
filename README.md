@@ -29,11 +29,11 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 | platform | backend | what passed |
 |---|---|---|
 | Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5, Android 17), v0.3.1 | llama.cpp CPU, 6 threads pinned | 319 C checks, 26 Flutter integration tests, example app, benchmarks; [profile](docs/devices/galaxy-s26-ultra.md) |
-| Pixel 8 (Tensor G3, Android 16), v0.5.0 | llama.cpp CPU, 5 threads pinned; whisper.cpp CPU | 505 C checks, 26 integration tests (4 skipped) Flutter integration tests; chat, decision and embedding benchmarks at v0.3.0 |
+| Pixel 8 (Tensor G3, Android 16), v0.5.0 | llama.cpp CPU, 5 threads pinned; whisper.cpp CPU | 505 C checks, 26 Flutter integration tests (4 skipped); chat, decision and embedding benchmarks at v0.3.0 |
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
 | MacBook Pro M4 Pro, v0.5.0 | llama.cpp Metal; whisper.cpp Metal | 505 C checks (three speech-to-text models, one text-to-speech model); chat benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.5.0 | llama.cpp and whisper.cpp CPU, 8 threads | 505 C checks, with Whisper, Parakeet and Pocket TTS (2026-10-14) |
-| Linux arm64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.4.0 | llama.cpp CPU, OpenMP; whisper.cpp CPU | 476 C checks (Parakeet 66 ms, Whisper base 577 ms for the 3-second clip on the CPU); at v0.3.0 also emulated x86_64 (319) and `KILN_CPU_MASK=3` |
+| Linux arm64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.5.0 | llama.cpp CPU, OpenMP; whisper.cpp CPU | 505 C checks (2026-10-13); at v0.4.0 Parakeet took 66 ms and Whisper base 577 ms for the 3-second clip on the CPU; at v0.3.0 also emulated x86_64 (319) and `KILN_CPU_MASK=3` |
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
 the decision model LFM2 d1-omni 600M, and the embedding models EmbeddingGemma 2 (text, images,
