@@ -45,7 +45,12 @@ in 0.4.0.
 Verified with `kiln-tests` on 2026-10-13: 505 checks on macOS (M4 Pro, Metal) and Android
 (Pixel 8); 26 integration tests (4 skipped) on the Pixel 8 through the Flutter plugin.
 
-Not run: iOS; Linux x86. Known gaps: one language per Pocket TTS file (English is the one
+Added after the release, 2026-10-14: 505 checks on Linux x86_64 (Ryzen 5 8500G, CPU), the
+first run there with the whisper.cpp backend. On that desktop Parakeet writes down the 3-second
+clip in 0.16 s and a 17-second clip in 0.9 s, and Pocket TTS speaks the sentence above
+(2.7 s of speech) in 0.6 s.
+
+Not run: iOS. Known gaps: one language per Pocket TTS file (English is the one
 fetched; French, German, Italian, Portuguese, Spanish exist); no streaming playback in the
 example app (it collects the pieces, then plays); Qwen3-TTS not run on a phone; the voice
 reference is re-encoded on every call (about 0.75 s on the Pixel 8), a cache per voice
