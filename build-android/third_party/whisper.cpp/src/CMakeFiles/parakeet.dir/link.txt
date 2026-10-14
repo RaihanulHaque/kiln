@@ -1,2 +1,0 @@
-/Users/rahi/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar qc libparakeet.a CMakeFiles/parakeet.dir/parakeet.cpp.o
-/Users/rahi/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ranlib libparakeet.a

@@ -1,4 +1,5 @@
 /build/
+/build-android/
 /models/
 *.gguf
 .DS_Store

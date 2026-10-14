@@ -1,2 +1,0 @@
-/Users/rahi/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar qc libvendor-hash.a "CMakeFiles/vendor-hash.dir/hash.cpp.o" "CMakeFiles/vendor-hash.dir/xxhash/xxhash.c.o" "CMakeFiles/vendor-hash.dir/sha1/sha1.c.o" "CMakeFiles/vendor-hash.dir/sha256/sha256.c.o"
-/Users/rahi/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ranlib libvendor-hash.a
