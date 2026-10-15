@@ -34,6 +34,7 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 | MacBook Pro M4 Pro, v0.5.0 | llama.cpp Metal; whisper.cpp Metal | 505 C checks (three speech-to-text models, one text-to-speech model); chat benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.5.0 | llama.cpp and whisper.cpp CPU, 8 threads | 505 C checks, with Whisper, Parakeet and Pocket TTS (2026-10-14) |
 | Ryzen 5 8500G desktop and MacBook Pro M4 Pro, Rust bindings (`rust/`) | the same, linked statically from Cargo | 11 Rust tests over the same models (chat, decision, embeddings, images, Whisper, Parakeet, Pocket TTS) on both, 2026-10-15; Android, iOS and Windows not tried |
+| Ryzen 5 8500G and M4 Pro desktop JVMs, Pixel 8 (Android 17): Kotlin API (`android/`) | the JNI glue, and the `.aar` built with the NDK | 12 Kotlin tests over the same models on both desktops; on the Pixel 8 the device test (load, probe, chat with LFM2.5 350M); 2026-10-15 |
 | Linux arm64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.5.0 | llama.cpp CPU, OpenMP; whisper.cpp CPU | 505 C checks (2026-10-13); at v0.4.0 Parakeet took 66 ms and Whisper base 577 ms for the 3-second clip on the CPU; at v0.3.0 also emulated x86_64 (319) and `KILN_CPU_MASK=3` |
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
@@ -100,6 +101,19 @@ ctx.chat(&history, &Default::default(), &Default::default(), |piece| {
     print!("{}", piece.text);            // piece.channel: Answer or Reasoning
     true                                 // false = stop
 })?;
+```
+
+### Kotlin (Android)
+
+The `.aar` builds and its device test (chat) passes on the Pixel 8; the full model set is tested on the desktop JVM. See [android/README.md](android/README.md).
+
+```kotlin
+// every call blocks: run this on a background thread (or use ctx.chatFlow from a coroutine)
+KilnModel.load(path).use { model ->
+    model.newContext().use { ctx ->
+        ctx.chat(listOf(Message.user("Hi"))) { piece -> print(piece.text); true }   // or ctx.chatFlow(...) from a coroutine
+    }
+}
 ```
 
 ### C
@@ -274,6 +288,7 @@ tools/barrier-lab            standalone experiment: how ggml's per-op barrier re
 tests/                       C test suite (host and device)
 flutter/kiln_flutter/        Flutter plugin, example app, integration test
 rust/                        Rust bindings: kiln-sys (generated) and kiln (safe API)
+android/                     Kotlin / Android library: JNI glue + Kotlin API, one libkiln_jni.so
 scripts/                     model download, adb runners, benchmarks, vendoring, iOS build, brand assets
 docs/                        concepts, codebase walkthrough, architecture, glossary, benchmarks
 third_party/llama.cpp        pinned submodule: chat, decision, embedding and Qwen3-ASR models
@@ -288,6 +303,7 @@ scripts/fetch_models.sh                                      # the six test GGUF
 scripts/android-test.sh                                      # C suite on a phone over adb
 cd flutter/kiln_flutter/example && flutter test integration_test -d <device>
 cd rust && cargo test --release                              # Rust bindings, same models
+cd android && ./gradlew :kiln:testDebugUnitTest              # Kotlin API on the desktop JVM, same models
 ```
 
 The C suite needs the six test GGUFs in `models/` (`scripts/fetch_models.sh`); missing ones are skipped. The Flutter

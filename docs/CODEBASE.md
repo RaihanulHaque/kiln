@@ -44,6 +44,12 @@ rust/
     kiln/src/                       safe API: model.rs, context.rs (calls, CancelHandle), types.rs (struct mirrors),
                                     callback.rs (C callbacks -> closures, whole UTF-8 characters, panics caught)
     kiln/tests/models.rs            the C suite's models through the Rust API
+android/
+    kiln/src/main/cpp/kiln_jni.cpp  JNI glue: flat arguments (numbers, arrays, UTF-8 byte arrays), callbacks, KilnException
+    kiln/src/main/cpp/CMakeLists.txt  libkiln_jni.so with the core linked in statically; also built for the desktop JVM tests
+    kiln/src/main/kotlin/dev/kiln/  Native.kt (external funs, Utf8Carry), Types.kt, KilnModel.kt, KilnContext.kt (calls, chatFlow)
+    kiln/src/test/                  host tests on the desktop JVM against the C suite's models
+    kiln/src/androidTest/           on-device smoke test (loads, probes, optional chat)
 scripts/
     fetch_models.sh                 download the six test GGUFs into models/; --media and --speech add the encoders and the speech model
     android-run.sh, android-test.sh push the CLI / C tests to a phone over adb
@@ -345,6 +351,7 @@ calling thread; the Dart layer turns that into an async stream.
 | `android-arm64` | `build/android-arm64/libkiln.so` + the same tools | adb scripts, benchmarks |
 | Gradle via plugin | `libkiln.so` inside the APK | the Flutter app on Android |
 | `scripts/build_ios.sh` | `kiln.xcframework` (static, Metal) | the Flutter app on iOS via CocoaPods |
+| Gradle in `android/` | `libkiln_jni.so` (core linked in, c++_static) inside `kiln-release.aar` | Kotlin apps on Android |
 | `cargo build` in `rust/` | static libkiln inside the Rust program (`rust/target/`) | Rust users, `cargo test` |
 
 All of these compile the same sources; the Gradle and Cargo paths just point CMake at the repo

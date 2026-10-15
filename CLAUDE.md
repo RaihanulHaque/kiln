@@ -128,6 +128,12 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   The build script compiles llama.cpp in Release whatever the cargo profile; `KILN_LIB_DIR` set to
   the absolute path of `build/host` links the prebuilt library instead (then set `LD_LIBRARY_PATH`).
   Cargo builds of libkiln stop with a message for Android and Windows: neither has been tried.
+- **The Kotlin binding (`android/`) is written by hand.** A `kiln.h` change needs the C call in
+  `kiln_jni.cpp`, the `external fun` in `Native.kt` and the Kotlin type; the host test
+  `probeVersionAndDefaults` compares the Kotlin defaults with kiln's and the version with "0.5.0"
+  (bump it with the rest). Strings cross JNI as UTF-8 byte arrays, never `jstring` (modified UTF-8
+  breaks emoji). Each callback piece is a local reference and must be deleted at once: Android
+  allows only a few hundred.
 - **`flutter/kiln_flutter/src/core` wins over the repo source** when it exists (it is the
   vendored copy made by `scripts/vendor_flutter.sh`, git-ignored). Delete it after a publish
   check, or the plugin builds an old core against new bindings.
