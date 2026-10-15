@@ -120,25 +120,101 @@ token and stores them: the **KV cache**. Producing the next token then only need
 token's math plus a lookup into that cache. It is why the second token is as cheap as the
 hundredth.
 
-For a chat, every turn's prompt is the whole history plus the new message. kiln compares the
-new prompt's tokens with what the cache already holds and evaluates only the part that
-changed, usually just the new user message. That is `cached_tokens` in the stats. Some model
-families (LFM2, Qwen3.5, Mamba) keep recurrent state that cannot be partially rewound. For
-those, kiln saves a copy of that state (a checkpoint) at the end of each turn's history,
-just before the assistant's reply. Templates often rewrite the previous reply on the next turn
-(Qwen3.5 drops its think block), so the next turn rewinds to the checkpoint and re-reads only
-the last reply and the new message. Without a usable checkpoint it re-reads the whole prompt:
-slower, still correct.
+### Reusing the start of the prompt
 
-A second checkpoint sits right after the system prompt. Many apps are not conversations at all:
-an extractor or a classifier sends the same long instructions as the system prompt with a new
-text each time, and the end-of-history checkpoint never matches the next request. Example: the
-Hishab extractor (Qwen3.5 0.8B) sends 167 prompt tokens, 146 of them the same instructions every
-time. With only the end-of-history checkpoint the Pixel 8 re-read all 167 (2.9 s); with the
-system-prompt checkpoint it keeps the 146 and reads 21 (0.8 s). To find where the system prompt
-ends, kiln renders the template a second time with a dummy user message and keeps what the two
-renders share. kiln keeps at most three checkpoints: the system prompt, the latest turn, and one
-turn back.
+For a chat, every turn's prompt is the whole history plus the new message. kiln compares the
+new prompt's tokens with what the cache already holds, counts how many match from the start,
+and reads only the rest, usually just the new user message. That count is `cached_tokens` in
+the stats. The same happens when an app sends the same long instructions (the system prompt)
+with a new text each time: the instructions match, only the new text is read.
+
+### Normal and hybrid models
+
+Both kinds read a prompt the same way, token by token from the start. They differ in whether
+they can go back to an earlier point.
+
+| | Normal model (Gemma 3, Qwen3, Llama) | Hybrid or recurrent model (Qwen3.5, LFM2; Mamba) |
+|---|---|---|
+| Memory | one KV entry per token | partly one running summary of everything read so far (recurrent state) |
+| Going back to token 146 | delete the entries after 146 | impossible, unless a copy was saved at 146 |
+| Reusing the system prompt | automatic | only with a checkpoint at the end of the system prompt |
+
+Note the names: Qwen3 is a normal model, Qwen3.5 a hybrid one.
+
+A picture: the model is a bank clerk who checks customer forms against a long rulebook.
+
+- **A normal model keeps index cards**, one per line read. For the next customer it throws away
+  the last customer's cards and keeps the rulebook's.
+- **A hybrid model keeps only a summary in its head.** It cannot forget the last few lines it
+  read. The only way back to an earlier page is a photocopy of its summary taken at that page.
+  Those photocopies are kiln's **checkpoints** (`Checkpoint` in `LlamaContext`).
+
+### The checkpoints kiln keeps for a hybrid model
+
+At most three, each at a different place:
+
+| checkpoint | where | it helps the next request that... |
+|---|---|---|
+| system prompt | right after the instructions | sends the same instructions with a new text (extraction, classification) |
+| latest turn | at the end of the history, just before the reply | is the next turn of the same chat |
+| one turn back | the turn before | edits or retries the last message |
+
+Example: the Hishab extractor (Qwen3.5 0.8B) sends 167 prompt tokens, 146 of them the same
+instructions every time. With only the end-of-history checkpoint, which holds the last
+customer's text too, the Pixel 8 re-read all 167 tokens for every request (2.9 s). With the
+system-prompt checkpoint it goes back to token 146 and reads 21 (0.8 s). The system-prompt
+copy stays and is reused; the end-of-history copy is replaced after every request. In a long
+chat the system-prompt copy is eventually dropped to stay at three, which is fine: the turn
+copies contain the system prompt too.
+
+The end-of-history checkpoint matters because templates often rewrite the previous reply on the
+next turn (Qwen3.5 drops its think block): the next turn goes back to it and re-reads only the
+last reply and the new message.
+
+### How kiln finds where the system prompt ends
+
+kiln does not guess from the words. The app passes every message with a role (`system`,
+`user`, `assistant`), and the model's chat template turns them into one text. For Qwen3.5,
+roughly:
+
+```
+<|im_start|>system
+You extract invoice fields as JSON...            <- the instructions
+<|im_end|>
+<|im_start|>user
+Bill from Rahim Traders, total 4,500 taka...     <- this request's text
+<|im_end|>
+<|im_start|>assistant                            <- where the model starts writing
+```
+
+1. **The end of the system prompt.** kiln renders the template a second time with the same
+   system message and a dummy user message, and compares the two texts character by character.
+   Everything before the first difference is the instructions plus the opening of the user turn:
+   ```
+   real:   ...instructions... <|im_end|> <|im_start|>user \n Bill from Rahim...
+   dummy:  ...instructions... <|im_end|> <|im_start|>user \n <dummy>
+                                                             ^ first difference
+   ```
+   It does not render the system message alone, because some templates (Qwen3.5's) refuse a
+   conversation with no user message.
+2. **The end of the history.** kiln renders the conversation without the final assistant
+   marker; where that text ends is where the reply begins.
+3. **From text to tokens.** Both are places in the text; kiln turns each into a token count by
+   matching the start of the prompt's tokens (146 and 167 in the example).
+
+In the code these are `RenderedPrompt::system_prefix` and `RenderedPrompt::stable_prefix`, made
+in the chat rendering of `src/backends/llamacpp/llamacpp_backend.cpp`.
+
+### What happens on the next request
+
+The roles no longer matter. kiln compares the new prompt's tokens with the old ones and counts
+how many match from the start. Then:
+
+- **normal model:** it deletes the KV entries after that point and reads the rest;
+- **hybrid model:** it loads the newest checkpoint at or before that point and reads from there.
+  Same instructions with a new bill: the match ends near token 146, so the system-prompt copy is
+  used. Next turn of a chat: the match goes past the old end of the history, so the turn copy is
+  used. No copy fits: it re-reads the whole prompt, slower but still correct.
 
 ## Cancelling a call
 
