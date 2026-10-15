@@ -101,17 +101,22 @@ fn main() {
                 .ok()
                 .and_then(|d| d.flatten().map(|e| e.path()).find(|p| p.is_dir()))
                 .unwrap_or_else(|| panic!("no prebuilt toolchain in {}", prebuilt.display()));
-            println!(
-                "cargo:rustc-link-search=native={}",
-                host.join("sysroot/usr/lib/aarch64-linux-android").display()
-            );
+            // Copy just the two C++ runtime archives: their NDK folder also holds a static libc,
+            // libm and libdl, and putting it on the search path links those into the program,
+            // which then crashes at start (a static libc in a dynamic executable).
+            let ndk_lib = host.join("sysroot/usr/lib/aarch64-linux-android");
+            let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("ndk-cxx");
+            fs::create_dir_all(&out).unwrap();
+            for a in ["libc++_static.a", "libc++abi.a"] {
+                fs::copy(ndk_lib.join(a), out.join(a)).unwrap_or_else(|e| panic!("{a}: {e}"));
+            }
+            println!("cargo:rustc-link-search=native={}", out.display());
             println!("cargo:rustc-link-lib=static=c++_static");
             println!("cargo:rustc-link-lib=static=c++abi");
+            // copied for the same reason: its folder holds other runtime libraries too
             if let Some(omp) = cache_value(&cache, "OpenMP_omp_LIBRARY").map(PathBuf::from) {
-                if let Some(dir) = omp.parent() {
-                    println!("cargo:rustc-link-search=native={}", dir.display());
-                    println!("cargo:rustc-link-lib=static=omp");
-                }
+                fs::copy(&omp, out.join("libomp.a")).unwrap_or_else(|e| panic!("{}: {e}", omp.display()));
+                println!("cargo:rustc-link-lib=static=omp");
             }
             for l in ["log", "dl", "m"] {
                 println!("cargo:rustc-link-lib=dylib={l}");

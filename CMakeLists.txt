@@ -48,6 +48,13 @@ if(APPLE)
     set(GGML_METAL ${KILN_GPU} CACHE BOOL "" FORCE)
     set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
 elseif(ANDROID)
+    # kiln's Android baseline (docs/CODEBASE.md): without it ggml uses its generic ARM code,
+    # several times slower. The preset, the Kotlin library and the Flutter plugin set it too;
+    # this covers any other CMake build (Cargo's, for one). A builder can still pass another.
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+    if(NOT GGML_CPU_ARM_ARCH)
+        set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
+    endif()
     # GPU on Android is opt-in: -DKILN_ANDROID_GPU=vulkan|opencl
     set(KILN_ANDROID_GPU "" CACHE STRING "vulkan, opencl, or empty")
     if(KILN_ANDROID_GPU STREQUAL "vulkan")
