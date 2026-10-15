@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Hybrid models reuse the system prompt.** An app that sends the same system prompt with a
+  new user message each time (extraction, classification) got no reuse on Qwen3.5 and LFM2:
+  their only checkpoint sat at the end of the whole history. kiln now also checkpoints after
+  the system prompt. Qwen3.5 0.8B reuses 25 of the second question's 41 prompt tokens (0
+  before), the same through C, Rust, Kotlin, Flutter and React Native, on the M4 Pro and the
+  Pixel 8 (Android 17); 520 checks on both. With the Hishab Qwen3.5 extractor on the Pixel 8:
+  146 of 167 prompt tokens reused, prompt eval 2.9 s to 0.8 s.
+
 - **Rust bindings** in `rust/`: `kiln-sys` (raw functions generated from `kiln.h` by bindgen;
   `scripts/gen_rust_bindings.sh` regenerates them) and `kiln`, a safe API (`Model`, `Context`,
   `CancelHandle`, streamed text to a closure in whole UTF-8 characters, errors as `Result`).

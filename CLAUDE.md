@@ -66,7 +66,10 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
 - **Comparing answers with and without the KV cache needs `n_batch = 1`.** Batched and
   single-token decode round differently, so greedy output can differ with no bug present.
 - **Hybrid models (Qwen3.5, LFM2) cannot rewind part of their state.** Cache reuse for them
-  goes through checkpoints saved at `RenderedPrompt::stable_prefix`; see `LlamaContext`.
+  goes through checkpoints saved at `RenderedPrompt::stable_prefix` (the next turn) and
+  `RenderedPrompt::system_prefix` (the same system prompt, a new question), up to three; see
+  `LlamaContext`. The system prefix is found by rendering the template a second time with a
+  placeholder user message, because some templates (Qwen3.5) refuse a conversation without one.
 - **Qwen3.5 0.8B rarely stops thinking by itself.** Use `max_reasoning_tokens`. The repeat
   penalty makes the answer loop more often.
 - **Decision models (`kiln_decide`) are a port of llama.cpp's server code**, which the library
