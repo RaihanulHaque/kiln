@@ -19,7 +19,7 @@ CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desk
   was tested.
 - A change to a public struct or function in `kiln.h` is an ABI change: bump the minor version
   (CMake project, `KILN_VERSION_*`, `kiln_version()` in `src/core/error.cpp`, the Flutter
-  `pubspec.yaml` and podspec, `rust/Cargo.toml`) and add a `CHANGELOG.md` entry.
+  `pubspec.yaml` and podspec, `rust/Cargo.toml`, `react-native/package.json`) and add a `CHANGELOG.md` entry.
 
 ## Build and test
 
@@ -134,6 +134,10 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   (bump it with the rest). Strings cross JNI as UTF-8 byte arrays, never `jstring` (modified UTF-8
   breaks emoji). Each callback piece is a local reference and must be deleted at once: Android
   allows only a few hundred.
+- **The React Native module sits on the Kotlin library.** `react-native/android/build.gradle` compiles
+  `android/kiln`'s Kotlin sources and JNI glue, so a change there reaches both. After editing the
+  spec (`react-native/src/NativeKiln.ts`), `npm run codegen` shows whether codegen accepts it; codegen's
+  types are limited (numbers arrive in Kotlin as `Double`, objects as `ReadableMap`).
 - **`flutter/kiln_flutter/src/core` wins over the repo source** when it exists (it is the
   vendored copy made by `scripts/vendor_flutter.sh`, git-ignored). Delete it after a publish
   check, or the plugin builds an old core against new bindings.

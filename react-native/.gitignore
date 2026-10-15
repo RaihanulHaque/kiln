@@ -1,0 +1,6 @@
+node_modules/
+lib/
+build-test/
+build-codegen/
+android/build/
+android/.cxx/

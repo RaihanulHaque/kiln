@@ -35,6 +35,7 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 | Ryzen 5 8500G desktop (Linux x86_64), v0.5.0 | llama.cpp and whisper.cpp CPU, 8 threads | 505 C checks, with Whisper, Parakeet and Pocket TTS (2026-10-14) |
 | Ryzen 5 8500G desktop and MacBook Pro M4 Pro, Rust bindings (`rust/`) | the same, linked statically from Cargo | 11 Rust tests over the same models (chat, decision, embeddings, images, Whisper, Parakeet, Pocket TTS) on both, 2026-10-15; Android, iOS and Windows not tried |
 | Ryzen 5 8500G and M4 Pro desktop JVMs, Pixel 8 (Android 17): Kotlin API (`android/`) | the JNI glue, and the `.aar` built with the NDK | 12 Kotlin tests over the same models on both desktops; on the Pixel 8 the device test (load, probe, chat with LFM2.5 350M); 2026-10-15 |
+| Ryzen 5 8500G desktop, React Native module (`react-native/`) | no Android SDK | spec through RN 0.87.1 codegen, Kotlin module compiles against `react-android` 0.87.1 and API 36, 7 JS tests (2026-10-15); not run in an app yet |
 | Linux arm64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.5.0 | llama.cpp CPU, OpenMP; whisper.cpp CPU | 505 C checks (2026-10-13); at v0.4.0 Parakeet took 66 ms and Whisper base 577 ms for the 3-second clip on the CPU; at v0.3.0 also emulated x86_64 (319) and `KILN_CPU_MASK=3` |
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
@@ -114,6 +115,16 @@ KilnModel.load(path).use { model ->
         ctx.chat(listOf(Message.user("Hi"))) { piece -> print(piece.text); true }   // or ctx.chatFlow(...) from a coroutine
     }
 }
+```
+
+### React Native (Android)
+
+A TurboModule over the Kotlin library; the spec passed RN 0.87.1's codegen and the Kotlin module compiles, but no app has run it yet. See [react-native/README.md](react-native/README.md).
+
+```ts
+const model = await Kiln.loadModel(path);
+const ctx = await model.newContext();
+const reply = await ctx.chat([{ role: 'user', content: 'Hi' }], { onPiece: (p) => append(p.text) });
 ```
 
 ### C
@@ -289,6 +300,7 @@ tests/                       C test suite (host and device)
 flutter/kiln_flutter/        Flutter plugin, example app, integration test
 rust/                        Rust bindings: kiln-sys (generated) and kiln (safe API)
 android/                     Kotlin / Android library: JNI glue + Kotlin API, one libkiln_jni.so
+react-native/                React Native TurboModule (Android) over the Kotlin library, TypeScript API
 scripts/                     model download, adb runners, benchmarks, vendoring, iOS build, brand assets
 docs/                        concepts, codebase walkthrough, architecture, glossary, benchmarks
 third_party/llama.cpp        pinned submodule: chat, decision, embedding and Qwen3-ASR models
@@ -304,6 +316,7 @@ scripts/android-test.sh                                      # C suite on a phon
 cd flutter/kiln_flutter/example && flutter test integration_test -d <device>
 cd rust && cargo test --release                              # Rust bindings, same models
 cd android && ./gradlew :kiln:testDebugUnitTest              # Kotlin API on the desktop JVM, same models
+cd react-native && npm install && npm test                   # React Native JS layer against a fake native module
 ```
 
 The C suite needs the six test GGUFs in `models/` (`scripts/fetch_models.sh`); missing ones are skipped. The Flutter

@@ -1,0 +1,68 @@
+// The Android side of kiln-react-native. The app's own Gradle setup supplies the Android Gradle
+// Plugin and React Native (RN 0.87: AGP 9.2.1, built-in Kotlin, NDK 27.1).
+//
+// The kiln Kotlin library is not published yet, so this module compiles it from the monorepo:
+// the dev.kiln Kotlin sources and the JNI glue in ../../android/kiln. Both are tested there.
+
+apply plugin: "com.android.library"
+// AGP 9 compiles Kotlin itself; an app that turned that off needs the Kotlin plugin here
+if (project.findProperty("android.builtInKotlin")?.toString() == "false") {
+    apply plugin: "org.jetbrains.kotlin.android"
+}
+apply plugin: "com.facebook.react"   // runs codegen on src/NativeKiln.ts (codegenConfig in package.json)
+
+def kilnAndroid = file("../../android/kiln")
+if (!new File(kilnAndroid, "src/main/cpp/kiln_jni.cpp").exists()) {
+    throw new GradleException("kiln-react-native: ${kilnAndroid} not found. This package builds inside the kiln repository for now.")
+}
+
+def safeExtGet(prop, fallback) {
+    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+android {
+    namespace "dev.kiln.reactnative"
+    compileSdk safeExtGet("compileSdkVersion", 36)
+    ndkVersion safeExtGet("ndkVersion", "27.1.12297006")
+
+    defaultConfig {
+        minSdk Math.max(29, safeExtGet("minSdkVersion", 29) as int)
+        // kiln is built for 64-bit ARM phones only (the same as the Flutter plugin)
+        ndk { abiFilters "arm64-v8a" }
+        consumerProguardFiles "${kilnAndroid}/consumer-rules.pro"
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_static", "-DANDROID_PLATFORM=android-29", "-DCMAKE_BUILD_TYPE=Release"
+                targets "kiln_jni"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "${kilnAndroid}/src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs += ["${kilnAndroid}/src/main/kotlin"]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation "com.facebook.react:react-android"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2"
+}

@@ -19,6 +19,13 @@
   JNI call made after a callback threw (fixed). On the M4 Pro the same 12 pass through Gradle, the
   `.aar` builds with the NDK (its `.so` needs neither `libomp.so` nor `libc++_shared.so`), and the
   device test passes on the Pixel 8 (Android 17): load, probe and a chat with LFM2.5 350M.
+- **React Native module** in `react-native/` (Android): a TurboModule (`src/NativeKiln.ts`) whose
+  Kotlin side calls the Kotlin library above, and a TypeScript API (`Kiln.loadModel`, `KilnModel`,
+  `KilnContext` with `chat` streaming to `onPiece`, `AbortSignal` cancelling, `transcribe`,
+  `embed`, `decide`, `speak` to a wav file). Checked on the Linux desktop without an Android SDK:
+  React Native 0.87.1's codegen accepts the spec, the Kotlin module compiles against `react-android`
+  0.87.1 and Android API 36, and 7 tests of the JS layer pass against a fake native module. **Not
+  run in an app yet**; builds only inside this repository (not on npm).
 
 ## 0.5.0
 
