@@ -49,8 +49,9 @@ For the next turn, push `{ role: 'assistant', content: reply.answer }` and the n
 - **Cancel one call:** pass `signal` from an `AbortController`. The promise rejects and
   `isCancelled(e)` is true. It stops only that call, at its next piece (or before it starts);
   another call on the same context carries on.
-- **Cancel whatever runs:** `ctx.cancel()` stops the running call on that context, also in the
-  middle of reading a long prompt.
+- **Cancel whatever runs:** `ctx.cancel()` stops every call on that context that was made before
+  it, running or still waiting its turn, also in the middle of reading a long prompt. Calls made
+  after it are not touched.
 - **Errors** reject with `e.code` set to kiln's status (`"MODEL_LOAD"`, `"CONTEXT_FULL"`, ...),
   or `"INVALID_STATE"` for a closed handle.
 

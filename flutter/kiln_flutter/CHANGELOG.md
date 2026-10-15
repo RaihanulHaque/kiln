@@ -1,3 +1,11 @@
+## Unreleased
+
+- `cancel()` on a generation, transcription or speech now also stops it when it is called
+  before the worker isolate has started the call (right after `chat()`, for example). Such a
+  cancel used to be lost and the call ran to the end. Each call has a cancel flag in native
+  memory that the worker checks before starting and at every piece.
+- With kiln's core change, a cancel during prompt rendering is no longer lost either.
+
 ## 0.5.0
 
 Text to speech. Verified on a Pixel 8: 26 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1), and the example app's new

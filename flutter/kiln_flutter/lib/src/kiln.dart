@@ -3,6 +3,8 @@ import 'dart:ffi';
 import 'dart:typed_data';
 import 'dart:isolate';
 
+import 'package:ffi/ffi.dart';
+
 import 'kiln_bindings_generated.dart' as b;
 import 'native.dart';
 import 'types.dart';
@@ -178,9 +180,11 @@ class KilnContext {
       final m = msg as List;
       ctrl.add(KilnPiece(KilnChannel.values[m[0] as int], m[1] as String));
     });
+    final flag = _CancelFlag();
     final stats = model._kiln._worker
         .call<Map>('chat', {
           'context': _handle,
+          'cancelFlag': flag.address,
           'messages': messages.map((m) => m.toMap()).toList(),
           'enableThinking': enableThinking,
           'maxReasoningTokens': maxReasoningTokens,
@@ -196,6 +200,7 @@ class KilnContext {
         .whenComplete(() async {
           _t('chat complete');
           _busy = false;
+          flag.free();
           // let queued piece messages drain before closing
           await Future<void>.delayed(Duration.zero);
           port.close();
@@ -205,7 +210,7 @@ class KilnContext {
         });
     return KilnGeneration._(ctrl.stream, stats, () {
       _t('cancel');
-      KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
+      if (flag.set()) KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
       _t('cancel sent');
     });
   }
@@ -329,9 +334,11 @@ class KilnContext {
     final port = ReceivePort();
     final ctrl = StreamController<String>();
     port.listen((msg) => ctrl.add(msg as String));
+    final flag = _CancelFlag();
     final stats = model._kiln._worker
         .call<Map>('transcribe', {
           'context': _handle,
+          'cancelFlag': flag.address,
           'audio': audio.toMap(),
           'language': language,
           'prompt': prompt,
@@ -344,12 +351,13 @@ class KilnContext {
         })
         .whenComplete(() async {
           _busy = false;
+          flag.free();
           await Future<void>.delayed(Duration.zero);
           port.close();
           unawaited(ctrl.close());
         });
     return KilnTranscription._(ctrl.stream, stats, () {
-      KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
+      if (flag.set()) KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
     });
   }
 
@@ -385,9 +393,11 @@ class KilnContext {
       final m = msg as List;
       ctrl.add(KilnAudioPiece(m[0] as Float32List, m[1] as int));
     });
+    final flag = _CancelFlag();
     final stats = model._kiln._worker
         .call<Map>('speak', {
           'context': _handle,
+          'cancelFlag': flag.address,
           'text': text,
           'voice': voice?.toMap(),
           'language': language,
@@ -401,12 +411,13 @@ class KilnContext {
         })
         .whenComplete(() async {
           _busy = false;
+          flag.free();
           await Future<void>.delayed(Duration.zero);
           port.close();
           unawaited(ctrl.close());
         });
     return KilnSpeech._(ctrl.stream, stats, () {
-      KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
+      if (flag.set()) KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
     });
   }
 
@@ -414,4 +425,27 @@ class KilnContext {
   Future<void> reset() { _t('reset'); return model._kiln._worker.call<void>('reset', {'handle': _handle}); }
 
   Future<void> dispose() => model._kiln._worker.call<void>('freeContext', {'handle': _handle});
+}
+
+/// One request's cancel flag, in native memory so the worker isolate can read it. Set by
+/// cancel() even before the worker has started the call; freed when the call is over, after
+/// which cancel() does nothing (it runs on this isolate, like the completion, so they cannot race).
+class _CancelFlag {
+  final Pointer<Int32> _p = calloc<Int32>();
+  bool _freed = false;
+
+  int get address => _p.address;
+
+  /// Sets the flag; false when the call is already over.
+  bool set() {
+    if (_freed) return false;
+    _p.value = 1;
+    return true;
+  }
+
+  void free() {
+    if (_freed) return;
+    _freed = true;
+    calloc.free(_p);
+  }
 }

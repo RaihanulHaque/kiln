@@ -15,6 +15,12 @@
   numbers itself before any work and a cancel marks the running call; a cancel with no call
   running is dropped and cannot stop a later call. No change to the C ABI (the header text
   says what was meant). 511 checks on the M4 Pro; 526 with the system-prompt checkpoint.
+- **Cancel right after starting, in Flutter and React Native.** Both run calls on a worker, so a
+  cancel sent right after starting a call reached kiln before the call did and was dropped
+  (React Native stopped 1 of 5 such calls on the Pixel 8). Flutter now gives each call a cancel
+  flag in native memory that the worker checks before starting and at every piece; React
+  Native's `ctx.cancel()` covers every call on the context made before it, queued or running
+  (5 of 5 on the Pixel 8).
 - **Any Android CMake build gets kiln's ARM baseline** (`armv8.2-a+dotprod+fp16`) unless it
   picks another; the preset, the Kotlin library and the Flutter plugin already set it.
 - **Rust bindings** in `rust/`: `kiln-sys` (raw functions generated from `kiln.h` by bindgen;
