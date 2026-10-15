@@ -420,7 +420,8 @@ impl Channel {
 pub struct Piece<'a> {
     pub channel: Channel,
     pub text: &'a str,
-    /// The token that completed this text.
+    /// The token that completed this text, when kiln reports it. Chat and generate report -1,
+    /// as the C callback does.
     pub token_id: i32,
 }
 

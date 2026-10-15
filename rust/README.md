@@ -11,9 +11,10 @@ There are two crates:
   carrying kiln's message, streamed text comes to a closure, and a [`CancelHandle`] stops a
   call from another thread.
 
-**Where it was run:** Linux x86_64 only (Ryzen 5 8500G, Ubuntu, Rust 1.99), on 2026-10-15. The
-11 model tests passed there with the same models as the C suite. macOS, Windows, Android and
-iOS were **not built or run**. The build script has link lines for macOS, but nobody has tried them.
+**Where it was run:** Linux x86_64 (Ryzen 5 8500G, Ubuntu, Rust 1.99) and macOS (M4 Pro, Rust
+1.94), on 2026-10-15. The 11 model tests passed on both with the same models as the C suite.
+Windows, Android and iOS were **not built or run**; the build script stops with a message on
+Android and Windows rather than fail at link time.
 It is not on crates.io yet (see [Publishing](#publishing)).
 
 ## Use it
@@ -43,23 +44,42 @@ For the next turn, push the reply and the new question onto `history` and call `
 with the whole list. kiln reuses the part of the conversation already in its cache
 (`stats.cached_tokens` shows how much).
 
-The other kinds of model:
+The other kinds of model. Each needs its own model file and its own context:
 
 ```rust
+use kiln::{
+    ContextParams, EmbedOptions, Media, Model, ModelParams, ProjectorParams, Question,
+    QuestionType, SpeakOptions, TranscribeOptions,
+};
+
 // speech to text (Whisper or Parakeet: no projector needed)
+let asr = Model::load("models/ggml-parakeet-tdt-0.6b-v3-q8_0.bin", &ModelParams::default())?;
+let mut ctx = asr.context(&ContextParams::default())?;
 let t = ctx.transcribe_collect(&Media::path("clip.wav"), &TranscribeOptions::default())?;
+println!("{}", t.text);
 
 // embeddings: similarity of two normalised vectors is their dot product
+let emb = Model::load("models/embeddinggemma-2-UD-Q4_K_XL.gguf", &ModelParams::default())?;
+let mut ctx = emb.context(&ContextParams::default())?;
 let q = ctx.embed("when does the train leave", &EmbedOptions::query())?;
 
 // text to speech: load the model, then its projector, then make the context
-let mut tts = Model::load("pocket-tts-en.gguf", &ModelParams::default())?;
-tts.load_projector("mmproj-pocket-tts-en.gguf", &ProjectorParams::default())?;
+let mut tts = Model::load("models/pocket-tts-en.gguf", &ModelParams::default())?;
+tts.load_projector("models/mmproj-pocket-tts-en.gguf", &ProjectorParams::default())?;
 let mut ctx = tts.context(&ContextParams::default())?;
 let speech = ctx.speak_collect("Hello there.", &SpeakOptions { voice: Some(Media::path("voice.wav")), ..Default::default() })?;
 
 // decision models: a probability per answer, in one pass
-let d = ctx.decide(Some("my parcel never came"), &question)?;
+let d1 = Model::load("models/d1-omni-600M-Q8_0.gguf", &ModelParams::default())?;
+let mut ctx = d1.context(&ContextParams::default())?;
+let question = Question {
+    id: "wants_refund".into(),
+    kind: QuestionType::YesNo,
+    instructions: "Is the customer asking for a refund?".into(),
+    options: vec![],
+};
+let d = ctx.decide(Some("my parcel never came, I want my money back"), &question)?;
+println!("P(yes) = {:.3}", d.value);
 ```
 
 `examples/chat.rs` is a small terminal chat:
@@ -93,7 +113,7 @@ Two environment variables change this:
 
 | variable | effect |
 |---|---|
-| `KILN_LIB_DIR=build/host` | link the `libkiln.so` already built there instead of compiling (the program then needs it at run time, e.g. `LD_LIBRARY_PATH`) |
+| `KILN_LIB_DIR=/path/to/kiln/build/host` | link the `libkiln.so` already built there (an absolute path: Cargo runs the build script from its own folder) instead of compiling (the program then needs it at run time, e.g. `LD_LIBRARY_PATH`) |
 | `KILN_SOURCE_DIR=/path/to/kiln` | build from another kiln checkout |
 
 On Linux, llama.cpp's OpenMP comes from GCC's libgomp, the same as for the C library.

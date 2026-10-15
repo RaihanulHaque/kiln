@@ -15,5 +15,5 @@ bindgen "$root/include/kiln/kiln.h" \
     --allowlist-var 'KILN_.*' \
     --no-doc-comments \
     --output "$root/rust/kiln-sys/src/bindings.rs" \
-    "${extra[@]}"
+    ${extra[@]+"${extra[@]}"}
 echo "wrote rust/kiln-sys/src/bindings.rs"

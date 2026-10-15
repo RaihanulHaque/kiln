@@ -6,9 +6,11 @@
   `scripts/gen_rust_bindings.sh` regenerates them) and `kiln`, a safe API (`Model`, `Context`,
   `CancelHandle`, streamed text to a closure in whole UTF-8 characters, errors as `Result`).
   The build script compiles libkiln with CMake and links it statically, or links a prebuilt one
-  from `KILN_LIB_DIR`. No change to the C ABI. Run on Linux x86_64 only (Ryzen 5 8500G,
-  2026-10-15): 11 tests over the C suite's models pass, and the decision and embedding numbers
-  match `kiln-cli`. Not on crates.io yet.
+  from `KILN_LIB_DIR`. No change to the C ABI. Run on Linux x86_64 (Ryzen 5 8500G, Rust 1.99)
+  and macOS (M4 Pro, Metal, Rust 1.94) on 2026-10-15: 11 tests over the C suite's models pass
+  on both, and on Linux the decision and embedding numbers match `kiln-cli`. Building libkiln
+  from Cargo stops with a message on Android and Windows, where it was not tried. Not on
+  crates.io yet.
 
 ## 0.5.0
 

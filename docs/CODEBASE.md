@@ -347,5 +347,5 @@ calling thread; the Dart layer turns that into an async stream.
 | `scripts/build_ios.sh` | `kiln.xcframework` (static, Metal) | the Flutter app on iOS via CocoaPods |
 | `cargo build` in `rust/` | static libkiln inside the Rust program (`rust/target/`) | Rust users, `cargo test` |
 
-The three builds compile the same sources; the Gradle path just points CMake at the repo
+All of these compile the same sources; the Gradle and Cargo paths just point CMake at the repo
 root. ISA baseline for Android is `armv8.2-a+dotprod+fp16`.

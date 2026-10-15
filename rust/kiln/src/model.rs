@@ -91,6 +91,9 @@ impl Model {
             sys::kiln_apply_chat_template(self.ptr.as_ptr(), raw.as_ptr(), raw.len() as i32, &o, buf, cap)
         });
         if bytes.is_empty() && !messages.is_empty() {
+            if self.info().is_speech_model {
+                return Err(Error::new(Status::NotSupported, "speech models have no chat template"));
+            }
             return Err(Error::new(Status::InvalidArg, "the chat template could not be applied"));
         }
         Ok(String::from_utf8_lossy(&bytes).into_owned())

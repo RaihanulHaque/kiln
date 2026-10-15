@@ -33,7 +33,7 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
 | MacBook Pro M4 Pro, v0.5.0 | llama.cpp Metal; whisper.cpp Metal | 505 C checks (three speech-to-text models, one text-to-speech model); chat benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.5.0 | llama.cpp and whisper.cpp CPU, 8 threads | 505 C checks, with Whisper, Parakeet and Pocket TTS (2026-10-14) |
-| Ryzen 5 8500G desktop, Rust bindings (`rust/`) | the same, linked statically from Cargo | 11 Rust tests over the same models (chat, decision, embeddings, images, Whisper, Parakeet, Pocket TTS) on 2026-10-15; no other platform tried |
+| Ryzen 5 8500G desktop and MacBook Pro M4 Pro, Rust bindings (`rust/`) | the same, linked statically from Cargo | 11 Rust tests over the same models (chat, decision, embeddings, images, Whisper, Parakeet, Pocket TTS) on both, 2026-10-15; Android, iOS and Windows not tried |
 | Linux arm64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.5.0 | llama.cpp CPU, OpenMP; whisper.cpp CPU | 505 C checks (2026-10-13); at v0.4.0 Parakeet took 66 ms and Whisper base 577 ms for the 3-second clip on the CPU; at v0.3.0 also emulated x86_64 (319) and `KILN_CPU_MASK=3` |
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,

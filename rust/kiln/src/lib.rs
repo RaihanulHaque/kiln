@@ -30,7 +30,7 @@ pub use types::*;
 pub use kiln_sys as sys;
 
 use std::ffi::{c_char, c_void, CStr};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 /// kiln's version, e.g. "0.5.0".
 pub fn version() -> &'static str {
@@ -45,7 +45,7 @@ pub fn probe_device() -> Result<DeviceInfo> {
     Ok(DeviceInfo::from(&d))
 }
 
-type LogFn = Box<dyn Fn(LogLevel, &str) + Send + Sync>;
+type LogFn = Arc<dyn Fn(LogLevel, &str) + Send + Sync>;
 static LOGGER: RwLock<Option<LogFn>> = RwLock::new(None);
 
 unsafe extern "C" fn log_cb(level: sys::kiln_log_level, msg: *const c_char, _user: *mut c_void) {
@@ -54,10 +54,11 @@ unsafe extern "C" fn log_cb(level: sys::kiln_log_level, msg: *const c_char, _use
     }
     let msg = CStr::from_ptr(msg).to_string_lossy();
     let _ = std::panic::catch_unwind(|| {
-        if let Ok(guard) = LOGGER.read() {
-            if let Some(f) = guard.as_ref() {
-                f(LogLevel::from_raw(level), msg.trim_end());
-            }
+        // Copy the callback out and release the lock before calling it, so the callback may
+        // itself call set_log_callback.
+        let f = LOGGER.read().ok().and_then(|g| g.clone());
+        if let Some(f) = f {
+            f(LogLevel::from_raw(level), msg.trim_end());
         }
     });
 }
@@ -65,7 +66,7 @@ unsafe extern "C" fn log_cb(level: sys::kiln_log_level, msg: *const c_char, _use
 /// Sends kiln's log lines to `f`, from whatever thread logs them. `None` turns it off.
 pub fn set_log_callback(f: Option<impl Fn(LogLevel, &str) + Send + Sync + 'static>) {
     let on = f.is_some();
-    *LOGGER.write().unwrap_or_else(|e| e.into_inner()) = f.map(|f| Box::new(f) as LogFn);
+    *LOGGER.write().unwrap_or_else(|e| e.into_inner()) = f.map(|f| Arc::new(f) as LogFn);
     unsafe { sys::kiln_set_log_callback(if on { Some(log_cb) } else { None }, std::ptr::null_mut()) }
 }
 

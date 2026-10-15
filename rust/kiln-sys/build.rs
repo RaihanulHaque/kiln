@@ -21,6 +21,16 @@ fn main() {
         return;
     }
 
+    // Only Linux and macOS have been built. Android needs the NDK's libc++ and OpenMP, and MSVC
+    // writes .lib archives this build does not look for: refuse instead of failing at link time.
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+    if target_os == "android" || target_os == "windows" {
+        panic!(
+            "building libkiln from Cargo is not supported for {target_os} yet; build it with CMake \
+             and set KILN_LIB_DIR to the folder that holds the library"
+        );
+    }
+
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let src = env::var("KILN_SOURCE_DIR")
         .map(PathBuf::from)
@@ -34,7 +44,14 @@ fn main() {
             src.display()
         );
     }
-    for p in ["CMakeLists.txt", "include", "src", "cmake"] {
+    for p in [
+        "CMakeLists.txt",
+        "include",
+        "src",
+        "cmake",
+        "third_party/llama.cpp",
+        "third_party/whisper.cpp",
+    ] {
         println!("cargo:rerun-if-changed={}", src.join(p).display());
     }
 
@@ -64,7 +81,6 @@ fn main() {
     }
 
     // What the C++ code needs from the system.
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let cache = fs::read_to_string(build.join("CMakeCache.txt")).unwrap_or_default();
     match target_os.as_str() {
         "macos" | "ios" => {
