@@ -49,7 +49,26 @@ import java.util.concurrent.atomic.AtomicInteger
 class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
     private val models = ConcurrentHashMap<Int, KilnModel>()
     private val contexts = ConcurrentHashMap<Int, KilnContext>()
-    private val stopped = ConcurrentHashMap.newKeySet<Int>()
+    // Streaming requests by JS request id. A request is active from the moment JS calls the
+    // method (on this module's thread, before the work is queued) until its work ends, so a stop
+    // sent while it waits in the queue counts, and a stop that arrives after it ended is dropped
+    // instead of staying in `stopped` forever.
+    private val requestLock = Any()
+    private val active = HashSet<Int>()
+    private val stopped = HashSet<Int>()
+
+    /** [run] for a call that streams pieces to JS under [requestId]. */
+    private fun runStreaming(requestId: Double, promise: Promise, block: () -> Any?) {
+        val id = requestId.toInt()
+        synchronized(requestLock) { active.add(id) }
+        run(promise) {
+            try {
+                block()
+            } finally {
+                synchronized(requestLock) { active.remove(id); stopped.remove(id) }
+            }
+        }
+    }
     private val ids = AtomicInteger(0)
     // invalidate() sets this under the lock; a model or context finished after that is freed
     // at once instead of being added to a registry nobody will clear
@@ -169,7 +188,8 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
     }
 
     override fun stop(requestId: Double) {
-        stopped.add(requestId.toInt())
+        val id = requestId.toInt()
+        synchronized(requestLock) { if (id in active) stopped.add(id) }
     }
 
     /** The streaming callback for one call: sends each piece to JS, and stops when JS asked. */
@@ -184,25 +204,17 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
                     putInt("tokenId", p.tokenId)
                 },
             )
-            !stopped.contains(id)
+            synchronized(requestLock) { id !in stopped }
         }
     }
 
     override fun chat(context: Double, requestId: Double, messages: ReadableArray, options: ReadableMap, sampling: ReadableMap, promise: Promise) =
-        run(promise) {
-            try {
-                ctx(context).chat(messages.toMessages(), options.toChatOptions(), sampling.toSampling(), pieces(requestId)).toMap()
-            } finally {
-                stopped.remove(requestId.toInt())
-            }
+        runStreaming(requestId, promise) {
+            ctx(context).chat(messages.toMessages(), options.toChatOptions(), sampling.toSampling(), pieces(requestId)).toMap()
         }
 
-    override fun generate(context: Double, requestId: Double, prompt: String, sampling: ReadableMap, promise: Promise) = run(promise) {
-        try {
-            ctx(context).generate(prompt, sampling.toSampling(), pieces(requestId)).toMap()
-        } finally {
-            stopped.remove(requestId.toInt())
-        }
+    override fun generate(context: Double, requestId: Double, prompt: String, sampling: ReadableMap, promise: Promise) = runStreaming(requestId, promise) {
+        ctx(context).generate(prompt, sampling.toSampling(), pieces(requestId)).toMap()
     }
 
     override fun decide(context: Double, state: String?, question: ReadableMap, promise: Promise) = run(promise) {
@@ -237,10 +249,10 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
         ctx(context).embedMedia(text, items, options.toEmbedOptions()).toMap()
     }
 
-    override fun transcribe(context: Double, requestId: Double, audio: ReadableMap, options: ReadableMap, promise: Promise) = run(promise) {
+    override fun transcribe(context: Double, requestId: Double, audio: ReadableMap, options: ReadableMap, promise: Promise) = runStreaming(requestId, promise) {
         val each = pieces(requestId)
         val text = StringBuilder()
-        try {
+        run {
             val st = ctx(context).transcribe(
                 audio.toMedia(),
                 TranscribeOptions(options.str("language"), options.str("prompt"), options.int("maxTokens")),
@@ -255,8 +267,6 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
                 putDouble("genMs", st.genMs); putDouble("ms", st.ms); putString("language", st.language)
                 putBoolean("stoppedByEos", st.stoppedByEos); putBoolean("stoppedByUser", st.stoppedByUser)
             }
-        } finally {
-            stopped.remove(requestId.toInt())
         }
     }
 
