@@ -19,7 +19,7 @@ CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desk
   was tested.
 - A change to a public struct or function in `kiln.h` is an ABI change: bump the minor version
   (CMake project, `KILN_VERSION_*`, `kiln_version()` in `src/core/error.cpp`, the Flutter
-  `pubspec.yaml` and podspec) and add a `CHANGELOG.md` entry.
+  `pubspec.yaml` and podspec, `rust/Cargo.toml`) and add a `CHANGELOG.md` entry.
 
 ## Build and test
 
@@ -122,6 +122,12 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   says 8192. Do not size a context from that number.
 - **`kiln_bindings_generated.dart` is generated.** After changing `kiln.h`, run
   `dart run ffigen --config ffigen.yaml` in `flutter/kiln_flutter`; do not edit it by hand.
+- **`rust/kiln-sys/src/bindings.rs` is generated too.** After changing `kiln.h`, run
+  `scripts/gen_rust_bindings.sh` (needs `cargo install bindgen-cli`) and update the safe types in
+  `rust/kiln/src/`. `cargo test` fails when `rust/Cargo.toml`'s version differs from `KILN_VERSION_*`.
+  The build script compiles llama.cpp in Release whatever the cargo profile; `KILN_LIB_DIR` set to
+  the absolute path of `build/host` links the prebuilt library instead (then set `LD_LIBRARY_PATH`).
+  Cargo builds of libkiln stop with a message for Android and Windows: neither has been tried.
 - **`flutter/kiln_flutter/src/core` wins over the repo source** when it exists (it is the
   vendored copy made by `scripts/vendor_flutter.sh`, git-ignored). Delete it after a publish
   check, or the plugin builds an old core against new bindings.
