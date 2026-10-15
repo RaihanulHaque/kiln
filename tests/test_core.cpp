@@ -237,6 +237,29 @@ static void test_model(const std::string& path, const char* label, bool expect_t
         CHECK(st4.stopped_by_user, "");
     }
 
+    // a cancel with no call running is dropped: it must not stop the next call
+    {
+        kiln_cancel(c);
+        Capture cap; kiln_gen_stats st;
+        s = kiln_chat(c, t1, 1, &co, &sp, Capture::cb, &cap, &st);
+        CHECK(s == KILN_OK && !cap.answer.empty(), "stale cancel stopped the next call: status=%d", (int)s);
+    }
+
+    // a cancel sent the moment the call starts, before any token: also while the template is
+    // being rendered, which used to clear it
+    {
+        std::atomic<bool> running{true};
+        std::thread spam([&] { while (running.load()) kiln_cancel(c); });
+        int stopped = 0;
+        for (int i = 0; i < 5; ++i) {
+            Capture cap; kiln_gen_stats st;
+            if (kiln_chat(c, t1, 1, &co, &sp, Capture::cb, &cap, &st) == KILN_ERR_CANCELLED) ++stopped;
+        }
+        running = false;
+        spam.join();
+        CHECK(stopped == 5, "only %d of 5 calls cancelled", stopped);
+    }
+
     // reset, then works again
     CHECK(kiln_context_reset(c) == KILN_OK, "");
     Capture cap5; kiln_gen_stats st5;

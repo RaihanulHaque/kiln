@@ -141,7 +141,6 @@ class SpeechContext final : public kiln::Context {
 public:
     explicit SpeechContext(SpeechModel& m) : m_(m) {}
     kiln_status reset() override { return KILN_OK; }
-    void cancel() override { cancel_.store(true); }
     kiln_status generate(const kiln::RenderedPrompt&, const kiln_sampling_params&, kiln_token_cb, void*, kiln_gen_stats*) override {
         return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "speech models do not generate text; use kiln_transcribe");
     }
@@ -161,12 +160,11 @@ public:
     // having answered "stop", ends the run at the next check.
     static bool abort_cb(void* self) {
         auto* c = static_cast<SpeechContext*>(self);
-        return c->cancel_.load() || (c->out_ && c->out_->stopped);
+        return c->cancelled() || (c->out_ && c->out_->stopped);
     }
 
 private:
     SpeechModel&      m_;
-    std::atomic<bool> cancel_{false};
     Streamer*         out_ = nullptr;      // the streamer of the call in progress
 };
 
@@ -246,7 +244,6 @@ private:
 
 kiln_status SpeechContext::transcribe(const kiln::RenderedPrompt& in, const kiln_transcribe_options& o, const kiln_media& audio,
                                       kiln_token_cb cb, void* user, kiln_transcribe_stats& st) {
-    cancel_.store(false);
     const auto t_all = clock_t_::now();
 
     std::vector<uint8_t> file;
@@ -355,7 +352,7 @@ kiln_status SpeechContext::transcribe(const kiln::RenderedPrompt& in, const kiln
     st.gen_ms          = st.ms > encode_ms ? st.ms - encode_ms : 0;   // reading the file and the spectrogram are in here too
     st.stopped_by_user = out.stopped;
     if (out.stopped) { st.stopped_by_eos = false; return KILN_OK; }
-    if (cancel_.load()) return KILN_ERR_CANCELLED;
+    if (cancelled()) return KILN_ERR_CANCELLED;
     if (rc != 0) return kiln::set_error(KILN_ERR_BACKEND, std::string(m_.family() == Family::whisper ? "whisper_full" : "parakeet_full") + " failed, rc=" + std::to_string(rc));
     st.stopped_by_eos = true;
     return KILN_OK;

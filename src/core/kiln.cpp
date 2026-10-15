@@ -120,6 +120,7 @@ kiln_sampling_params kiln_sampling_params_default(void) {
 kiln_status kiln_generate(kiln_context* c, const char* prompt, const kiln_sampling_params* params,
                           kiln_token_cb cb, void* user, kiln_gen_stats* stats) {
     if (!c || !prompt) return set_error(KILN_ERR_INVALID_ARG, "null handle/prompt");
+    CallScope call(*c->impl);
     kiln_sampling_params p = params ? *params : kiln_sampling_params_default();
     RenderedPrompt r; r.prompt = prompt;
     return c->impl->generate(r, p, cb, user, stats);
@@ -129,6 +130,7 @@ kiln_status kiln_chat(kiln_context* c, const kiln_chat_message* msgs, int32_t n_
                       const kiln_chat_options* chat_opts, const kiln_sampling_params* params,
                       kiln_token_cb cb, void* user, kiln_gen_stats* stats) {
     if (!c || !msgs || n_msgs <= 0) return set_error(KILN_ERR_INVALID_ARG, "null handle/messages");
+    CallScope call(*c->impl);   // before rendering: a cancel during it must count
     kiln_chat_options o = chat_opts ? *chat_opts : kiln_chat_options_default();
     o.add_assistant_prefix = true;
     kiln_sampling_params p = params ? *params : kiln_sampling_params_default();
@@ -147,6 +149,7 @@ kiln_status kiln_decide(kiln_context* c, const char* state, const kiln_decision_
     if (!q->instructions || !q->id) return set_error(KILN_ERR_INVALID_ARG, "question id/instructions is null");
     if (q->n_options < 0 || (q->n_options > 0 && !q->options)) return set_error(KILN_ERR_INVALID_ARG, "bad options");
     kiln_decision_answer a{};
+    CallScope call(*c->impl);
     kiln_status s = c->impl->decide(state, *q, probs, probs_cap, a);
     if (answer) *answer = a;
     return s;
@@ -161,6 +164,7 @@ kiln_status kiln_embed(kiln_context* c, const char* text, const kiln_embed_optio
     if (!c || !text || !out) return set_error(KILN_ERR_INVALID_ARG, "null handle/text/out");
     kiln_embed_options o = opts ? *opts : kiln_embed_options_default();
     kiln_embed_stats st{};
+    CallScope call(*c->impl);
     kiln_status s = c->impl->embed(text, nullptr, 0, o, out, out_cap, st);
     if (stats) *stats = st;
     return s;
@@ -188,6 +192,7 @@ kiln_status kiln_embed_media(kiln_context* c, const char* text, const kiln_media
         if (!media[i].path && (!media[i].data || media[i].size == 0)) return set_error(KILN_ERR_INVALID_ARG, "media item without path or data");
     kiln_embed_options o = opts ? *opts : kiln_embed_options_default();
     kiln_embed_stats st{};
+    CallScope call(*c->impl);
     kiln_status s = c->impl->embed(text, media, n_media, o, out, out_cap, st);
     if (stats) *stats = st;
     return s;
@@ -205,6 +210,7 @@ kiln_status kiln_speak(kiln_context* c, const char* text, const kiln_speak_optio
     if (!*text) return set_error(KILN_ERR_INVALID_ARG, "text is empty");
     kiln_speak_options o = opts ? *opts : kiln_speak_options_default();
     if (o.voice && !o.voice->path && (!o.voice->data || o.voice->size == 0)) return set_error(KILN_ERR_INVALID_ARG, "voice without path or data");
+    CallScope call(*c->impl);
     kiln_status s = c->impl->speak(text, o, cb, user, st);
     if (stats) *stats = st;
     return s;
@@ -221,6 +227,7 @@ kiln_status kiln_transcribe(kiln_context* c, const kiln_media* audio, const kiln
     if (!c || !audio) return set_error(KILN_ERR_INVALID_ARG, "null handle/audio");
     if (!audio->path && (!audio->data || audio->size == 0)) return set_error(KILN_ERR_INVALID_ARG, "audio without path or data");
     kiln_transcribe_options o = opts ? *opts : kiln_transcribe_options_default();
+    CallScope call(*c->impl);
     RenderedPrompt r;
     kiln_status s = c->model->render_transcribe(o, r);
     if (s == KILN_OK) s = c->impl->transcribe(r, o, *audio, cb, user, st);
