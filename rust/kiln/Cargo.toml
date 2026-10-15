@@ -1,0 +1,13 @@
+[package]
+name = "kiln"
+description = "On-device LLM runtime: chat, decision, embedding, speech-to-text and text-to-speech models over llama.cpp and whisper.cpp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["llm", "llama", "whisper", "inference", "on-device"]
+categories = ["api-bindings", "science"]
+
+[dependencies]
+kiln-sys = { path = "../kiln-sys", version = "0.5.0" }

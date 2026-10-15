@@ -13,3 +13,5 @@ flutter/**/*.iml
 flutter/**/android/local.properties
 flutter/**/android/.gradle/
 flutter/**/.idea/
+# rust
+/rust/target/

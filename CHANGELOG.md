@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Rust bindings** in `rust/`: `kiln-sys` (raw functions generated from `kiln.h` by bindgen;
+  `scripts/gen_rust_bindings.sh` regenerates them) and `kiln`, a safe API (`Model`, `Context`,
+  `CancelHandle`, streamed text to a closure in whole UTF-8 characters, errors as `Result`).
+  The build script compiles libkiln with CMake and links it statically, or links a prebuilt one
+  from `KILN_LIB_DIR`. No change to the C ABI. Run on Linux x86_64 only (Ryzen 5 8500G,
+  2026-10-15): 11 tests over the C suite's models pass, and the decision and embedding numbers
+  match `kiln-cli`. Not on crates.io yet.
+
 ## 0.5.0
 
 Text to speech. The C ABI changed: two new functions (`kiln_speak`, `kiln_speak_options_default`),

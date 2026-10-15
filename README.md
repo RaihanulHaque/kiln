@@ -33,6 +33,7 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
 | MacBook Pro M4 Pro, v0.5.0 | llama.cpp Metal; whisper.cpp Metal | 505 C checks (three speech-to-text models, one text-to-speech model); chat benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.5.0 | llama.cpp and whisper.cpp CPU, 8 threads | 505 C checks, with Whisper, Parakeet and Pocket TTS (2026-10-14) |
+| Ryzen 5 8500G desktop, Rust bindings (`rust/`) | the same, linked statically from Cargo | 11 Rust tests over the same models (chat, decision, embeddings, images, Whisper, Parakeet, Pocket TTS) on 2026-10-15; no other platform tried |
 | Linux arm64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.5.0 | llama.cpp CPU, OpenMP; whisper.cpp CPU | 505 C checks (2026-10-13); at v0.4.0 Parakeet took 66 ms and Whisper base 577 ms for the 3-second clip on the CPU; at v0.3.0 also emulated x86_64 (319) and `KILN_CPU_MASK=3` |
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
@@ -86,6 +87,20 @@ screen for decision models and a Search screen for embedding models.
 <p>
 <img src="docs/img/app_library.png" width="180"> <img src="docs/img/app_chat_thinking.png" width="180"> <img src="docs/img/app_chat_reply.png" width="180"> <img src="docs/img/app_decide.png" width="180"> <img src="docs/img/app_search_media.png" width="180"> <img src="docs/img/app_search_result.png" width="180"> <img src="docs/img/app_transcribe.png" width="180"> <img src="docs/img/app_speak.png" width="180"> <img src="docs/img/app_library_light.png" width="180">
 </p>
+
+### Rust
+
+Linux x86_64 only so far; see [rust/README.md](rust/README.md).
+
+```rust
+let model = kiln::Model::load("model.gguf", &kiln::ModelParams::default())?;
+let mut ctx = model.context(&kiln::ContextParams::default())?;
+let history = [kiln::Message::user("Hi")];
+ctx.chat(&history, &Default::default(), &Default::default(), |piece| {
+    print!("{}", piece.text);            // piece.channel: Answer or Reasoning
+    true                                 // false = stop
+})?;
+```
 
 ### C
 
@@ -258,6 +273,7 @@ tools/kiln-cli, kiln-bench   test harness and resource benchmark
 tools/barrier-lab            standalone experiment: how ggml's per-op barrier reacts to slow cores
 tests/                       C test suite (host and device)
 flutter/kiln_flutter/        Flutter plugin, example app, integration test
+rust/                        Rust bindings: kiln-sys (generated) and kiln (safe API)
 scripts/                     model download, adb runners, benchmarks, vendoring, iOS build, brand assets
 docs/                        concepts, codebase walkthrough, architecture, glossary, benchmarks
 third_party/llama.cpp        pinned submodule: chat, decision, embedding and Qwen3-ASR models
@@ -271,6 +287,7 @@ scripts/fetch_models.sh                                      # the six test GGUF
 ./build/host/kiln-tests models                               # C suite on the host
 scripts/android-test.sh                                      # C suite on a phone over adb
 cd flutter/kiln_flutter/example && flutter test integration_test -d <device>
+cd rust && cargo test --release                              # Rust bindings, same models
 ```
 
 The C suite needs the six test GGUFs in `models/` (`scripts/fetch_models.sh`); missing ones are skipped. The Flutter

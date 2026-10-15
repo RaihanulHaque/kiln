@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["kiln-sys", "kiln"]
+
+[workspace.package]
+version = "0.5.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/RaihanulHaque/kiln"
+rust-version = "1.77"
