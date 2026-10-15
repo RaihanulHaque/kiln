@@ -183,6 +183,23 @@ class ModelsTest {
         }
     }
 
+    // The same system prompt with a new question each time (extraction, classification): kiln
+    // keeps the system prompt, also on a hybrid model like Qwen3.5, which needs a checkpoint for it.
+    @Test
+    fun systemPromptIsReusedOnAHybridModel() {
+        KilnModel.load(model("Qwen3.5-0.8B-Q4_K_M.gguf")).use { m ->
+            m.newContext().use { ctx ->
+                val sys = "You are a terse geography assistant. Answer with the city name only, one word."
+                fun ask(q: String) = ctx.chatCollect(listOf(Message.system(sys), Message.user(q)), sampling = Sampling.greedy(16))
+                ask("What is the capital of France?")
+                val r = ask("What is the capital of Italy?")
+                println("system reuse: \"${r.answer}\" (cached ${r.stats.cachedTokens} of ${r.stats.promptTokens})")
+                assertTrue("${r.stats}", r.stats.cachedTokens >= 15 && r.stats.cachedTokens < r.stats.promptTokens)
+                assertTrue(r.answer, r.answer.contains("Rome"))
+            }
+        }
+    }
+
     @Test
     fun thinkingGoesToItsOwnChannel() {
         KilnModel.load(model("Qwen3.5-0.8B-Q4_K_M.gguf")).use { m ->
