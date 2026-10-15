@@ -13,8 +13,9 @@ There are two crates:
 
 **Where it was run:** Linux x86_64 (Ryzen 5 8500G, Ubuntu, Rust 1.99) and macOS (M4 Pro, Rust
 1.94), on 2026-10-15. The 11 model tests passed on both with the same models as the C suite.
-Windows, Android and iOS were **not built or run**; the build script stops with a message on
-Android and Windows rather than fail at link time.
+On Android (Pixel 8, Android 17, built on the Mac with NDK 28.2) the model tests pass too; see
+[Android](#android). Windows and iOS were **not built or run**; the build script stops with a
+message on Windows rather than fail at link time.
 It is not on crates.io yet (see [Publishing](#publishing)).
 
 ## Use it
@@ -117,6 +118,33 @@ Two environment variables change this:
 | `KILN_SOURCE_DIR=/path/to/kiln` | build from another kiln checkout |
 
 On Linux, llama.cpp's OpenMP comes from GCC's libgomp, the same as for the C library.
+
+### Android
+
+For `aarch64-linux-android`, the build script compiles libkiln with the NDK (`ANDROID_NDK_HOME`, or
+the newest NDK in the Android SDK) and links the NDK's static C++ runtime and OpenMP, so the
+program needs only Android's own `libc`, `libm` and `libdl`. Cargo needs the NDK's clang as
+linker and compiler:
+
+```bash
+rustup target add aarch64-linux-android
+export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/28.2.13676358
+TC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin   # linux-x86_64 on Linux
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TC/aarch64-linux-android29-clang
+export CC_aarch64_linux_android=$TC/aarch64-linux-android29-clang
+export CXX_aarch64_linux_android=$TC/aarch64-linux-android29-clang++
+export AR_aarch64_linux_android=$TC/llvm-ar
+cargo test --release --target aarch64-linux-android --no-run
+```
+
+To run the tests on a phone, push the test program, `tests/media` and the models, and point
+`KILN_MODELS` and `KILN_REPO` at them:
+
+```bash
+adb push target/aarch64-linux-android/release/deps/models-<hash> /data/local/tmp/kiln-rust/models-test
+adb push ../tests/media /data/local/tmp/kiln-rust/tests/
+adb shell "cd /data/local/tmp/kiln-rust && KILN_MODELS=/data/local/tmp/kiln KILN_REPO=/data/local/tmp/kiln-rust ./models-test --test-threads=1"
+```
 
 ## Tests
 

@@ -1,6 +1,8 @@
 #pragma once
 #include "kiln/kiln.h"
 #include <memory>
+#include <atomic>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -33,7 +35,21 @@ public:
     virtual kiln_status reset() = 0;
     virtual kiln_status generate(const RenderedPrompt& in, const kiln_sampling_params& sp,
                                  kiln_token_cb cb, void* user, kiln_gen_stats* stats) = 0;
-    virtual void cancel() = 0;
+
+    // kiln_cancel. A public call (kiln.cpp) numbers itself with begin_call() before any work,
+    // rendering the prompt included, and a cancel marks the call that is running at that moment.
+    // So a cancel that arrives while kiln_chat renders its template is kept, one that arrives
+    // while no call runs is dropped, and one aimed at a call that just ended cannot stop the next.
+    void cancel() {
+        const uint64_t c = call_.load();
+        if (c) cancelled_call_.store(c);
+    }
+    bool cancelled() const {
+        const uint64_t c = call_.load();
+        return c && cancelled_call_.load() == c;
+    }
+    void begin_call() { call_.store(++calls_); }
+    void end_call() { call_.store(0); }
     virtual kiln_status decide(const char* state, const kiln_decision_question& q,
                                float* probs, int32_t probs_cap, kiln_decision_answer& out) = 0;
     // text may be null when media are given
@@ -46,6 +62,22 @@ public:
                                    kiln_token_cb cb, void* user, kiln_transcribe_stats& stats) = 0;
     virtual kiln_status speak(const char* text, const kiln_speak_options& o, kiln_audio_cb cb, void* user,
                               kiln_speak_stats& stats) = 0;
+
+private:
+    std::atomic<uint64_t> call_{0};            // number of the running call, 0 = none
+    std::atomic<uint64_t> cancelled_call_{0};  // the call kiln_cancel stopped
+    std::atomic<uint64_t> calls_{0};           // calls made so far (they run one at a time)
+};
+
+// Marks a public call on a context as running for its whole length (see Context::cancel).
+class CallScope {
+public:
+    explicit CallScope(Context& c) : c_(c) { c_.begin_call(); }
+    ~CallScope() { c_.end_call(); }
+    CallScope(const CallScope&) = delete;
+    CallScope& operator=(const CallScope&) = delete;
+private:
+    Context& c_;
 };
 
 class Model {

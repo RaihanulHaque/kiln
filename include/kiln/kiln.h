@@ -243,7 +243,10 @@ KILN_API kiln_status kiln_generate(kiln_context* c,
                                    kiln_token_cb cb, void* user,
                                    kiln_gen_stats* stats);
 
-/* Thread-safe. Requests the in-flight kiln_generate on this context to stop. */
+/* Thread-safe. Stops the call running on this context (kiln_chat, kiln_generate, kiln_decide,
+ * kiln_embed*, kiln_transcribe, kiln_speak), which returns KILN_ERR_CANCELLED. It counts from the
+ * moment the call starts, prompt rendering included. With no call running it does nothing: it
+ * never stops a later call. */
 KILN_API void kiln_cancel(kiln_context* c);
 
 /* ------------------------------------------------------------------ */

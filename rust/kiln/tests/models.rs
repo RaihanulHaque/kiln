@@ -12,8 +12,11 @@ fn serial() -> MutexGuard<'static, ()> {
     SERIAL.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+// KILN_REPO: where tests/media is, when the tests run away from the checkout (on a phone)
 fn repo() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    std::env::var("KILN_REPO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
 }
 
 fn model_path(file: &str) -> Option<PathBuf> {

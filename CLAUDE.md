@@ -130,7 +130,9 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   `rust/kiln/src/`. `cargo test` fails when `rust/Cargo.toml`'s version differs from `KILN_VERSION_*`.
   The build script compiles llama.cpp in Release whatever the cargo profile; `KILN_LIB_DIR` set to
   the absolute path of `build/host` links the prebuilt library instead (then set `LD_LIBRARY_PATH`).
-  Cargo builds of libkiln stop with a message for Android and Windows: neither has been tried.
+  Cargo builds for Android with the NDK (`rust/README.md` has the environment); `build.rs` copies
+  the NDK's `libc++_static.a`, `libc++abi.a` and `libomp.a` into its output folder, because their
+  NDK folders also hold a static libc that crashes a dynamic program. Windows stops with a message.
 - **The Kotlin binding (`android/`) is written by hand.** A `kiln.h` change needs the C call in
   `kiln_jni.cpp`, the `external fun` in `Native.kt` and the Kotlin type; the host test
   `probeVersionAndDefaults` compares the Kotlin defaults with kiln's and the version with "0.5.0"
@@ -141,6 +143,9 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   `android/kiln`'s Kotlin sources and JNI glue, so a change there reaches both. After editing the
   spec (`react-native/src/NativeKiln.ts`), `npm run codegen` shows whether codegen accepts it; codegen's
   types are limited (numbers arrive in Kotlin as `Double`, objects as `ReadableMap`).
+- **`kiln_cancel` is per call, owned by `kiln::Context`.** Every public call in `kiln.cpp` opens a
+  `CallScope` first thing (before rendering a template); backends only ask `cancelled()` and must
+  never clear the flag themselves, or a cancel sent while the template renders is lost again.
 - **`flutter/kiln_flutter/src/core` wins over the repo source** when it exists (it is the
   vendored copy made by `scripts/vendor_flutter.sh`, git-ignored). Delete it after a publish
   check, or the plugin builds an old core against new bindings.

@@ -9,16 +9,30 @@
   before), the same through C, Rust, Kotlin, Flutter and React Native, on the M4 Pro and the
   Pixel 8 (Android 17); 520 checks on both. With the Hishab Qwen3.5 extractor on the Pixel 8:
   146 of 167 prompt tokens reused, prompt eval 2.9 s to 0.8 s.
-
+- **`kiln_cancel` counts from the start of a call.** Each backend cleared its cancel flag when
+  its work began, so a cancel that arrived while `kiln_chat` rendered the chat template (or
+  `kiln_transcribe` its instruction) was lost and the call ran to the end. Every call now
+  numbers itself before any work and a cancel marks the running call; a cancel with no call
+  running is dropped and cannot stop a later call. No change to the C ABI (the header text
+  says what was meant). 511 checks on the M4 Pro; 526 with the system-prompt checkpoint.
+- **Cancel right after starting, in Flutter and React Native.** Both run calls on a worker, so a
+  cancel sent right after starting a call reached kiln before the call did and was dropped
+  (React Native stopped 1 of 5 such calls on the Pixel 8). Flutter now gives each call a cancel
+  flag in native memory that the worker checks before starting and at every piece; React
+  Native's `ctx.cancel()` covers every call on the context made before it, queued or running
+  (5 of 5 on the Pixel 8).
+- **Any Android CMake build gets kiln's ARM baseline** (`armv8.2-a+dotprod+fp16`) unless it
+  picks another; the preset, the Kotlin library and the Flutter plugin already set it.
 - **Rust bindings** in `rust/`: `kiln-sys` (raw functions generated from `kiln.h` by bindgen;
   `scripts/gen_rust_bindings.sh` regenerates them) and `kiln`, a safe API (`Model`, `Context`,
   `CancelHandle`, streamed text to a closure in whole UTF-8 characters, errors as `Result`).
   The build script compiles libkiln with CMake and links it statically, or links a prebuilt one
   from `KILN_LIB_DIR`. No change to the C ABI. Run on Linux x86_64 (Ryzen 5 8500G, Rust 1.99)
   and macOS (M4 Pro, Metal, Rust 1.94) on 2026-10-15: 11 tests over the C suite's models pass
-  on both, and on Linux the decision and embedding numbers match `kiln-cli`. Building libkiln
-  from Cargo stops with a message on Android and Windows, where it was not tried. Not on
-  crates.io yet.
+  on both, and on Linux the decision and embedding numbers match `kiln-cli`. Cargo also
+  builds for Android (arm64, NDK; the static C++ runtime and OpenMP are linked in): the model
+  tests pass on the Pixel 8 (Android 17), at kiln-cli's speed. Windows stops with a message:
+  not tried. Not on crates.io yet.
 - **Kotlin / Android library** in `android/`: one `libkiln_jni.so` (JNI glue with the core linked in
   statically, c++_static) and a Kotlin API (`KilnModel`, `KilnContext`, `chatFlow` as a coroutine
   Flow, `KilnException`). Strings cross JNI as UTF-8 byte arrays, not `jstring`. No change to the
@@ -33,7 +47,8 @@
   `embed`, `decide`, `speak` to a wav file). A new React Native 0.87.1 app with this package added
   by path ran on the Pixel 8 (Android 17): chat, cache reuse, stop, abort, Parakeet speech to text
   and Pocket TTS text to speech all worked; the app needs a Metro setting for the linked folder
-  (in `react-native/README.md`). 9 tests of the JS layer pass against a fake native module.
+  (in `react-native/README.md`). 9 tests of the JS layer pass against a fake native module. A
+  stop that reaches the module after its call ended is dropped instead of kept.
   Builds only inside this repository (not on npm).
 
 ## 0.5.0

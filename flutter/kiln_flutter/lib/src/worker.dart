@@ -217,6 +217,14 @@ class KilnWorker {
     }
   }
 
+  // The request's cancel flag: native memory shared with the main isolate (_CancelFlag in
+  // kiln.dart). cancel() sets it and calls kiln_cancel; the flag also covers a cancel that
+  // arrives before this isolate has started the call, which kiln_cancel alone cannot stop.
+  static bool _cancelled(_Req r) {
+    final a = r.args['cancelFlag'] as int?;
+    return a != null && Pointer<Int32>.fromAddress(a).value != 0;
+  }
+
   static Map<String, Object?> _chat(b.KilnBindings k, _Req r) {
     final msgs = r.args['messages'] as List;
     final (arr, strings) = _marshalMessages(msgs);
@@ -230,7 +238,7 @@ class KilnWorker {
     final cb = NativeCallable<b.kiln_token_cbFunction>.isolateLocal(
       (int ch, Pointer<Char> piece, int tok, Pointer<Void> user) {
         stream.send([ch, piece.cast<Utf8>().toDartString()]);
-        return true;
+        return !_cancelled(r);
       },
       exceptionalReturn: false,
     );
@@ -249,6 +257,10 @@ class KilnWorker {
       sp.ref.seed = p.seed;
       sp.ref.max_tokens = p.maxTokens;
       final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
+      if (_cancelled(r)) {
+        st.ref.stopped_by_user = true;
+        return {'status': b.kiln_status.KILN_ERR_CANCELLED.value, 'stats': KilnGenStats.fromNative(st.ref).toMap()};
+      }
       _t('kiln_chat enter');
       final s = k.kiln_chat(ctx, arr, msgs.length, opts, sp, cb.nativeFunction, nullptr, st);
       _t('kiln_chat exit status=${s.name}');
@@ -347,7 +359,7 @@ class KilnWorker {
     final cb = NativeCallable<b.kiln_audio_cbFunction>.isolateLocal(
       (Pointer<Float> samples, int n, int rate, Pointer<Void> user) {
         stream.send([Float32List.fromList(samples.asTypedList(n)), rate]);
-        return true;
+        return !_cancelled(r);
       },
       exceptionalReturn: false,
     );
@@ -375,6 +387,10 @@ class KilnWorker {
       opts.ref.max_frames = r.args['maxFrames'] as int;
       opts.ref.seed = r.args['seed'] as int;
       final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
+      if (_cancelled(r)) {
+        st.ref.stopped_by_user = true;
+        return {'status': b.kiln_status.KILN_ERR_CANCELLED.value, 'stats': KilnSpeakStats.fromNative(st.ref).toMap()};
+      }
       final s = k.kiln_speak(ctx, text, opts, cb.nativeFunction, nullptr, st);
       final stats = KilnSpeakStats.fromNative(st.ref).toMap();
       if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) _fail(k, s);
@@ -402,7 +418,7 @@ class KilnWorker {
     final cb = NativeCallable<b.kiln_token_cbFunction>.isolateLocal(
       (int ch, Pointer<Char> piece, int tok, Pointer<Void> user) {
         stream.send(piece.cast<Utf8>().toDartString());
-        return true;
+        return !_cancelled(r);
       },
       exceptionalReturn: false,
     );
@@ -426,6 +442,10 @@ class KilnWorker {
       opts.ref.prompt = str(r.args['prompt'] as String?);
       opts.ref.max_tokens = r.args['maxTokens'] as int;
       final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
+      if (_cancelled(r)) {
+        st.ref.stopped_by_user = true;
+        return {'status': b.kiln_status.KILN_ERR_CANCELLED.value, 'stats': KilnTranscribeStats.fromNative(st.ref).toMap()};
+      }
       final s = k.kiln_transcribe(ctx, item, opts, cb.nativeFunction, nullptr, st);
       final stats = KilnTranscribeStats.fromNative(st.ref).toMap();
       if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) _fail(k, s);

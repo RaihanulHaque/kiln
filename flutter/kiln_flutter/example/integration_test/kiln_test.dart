@@ -218,6 +218,18 @@ void main() {
       expect(st.generatedTokens, lessThan(60));
     });
 
+    test('a cancel sent right after starting stops the generation', () async {
+      if (model(lfm) == null) return;
+      // the request may not have reached the worker isolate yet: the cancel must still count
+      for (var i = 0; i < 5; i++) {
+        final gen = ctx.chat([const KilnChatMessage.user('Write a very long story about a dragon.')]);
+        gen.cancel();
+        final st = await gen.stats;
+        expect(st.stoppedByUser, isTrue, reason: 'try $i');
+        expect(st.generatedTokens, lessThan(5), reason: 'try $i');
+      }
+    });
+
     test('context refuses a second concurrent chat', () async {
       if (model(lfm) == null) return;
       await ctx.reset();

@@ -30,6 +30,7 @@ import dev.kiln.QuestionType
 import dev.kiln.Role
 import dev.kiln.Sampling
 import dev.kiln.SpeakOptions
+import dev.kiln.Status
 import dev.kiln.TranscribeOptions
 import java.io.File
 import java.io.FileOutputStream
@@ -49,7 +50,26 @@ import java.util.concurrent.atomic.AtomicInteger
 class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
     private val models = ConcurrentHashMap<Int, KilnModel>()
     private val contexts = ConcurrentHashMap<Int, KilnContext>()
-    private val stopped = ConcurrentHashMap.newKeySet<Int>()
+    // Streaming requests by JS request id. A request is active from the moment JS calls the
+    // method (on this module's thread, before the work is queued) until its work ends, so a stop
+    // sent while it waits in the queue counts, and a stop that arrives after it ended is dropped
+    // instead of staying in `stopped` forever.
+    private val requestLock = Any()
+    private val active = HashSet<Int>()
+    private val stopped = HashSet<Int>()
+
+    /** [run] for a call that streams pieces to JS under [requestId]. */
+    private fun runStreaming(requestId: Double, promise: Promise, block: () -> Any?) {
+        val id = requestId.toInt()
+        synchronized(requestLock) { active.add(id) }
+        run(promise) {
+            try {
+                block()
+            } finally {
+                synchronized(requestLock) { active.remove(id); stopped.remove(id) }
+            }
+        }
+    }
     private val ids = AtomicInteger(0)
     // invalidate() sets this under the lock; a model or context finished after that is freed
     // at once instead of being added to a registry nobody will clear
@@ -164,16 +184,42 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
         null
     }
 
+    // ctx.cancel() from JS cancels every call on that context accepted before it, running or still
+    // waiting for the worker: each call notes the context's cancel count when JS makes it (on
+    // this module's thread, in order), and gives up when the count has moved. kiln_cancel alone
+    // would miss a call the worker has not started yet. A cancel never reaches a later call.
+    private val cancelCounts = ConcurrentHashMap<Int, AtomicInteger>()
+
+    private fun cancelGuard(context: Double): () -> Boolean {
+        val n = cancelCounts.getOrPut(context.toInt()) { AtomicInteger() }
+        val at = n.get()
+        return { n.get() != at }
+    }
+
+    private fun checkNotCancelled(cancelled: () -> Boolean) {
+        if (cancelled()) throw KilnException(Status.CANCELLED, "cancelled")
+    }
+
+    /** Runs [block] unless the call was cancelled first, and reports a cancel that came during it. */
+    private inline fun <T> guarded(noinline cancelled: () -> Boolean, block: () -> T): T {
+        checkNotCancelled(cancelled)
+        val r = block()
+        checkNotCancelled(cancelled)
+        return r
+    }
+
     override fun cancel(context: Double) {
+        cancelCounts.getOrPut(context.toInt()) { AtomicInteger() }.incrementAndGet()
         contexts[context.toInt()]?.cancel()
     }
 
     override fun stop(requestId: Double) {
-        stopped.add(requestId.toInt())
+        val id = requestId.toInt()
+        synchronized(requestLock) { if (id in active) stopped.add(id) }
     }
 
     /** The streaming callback for one call: sends each piece to JS, and stops when JS asked. */
-    private fun pieces(requestId: Double): (Piece) -> Boolean {
+    private fun pieces(requestId: Double, cancelled: () -> Boolean): (Piece) -> Boolean {
         val id = requestId.toInt()
         return { p ->
             emitOnPiece(
@@ -184,28 +230,27 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
                     putInt("tokenId", p.tokenId)
                 },
             )
-            !stopped.contains(id)
+            synchronized(requestLock) { id !in stopped } && !cancelled()
         }
     }
 
-    override fun chat(context: Double, requestId: Double, messages: ReadableArray, options: ReadableMap, sampling: ReadableMap, promise: Promise) =
-        run(promise) {
-            try {
-                ctx(context).chat(messages.toMessages(), options.toChatOptions(), sampling.toSampling(), pieces(requestId)).toMap()
-            } finally {
-                stopped.remove(requestId.toInt())
+    override fun chat(context: Double, requestId: Double, messages: ReadableArray, options: ReadableMap, sampling: ReadableMap, promise: Promise) {
+        val cancelled = cancelGuard(context)
+        runStreaming(requestId, promise) {
+            guarded(cancelled) {
+                ctx(context).chat(messages.toMessages(), options.toChatOptions(), sampling.toSampling(), pieces(requestId, cancelled)).toMap()
             }
         }
+    }
 
-    override fun generate(context: Double, requestId: Double, prompt: String, sampling: ReadableMap, promise: Promise) = run(promise) {
-        try {
-            ctx(context).generate(prompt, sampling.toSampling(), pieces(requestId)).toMap()
-        } finally {
-            stopped.remove(requestId.toInt())
+    override fun generate(context: Double, requestId: Double, prompt: String, sampling: ReadableMap, promise: Promise) {
+        val cancelled = cancelGuard(context)
+        runStreaming(requestId, promise) {
+            guarded(cancelled) { ctx(context).generate(prompt, sampling.toSampling(), pieces(requestId, cancelled)).toMap() }
         }
     }
 
-    override fun decide(context: Double, state: String?, question: ReadableMap, promise: Promise) = run(promise) {
+    override fun decide(context: Double, state: String?, question: ReadableMap, promise: Promise) = cancelGuard(context).let { cancelled -> run(promise) { guarded(cancelled) {
         val opts = question.getArray("options")
         val q = Question(
             id = question.getString("id") ?: "",
@@ -226,21 +271,25 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
             putInt("best", d.best); putDouble("value", d.value.toDouble()); putDouble("confidence", d.confidence.toDouble())
             putInt("promptTokens", d.promptTokens); putDouble("ms", d.ms)
         }
+    } } }
+
+    override fun embed(context: Double, text: String, options: ReadableMap, promise: Promise) = cancelGuard(context).let { cancelled ->
+        run(promise) { guarded(cancelled) { ctx(context).embed(text, options.toEmbedOptions()).toMap() } }
     }
 
-    override fun embed(context: Double, text: String, options: ReadableMap, promise: Promise) = run(promise) {
-        ctx(context).embed(text, options.toEmbedOptions()).toMap()
+    override fun embedMedia(context: Double, text: String?, media: ReadableArray, options: ReadableMap, promise: Promise) = cancelGuard(context).let { cancelled ->
+        run(promise) {
+            guarded(cancelled) {
+                val items = List(media.size()) { media.getMap(it)!!.toMedia() }
+                ctx(context).embedMedia(text, items, options.toEmbedOptions()).toMap()
+            }
+        }
     }
 
-    override fun embedMedia(context: Double, text: String?, media: ReadableArray, options: ReadableMap, promise: Promise) = run(promise) {
-        val items = List(media.size()) { media.getMap(it)!!.toMedia() }
-        ctx(context).embedMedia(text, items, options.toEmbedOptions()).toMap()
-    }
-
-    override fun transcribe(context: Double, requestId: Double, audio: ReadableMap, options: ReadableMap, promise: Promise) = run(promise) {
-        val each = pieces(requestId)
+    override fun transcribe(context: Double, requestId: Double, audio: ReadableMap, options: ReadableMap, promise: Promise) = cancelGuard(context).let { cancelled -> runStreaming(requestId, promise) {
+        val each = pieces(requestId, cancelled)
         val text = StringBuilder()
-        try {
+        guarded(cancelled) {
             val st = ctx(context).transcribe(
                 audio.toMedia(),
                 TranscribeOptions(options.str("language"), options.str("prompt"), options.int("maxTokens")),
@@ -255,12 +304,10 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
                 putDouble("genMs", st.genMs); putDouble("ms", st.ms); putString("language", st.language)
                 putBoolean("stoppedByEos", st.stoppedByEos); putBoolean("stoppedByUser", st.stoppedByUser)
             }
-        } finally {
-            stopped.remove(requestId.toInt())
         }
-    }
+    } }
 
-    override fun speak(context: Double, text: String, options: ReadableMap, outPath: String, promise: Promise) = run(promise) {
+    override fun speak(context: Double, text: String, options: ReadableMap, outPath: String, promise: Promise) = cancelGuard(context).let { cancelled -> run(promise) { guarded(cancelled) {
         val voice = if (options.hasKey("voice") && !options.isNull("voice")) options.getMap("voice")!!.toMedia() else null
         val seed = options.int("seed")
         val sp = ctx(context).speakCollect(
@@ -278,7 +325,7 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
             putDouble("genMs", st.genMs); putDouble("ms", st.ms); putBoolean("stoppedByEos", st.stoppedByEos)
             putBoolean("stoppedByUser", st.stoppedByUser)
         }
-    }
+    } } }
 
     /** The app is going away (or reloading): stop running calls and free everything. */
     override fun invalidate() {

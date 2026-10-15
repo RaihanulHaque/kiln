@@ -96,12 +96,11 @@ public:
     int               n_batch_ = 512;
     llama_context*    tts_ctx_ = nullptr;   // for kiln_speak: needs embeddings on, made on first use, shares tp_
     mtmd_helper_gen_audio* gen_ = nullptr;  // kiln_speak's helper, kept between calls (making one copies the token table)
-    std::atomic<bool> cancel_{false};
     const kiln::DecisionHead* decision_ = nullptr;   // owned by the model; set for decision models
     const kiln::EmbeddingHead* embedding_ = nullptr; // owned by the model; set for embedding models
     const kiln::MediaProjector* media_ = nullptr;    // owned by the model; holds encoders once a projector is loaded
 
-    static bool abort_cb(void* user) { return static_cast<LlamaContext*>(user)->cancel_.load(); }
+    static bool abort_cb(void* user) { return static_cast<LlamaContext*>(user)->cancelled(); }
 
     kiln_status reset() override {
         llama_memory_clear(llama_get_memory(ctx_), true);
@@ -110,25 +109,20 @@ public:
         return KILN_OK;
     }
 
-    void cancel() override { cancel_.store(true); }
-
     kiln_status decide(const char* state, const kiln_decision_question& q,
                        float* probs, int32_t probs_cap, kiln_decision_answer& out) override {
         if (!decision_ || !decision_->is_decision_model()) return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not a decision model");
-        cancel_.store(false);
         return decision_->decide(ctx_, state, q, probs, probs_cap, out);
     }
 
     kiln_status embed(const char* text, const kiln_media* media, int32_t n_media, const kiln_embed_options& o,
                       float* out, int32_t out_cap, kiln_embed_stats& stats) override {
         if (!embedding_ || !embedding_->is_embedding_model()) return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not an embedding model");
-        cancel_.store(false);
         return embedding_->embed(ctx_, *media_, text, media, n_media, o, out, out_cap, stats);
     }
 
     kiln_status generate(const kiln::RenderedPrompt& in, const kiln_sampling_params& sp,
                          kiln_token_cb cb, void* user, kiln_gen_stats* stats) override {
-        cancel_.store(false);
         kiln_gen_stats st{};
         auto done = [&](kiln_status s) { if (stats) *stats = st; return s; };
         if (decision_ && decision_->is_decision_model())
@@ -203,7 +197,7 @@ public:
             int cnt = std::min(n_batch_, n - i);
             for (size_t c : ckpt_at)   // end a batch exactly at each checkpoint
                 if (i < (int)c) { cnt = std::min(cnt, (int)c - i); break; }
-            if (cancel_.load()) { st.stopped_by_user = true; return done(KILN_ERR_CANCELLED); }
+            if (cancelled()) { st.stopped_by_user = true; return done(KILN_ERR_CANCELLED); }
             int rc = llama_decode(ctx_, llama_batch_get_one(toks.data() + i, cnt));
             if (rc == 2) { st.stopped_by_user = true; return done(KILN_ERR_CANCELLED); }
             if (rc != 0) return done(kiln::set_error(rc == 1 ? KILN_ERR_CONTEXT_FULL : KILN_ERR_BACKEND, "llama_decode failed in prompt eval, rc=" + std::to_string(rc)));
@@ -227,7 +221,6 @@ public:
     kiln_status transcribe(const kiln::RenderedPrompt& in, const kiln_transcribe_options& o, const kiln_media& audio,
                            kiln_token_cb cb, void* user, kiln_transcribe_stats& st) override {
         const int32_t max_tokens = o.max_tokens;
-        cancel_.store(false);
         if ((decision_ && decision_->is_decision_model()) || (embedding_ && embedding_->is_embedding_model()))
             return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not a speech model");
         const auto t_all = clock_t_::now();
@@ -263,7 +256,7 @@ public:
         const size_t n_chunks = mtmd_input_chunks_size(chunks.c);
         for (size_t ci = 0; ci < n_chunks; ++ci) {
             const mtmd_input_chunk* chunk = mtmd_input_chunks_get(chunks.c, ci);
-            if (cancel_.load()) { reset(); st.stopped_by_user = true; return KILN_ERR_CANCELLED; }
+            if (cancelled()) { reset(); st.stopped_by_user = true; return KILN_ERR_CANCELLED; }
             int32_t rc = 0;
             if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
                 const auto t0 = clock_t_::now();
@@ -321,7 +314,6 @@ public:
     // before the sentence is finished.
     kiln_status speak(const char* text, const kiln_speak_options& o, kiln_audio_cb cb, void* user,
                       kiln_speak_stats& st) override {
-        cancel_.store(false);
         if ((decision_ && decision_->is_decision_model()) || (embedding_ && embedding_->is_embedding_model()))
             return kiln::set_error(KILN_ERR_NOT_SUPPORTED, "not a text-to-speech model");
         const auto t_all = clock_t_::now();
@@ -370,7 +362,7 @@ public:
         const auto t0 = clock_t_::now();
         if (mtmd_helper_gen_audio_set_input(gen.g, &inp) != 0) return kiln::set_error(KILN_ERR_BACKEND, "the model could not take this text (set_input failed)");
         for (;;) {
-            if (cancel_.load()) return KILN_ERR_CANCELLED;
+            if (cancelled()) return KILN_ERR_CANCELLED;
             const int32_t left = mtmd_helper_gen_audio_step_prompt(gen.g, n_batch_);
             if (left < 0) return kiln::set_error(KILN_ERR_BACKEND, "reading the text failed (step_prompt)");
             if (left == 0) break;
@@ -407,7 +399,7 @@ public:
         };
         bool stop = false;
         while (!stop && st.frames < max_frames) {
-            if (cancel_.load()) { st.gen_ms = ms_since(t1); return KILN_ERR_CANCELLED; }
+            if (cancelled()) { st.gen_ms = ms_since(t1); return KILN_ERR_CANCELLED; }
             const float* h_next = nullptr;
             if (mtmd_helper_gen_audio_step_gen(gen.g, sampled, h, &h_next, &stop) != 0) return kiln::set_error(KILN_ERR_BACKEND, "generating a frame failed (step_gen)");
             if (!h_next) break;
@@ -444,7 +436,7 @@ private:
         kiln_status result = KILN_OK;
         for (;;) {
             if (sp.max_tokens > 0 && st.generated_tokens >= sp.max_tokens) break;
-            if (cancel_.load()) { st.stopped_by_user = true; result = KILN_ERR_CANCELLED; break; }
+            if (cancelled()) { st.stopped_by_user = true; result = KILN_ERR_CANCELLED; break; }
             if (n_past >= n_ctx) { result = kiln::set_error(KILN_ERR_CONTEXT_FULL, "context full after " + std::to_string(st.generated_tokens) + " tokens"); break; }
 
             llama_token tok = llama_sampler_sample(smpl, ctx_, -1);
