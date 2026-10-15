@@ -74,8 +74,14 @@ impl Error {
     /// Reads kiln's message for the call that just failed. kiln keeps it per thread, so this
     /// must run on the thread that made the call, right after it.
     pub(crate) fn last(status: sys::kiln_status) -> Error {
+        let status = Status::from_raw(status);
+        // A cancelled call does not always set kiln's message, which may still hold an earlier
+        // call's error.
+        if status == Status::Cancelled {
+            return Error::new(status, "cancelled");
+        }
         let msg = unsafe { CStr::from_ptr(sys::kiln_last_error()) }.to_string_lossy().into_owned();
-        Error::new(Status::from_raw(status), msg)
+        Error::new(status, msg)
     }
 }
 
