@@ -130,6 +130,39 @@ just before the assistant's reply. Templates often rewrite the previous reply on
 the last reply and the new message. Without a usable checkpoint it re-reads the whole prompt:
 slower, still correct.
 
+A second checkpoint sits right after the system prompt. Many apps are not conversations at all:
+an extractor or a classifier sends the same long instructions as the system prompt with a new
+text each time, and the end-of-history checkpoint never matches the next request. Example: the
+Hishab extractor (Qwen3.5 0.8B) sends 167 prompt tokens, 146 of them the same instructions every
+time. With only the end-of-history checkpoint the Pixel 8 re-read all 167 (2.9 s); with the
+system-prompt checkpoint it keeps the 146 and reads 21 (0.8 s). To find where the system prompt
+ends, kiln renders the template a second time with a dummy user message and keeps what the two
+renders share. kiln keeps at most three checkpoints: the system prompt, the latest turn, and one
+turn back.
+
+## Cancelling a call
+
+Every kiln call blocks until it is done, so it runs on a background thread, and the app stops it
+from another thread with `kiln_cancel(ctx)` (`gen.cancel()` in Flutter, `ctx.cancel()` in Kotlin
+and React Native, a `CancelHandle` in Rust). The running call then returns `KILN_ERR_CANCELLED`.
+
+Example: the user taps Send, the model starts a long answer, and the user taps Stop. The UI
+thread calls `kiln_cancel`; the chat stops at its next step, whether it is still reading the
+prompt or already writing.
+
+Two rules make this safe:
+
+- **A cancel counts from the first moment of the call.** Every call numbers itself before it
+  does anything, even before the chat template is rendered, and a cancel marks the call that is
+  running. A Stop tapped right after Send therefore stops that call. (Up to 0.5.0, kiln cleared the
+  flag when its work began, and a cancel that came during rendering was lost.)
+- **A cancel with no call running does nothing.** If the user taps Stop just after the answer
+  finished, that tap must not kill the next message. kiln drops it.
+
+Flutter and React Native add a step of their own: they hand the call to a worker, so a cancel
+can arrive before kiln has started the call at all. Each of them remembers the cancel for that
+call and either never starts it or stops it at the first piece.
+
 ## Reasoning models and channels
 
 Models like Qwen3.5 can "think" before answering: they emit a block between `<think>` and
