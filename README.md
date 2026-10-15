@@ -34,7 +34,7 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 | MacBook Pro M4 Pro, v0.5.0 | llama.cpp Metal; whisper.cpp Metal | 505 C checks (three speech-to-text models, one text-to-speech model); chat benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.5.0 | llama.cpp and whisper.cpp CPU, 8 threads | 505 C checks, with Whisper, Parakeet and Pocket TTS (2026-10-14) |
 | Ryzen 5 8500G desktop and MacBook Pro M4 Pro, Rust bindings (`rust/`) | the same, linked statically from Cargo | 11 Rust tests over the same models (chat, decision, embeddings, images, Whisper, Parakeet, Pocket TTS) on both, 2026-10-15; Android, iOS and Windows not tried |
-| Ryzen 5 8500G desktop, Kotlin API (`android/`) on the desktop JVM | the JNI glue built for x86_64 | 12 Kotlin tests over the same models, also under `-Xcheck:jni` (2026-10-15); the Android `.aar` build and a phone run are not done yet |
+| Ryzen 5 8500G and M4 Pro desktop JVMs, Pixel 8 (Android 17): Kotlin API (`android/`) | the JNI glue, and the `.aar` built with the NDK | 12 Kotlin tests over the same models on both desktops; on the Pixel 8 the device test (load, probe, chat with LFM2.5 350M); 2026-10-15 |
 | Linux arm64 (Ubuntu 24.04 in Docker on the M4 Pro), v0.5.0 | llama.cpp CPU, OpenMP; whisper.cpp CPU | 505 C checks (2026-10-13); at v0.4.0 Parakeet took 66 ms and Whisper base 577 ms for the 3-second clip on the CPU; at v0.3.0 also emulated x86_64 (319) and `KILN_CPU_MASK=3` |
 
 Models verified end to end: LFM2.5 350M, Qwen3.5 0.8B (thinking on and off), Gemma 3 270M,
@@ -105,9 +105,10 @@ ctx.chat(&history, &Default::default(), &Default::default(), |piece| {
 
 ### Kotlin (Android)
 
-Kotlin code and JNI glue tested on the desktop JVM only; the Android build was not run yet. See [android/README.md](android/README.md).
+The `.aar` builds and its device test (chat) passes on the Pixel 8; the full model set is tested on the desktop JVM. See [android/README.md](android/README.md).
 
 ```kotlin
+// every call blocks: run this on a background thread (or use ctx.chatFlow from a coroutine)
 KilnModel.load(path).use { model ->
     model.newContext().use { ctx ->
         ctx.chat(listOf(Message.user("Hi"))) { piece -> print(piece.text); true }   // or ctx.chatFlow(...) from a coroutine

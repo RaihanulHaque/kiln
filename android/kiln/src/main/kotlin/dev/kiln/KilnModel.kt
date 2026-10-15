@@ -1,6 +1,9 @@
 package dev.kiln
 
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 
 /**
  * A loaded model file (GGUF, or a whisper.cpp `.bin` for Whisper and Parakeet).
@@ -11,6 +14,9 @@ import java.util.concurrent.atomic.AtomicInteger
 class KilnModel private constructor(handle: Long) : AutoCloseable {
     @Volatile private var handle: Long = handle
     private val openContexts = AtomicInteger(0)
+    // Calls that use the handle take the read lock; close() and loadProjector() take the write
+    // lock, so the model is not freed under a running call and no context appears mid-load.
+    private val lock = ReentrantReadWriteLock()
 
     /** What actually happened at load: backend, architecture, quantisation, and what kind of model this is. */
     val info: ModelInfo = run {
@@ -45,15 +51,15 @@ class KilnModel private constructor(handle: Long) : AutoCloseable {
      * creating contexts. The encoders are freed with the model.
      */
     @JvmOverloads
-    fun loadProjector(path: String, params: ProjectorParams = ProjectorParams()): ProjectorInfo {
+    fun loadProjector(path: String, params: ProjectorParams = ProjectorParams()): ProjectorInfo = lock.write {
         check(openContexts.get() == 0) { "load the projector before creating contexts" }
         val r = Native.modelLoadProjector(live(), path.utf8(), params.imageMaxTokens)
-        return ProjectorInfo(r[0] != 0, r[1] != 0, r[2] != 0, r[3])
+        ProjectorInfo(r[0] != 0, r[1] != 0, r[2] != 0, r[3])
     }
 
     /** A new context: one conversation with its own KV cache. */
     @JvmOverloads
-    fun newContext(params: ContextParams = ContextParams()): KilnContext {
+    fun newContext(params: ContextParams = ContextParams()): KilnContext = lock.read {
         openContexts.incrementAndGet()
         try {
             return KilnContext(this, Native.contextCreate(live(), params.nCtx, params.nBatch, params.flashAttn))
@@ -64,21 +70,26 @@ class KilnModel private constructor(handle: Long) : AutoCloseable {
     }
 
     @JvmOverloads
-    fun tokenize(text: String, addSpecial: Boolean = false): IntArray = Native.tokenize(live(), text.utf8(), addSpecial)
+    fun tokenize(text: String, addSpecial: Boolean = false): IntArray = lock.read { Native.tokenize(live(), text.utf8(), addSpecial) }
 
     /** Turns tokens back into text. Bytes that are not valid UTF-8 become U+FFFD. */
-    fun detokenize(tokens: IntArray): String = Native.detokenize(live(), tokens).str()
+    fun detokenize(tokens: IntArray): String = lock.read { Native.detokenize(live(), tokens).str() }
 
     /** The prompt the model's own chat template makes of [messages]. For generation use [KilnContext.chat]. */
     @JvmOverloads
     fun applyChatTemplate(messages: List<Message>, options: ChatOptions = ChatOptions()): String {
         val (roles, contents) = messages.toNative()
-        return Native.applyChatTemplate(live(), roles, contents, options.addAssistantPrefix, options.enableThinking).str()
+        val out = lock.read { Native.applyChatTemplate(live(), roles, contents, options.addAssistantPrefix, options.enableThinking).str() }
+        if (out.isEmpty() && messages.isNotEmpty()) {
+            if (info.isSpeechModel) throw KilnException(Status.NOT_SUPPORTED, "speech models have no chat template")
+            throw KilnException(Status.INVALID_ARG, "the chat template could not be applied")
+        }
+        return out
     }
 
     /** Frees the model. Close its contexts first. */
     override fun close() {
-        synchronized(this) {
+        lock.write {
             val h = handle
             if (h == 0L) return
             check(openContexts.get() == 0) { "close the model's contexts first (${openContexts.get()} open)" }

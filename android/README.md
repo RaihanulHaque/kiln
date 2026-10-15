@@ -10,22 +10,23 @@ statically. There is no separate `libkiln.so` and no `libc++_shared.so`.
 | what | where | result |
 |---|---|---|
 | Kotlin API + JNI glue, host tests (`src/test`) | Linux x86_64 desktop JVM (Ryzen 5 8500G, OpenJDK 17, Kotlin 2.3.20), `libkiln_jni.so` built for the desktop | **12 tests pass**, also under `-Xcheck:jni` with no warnings |
-| Gradle build of the `.aar` (AGP 9.0.1, Gradle 9.1, NDK 28.2) | **not run**: that machine has no Android SDK, and its network was too slow to fetch one | |
-| On a phone (`src/androidTest`) | **not run** | |
+| Kotlin API + JNI glue, host tests through Gradle (`./gradlew :kiln:testDebugUnitTest`) | macOS desktop JVM (M4 Pro, JDK 24), `libkiln_jni` built for the Mac | **12 tests pass**, none skipped |
+| Gradle build of the `.aar` (AGP 9.0.1, Gradle 9.1, NDK 28.2) | MacBook Pro M4 Pro | **builds**; `llvm-readelf -d` on its `libkiln_jni.so` (9.6 MB) lists only `liblog`, `libm`, `libdl` and `libc`: no `libomp.so`, no `libc++_shared.so` |
+| On a phone (`./gradlew :kiln:connectedAndroidTest`) | Pixel 8, Android 17 | **2 tests pass**: load and probe, and a chat with LFM2.5 350M (`-Pandroid.testInstrumentationRunnerArguments.model=/data/local/tmp/kiln/<file>.gguf`) |
 
 On the Ryzen the results match the C and Rust sides: refund P(yes) 0.9964, embedding scores
 0.921 / 0.513, the same greedy reply, and Parakeet heard "The train to London leaves at 9 in the
 morning." in 174 ms.
 
-So the Kotlin code and the C++ glue were tested, but not the Android packaging. On the Mac with the
-Pixel 8, run `./gradlew :kiln:assembleRelease :kiln:connectedAndroidTest`, then check that
-`llvm-readelf -d` on the `.so` inside the `.aar` lists no `libomp.so` and no `libc++_shared.so`.
+Not done yet: the full model set (speech, embeddings, text to speech) on the phone through Kotlin;
+the device test chats only. Not on Maven Central.
 
 ## Use it
 
 ```kotlin
 import dev.kiln.*
 
+// blocking: run this on a background thread, not the main thread
 KilnModel.load("/data/user/0/your.app/files/Qwen3.5-0.8B-Q4_K_M.gguf").use { model ->
     model.newContext().use { ctx ->
         val history = mutableListOf(Message.user("What is the capital of France?"))
@@ -52,14 +53,19 @@ viewModelScope.launch {
 }
 ```
 
-The other kinds of model:
+The other kinds of model. Each needs its own model file and context, and every call blocks, so
+run these off the main thread:
 
 ```kotlin
 // speech to text (Whisper or Parakeet: no projector needed)
-val t = ctx.transcribeCollect(Media.File(wavPath))
+KilnModel.load(parakeetPath).use { asr ->
+    asr.newContext().use { c -> val t = c.transcribeCollect(Media.File(wavPath)) }
+}
 
 // embeddings: similarity of two normalised vectors is their dot product
-val q = ctx.embed("when does the train leave", EmbedOptions.QUERY)
+KilnModel.load(embeddingGemmaPath).use { emb ->
+    emb.newContext().use { c -> val q = c.embed("when does the train leave", EmbedOptions.QUERY) }
+}
 
 // text to speech: load the model, then its projector, then make the context
 KilnModel.load(ttsPath).use { tts ->
@@ -71,7 +77,11 @@ KilnModel.load(ttsPath).use { tts ->
 }
 
 // decision models: a probability per answer, in one pass
-val d = ctx.decide("my parcel never came", Question("wants_refund", QuestionType.YES_NO, "Is the customer asking for a refund?"))
+KilnModel.load(d1OmniPath).use { d1 ->
+    d1.newContext().use { c ->
+        val d = c.decide("my parcel never came", Question("wants_refund", QuestionType.YES_NO, "Is the customer asking for a refund?"))
+    }
+}
 ```
 
 ## Things to know

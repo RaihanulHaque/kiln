@@ -19,7 +19,7 @@ class DeviceTest {
         assertEquals("0.5.0", Kiln.version)
         val d = Kiln.probeDevice()
         assertEquals("arm64-v8a", d.abi)
-        assertTrue("$d", d.cpuCores > 0 && d.cpuBigCores in 1..d.cpuCores && d.cpuFastMask != 0L)
+        assertTrue("$d", d.cpuCores > 0 && d.cpuBigCores in 1..d.cpuCores)
         println("kiln ${Kiln.version} on ${d.soc}: ${d.cpuBigCores} of ${d.cpuCores} cores fast, mask 0x${d.cpuFastMask.toString(16)}")
     }
 

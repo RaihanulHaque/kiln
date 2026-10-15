@@ -23,11 +23,14 @@ class KilnContext internal constructor(private val model: KilnModel, handle: Lon
 
     val modelInfo: ModelInfo get() = model.info
 
-    private inline fun <T> call(block: (Long) -> T): T = callLock.withLock {
+    private fun noReentry() =
+        check(!callLock.isHeldByCurrentThread) { "a callback cannot call its own context; return false to stop" }
+
+    private inline fun <T> call(block: (Long) -> T): T = noReentry().let { callLock.withLock {
         val h = synchronized(handleLock) { handle }
         check(h != 0L) { "the context is closed" }
         block(h)
-    }
+    } }
 
     /** Stops the running call, from any thread: it throws [KilnException] with [Status.CANCELLED]. */
     fun cancel() {
@@ -205,6 +208,7 @@ class KilnContext internal constructor(private val model: KilnModel, handle: Lon
 
     /** Stops a running call, waits for it, and frees the context. */
     override fun close() {
+        noReentry()
         cancel()
         callLock.withLock {
             synchronized(handleLock) {

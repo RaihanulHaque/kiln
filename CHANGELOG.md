@@ -16,8 +16,9 @@
   Flow, `KilnException`). Strings cross JNI as UTF-8 byte arrays, not `jstring`. No change to the
   C ABI. The Kotlin code and the glue were run on the desktop JVM against a desktop build of the
   same `.so` (Ryzen 5 8500G, 2026-10-15): 12 tests pass, also under `-Xcheck:jni`, which found a
-  JNI call made after a callback threw (fixed). The Gradle / NDK build of the `.aar` and a run on
-  a phone are **not done yet**.
+  JNI call made after a callback threw (fixed). On the M4 Pro the same 12 pass through Gradle, the
+  `.aar` builds with the NDK (its `.so` needs neither `libomp.so` nor `libc++_shared.so`), and the
+  device test passes on the Pixel 8 (Android 17): load, probe and a chat with LFM2.5 350M.
 
 ## 0.5.0
 

@@ -67,8 +67,11 @@ internal interface AudioSink {
     fun onAudio(samples: FloatArray, sampleRate: Int): Boolean
 }
 
-internal fun String.utf8(): ByteArray = encodeToByteArray()
-internal fun String?.utf8OrNull(): ByteArray? = this?.encodeToByteArray()
+internal fun String.utf8(): ByteArray {
+    require(indexOf('\u0000') < 0) { "text must not contain NUL characters: kiln takes C strings" }
+    return encodeToByteArray()
+}
+internal fun String?.utf8OrNull(): ByteArray? = this?.utf8()
 internal fun ByteArray.str(): String = decodeToString()
 
 /**

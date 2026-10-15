@@ -77,7 +77,8 @@ bool fail(JNIEnv* env, kiln_status s) {
     jclass cls = env->FindClass("dev/kiln/KilnException");
     if (!cls) return true;
     jmethodID ctor = env->GetMethodID(cls, "<init>", "(I[B)V");
-    jbyteArray msg = to_bytes(env, kiln_last_error());
+    // a cancelled call does not always set kiln's message, which may hold an earlier error
+    jbyteArray msg = to_bytes(env, s == KILN_ERR_CANCELLED ? "cancelled" : kiln_last_error());
     auto ex = static_cast<jthrowable>(env->NewObject(cls, ctor, (jint)s, msg));
     if (ex) env->Throw(ex);
     return true;
