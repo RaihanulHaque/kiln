@@ -16,23 +16,21 @@ tagged with the call they belong to.
 |---|---|---|
 | The spec (`src/NativeKiln.ts`) | React Native 0.87.1's codegen parsed it and generated `NativeKilnSpec.java` | ok |
 | The Kotlin module | `kotlinc` against RN 0.87.1's `react-android` classes and Android API 36's `android.jar`, with the generated spec and `../android`'s Kotlin sources | compiles, no warnings |
-| The JS layer (`src/kiln.ts`) | 7 Node tests against a fake native module | pass |
+| The JS layer (`src/kiln.ts`) | 9 Node tests against a fake native module (macOS and Linux) | pass |
 | TypeScript | `tsc --noEmit` against RN 0.87.1's types | ok |
-| **An app on a phone** | | **not run** |
+| **An app on a phone** | a new RN 0.87.1 app (`@react-native-community/cli init`, release build, built-in Kotlin off as the template ships), this package added by path, on the Pixel 8 (Android 17), 2026-10-15 | **all pass**: chat (LFM2.5 350M answered "Paris"), cache reuse (16 of 19 prompt tokens), stop from `onPiece` (4 tokens), abort then a new chat on the same context, Parakeet transcribing a 3-second clip with live text, Pocket TTS writing 2.16 s of audio to a wav |
 
-So no code here has run on Android yet. The native work it calls (`dev.kiln`) passed 12 tests
-on the desktop JVM against real models. What remains is a test app on the Pixel 8 (see
-[Next steps](#next-steps)).
+The test app is not in the repository; its screen ran each call once and logged the result.
 
 ## Use it
 
 ```ts
-import { Kiln, greedy, isCancelled } from 'kiln-react-native';
+import { Kiln, greedy, isCancelled, type Message } from 'kiln-react-native';
 
 const model = await Kiln.loadModel(`${filesDir}/Qwen3.5-0.8B-Q4_K_M.gguf`);
 const ctx = await model.newContext();
 
-const history = [{ role: 'user' as const, content: 'What is the capital of France?' }];
+const history: Message[] = [{ role: 'user', content: 'What is the capital of France?' }];
 const reply = await ctx.chat(history, {
   onPiece: (p) => setText((t) => t + p.text),   // p.channel: 'answer' | 'reasoning'
 });
@@ -42,26 +40,34 @@ await ctx.close();
 await model.close();
 ```
 
-For the next turn, push the reply and the new question onto `history` and call `chat` again
-with the whole list. kiln reuses what is already in its cache (`reply.stats.cachedTokens`).
+For the next turn, push `{ role: 'assistant', content: reply.answer }` and the new question onto
+`history` and call `chat` again with the whole list. kiln reuses what is already in its cache (`reply.stats.cachedTokens`).
 
 - **Stop quietly:** return `false` from `onPiece`. The promise resolves with `stats.stoppedByUser`.
-- **Cancel:** pass `signal` from an `AbortController`, or call `ctx.cancel()`. The promise rejects,
-  and `isCancelled(e)` is true.
+  Pieces reach JS as events, so the phone may have written a few more tokens by the time the
+  stop arrives.
+- **Cancel one call:** pass `signal` from an `AbortController`. The promise rejects and
+  `isCancelled(e)` is true. It stops only that call, at its next piece (or before it starts);
+  another call on the same context carries on.
+- **Cancel whatever runs:** `ctx.cancel()` stops the running call on that context, also in the
+  middle of reading a long prompt.
 - **Errors** reject with `e.code` set to kiln's status (`"MODEL_LOAD"`, `"CONTEXT_FULL"`, ...),
   or `"INVALID_STATE"` for a closed handle.
 
-The other kinds of model:
+The other kinds of model. Each needs its own model file and context:
 
 ```ts
 // speech to text (Whisper or Parakeet: no projector needed)
-const t = await ctx.transcribe({ path: wavPath }, { onText: (w) => setLive((s) => s + w) });
+const asr = await Kiln.loadModel(parakeetPath);
+const asrCtx = await asr.newContext();
+const t = await asrCtx.transcribe({ path: wavPath }, { onText: (w) => setLive((s) => s + w) });
 
 // embeddings: similarity of two normalised vectors is their dot product
-const q = await ctx.embed('when does the train leave', { kind: 'query' });
-
-// images: a path, or the file's bytes as base64
-const img = await ctx.embedMedia(null, [{ path: photoPath }]);
+const emb = await Kiln.loadModel(embeddingGemmaPath);
+await emb.loadProjector(embeddingGemmaProjectorPath);   // only for images / audio
+const embCtx = await emb.newContext();
+const q = await embCtx.embed('when does the train leave', { kind: 'query' });
+const img = await embCtx.embedMedia(null, [{ path: photoPath }]);   // a path, or base64 bytes
 
 // text to speech: load the model, then its projector, then make the context; the audio is a wav file
 const tts = await Kiln.loadModel(ttsPath);
@@ -70,7 +76,9 @@ const voiceCtx = await tts.newContext();
 const speech = await voiceCtx.speak('Hello there.', `${cacheDir}/hello.wav`, { voice: { path: voiceWav } });
 
 // decision models: a probability per answer, in one pass
-const d = await ctx.decide('my parcel never came', { id: 'refund', type: 'yes_no', instructions: 'Is the customer asking for a refund?' });
+const d1 = await Kiln.loadModel(d1OmniPath);
+const d1Ctx = await d1.newContext();
+const d = await d1Ctx.decide('my parcel never came', { id: 'refund', type: 'yes_no', instructions: 'Is the customer asking for a refund?' });
 ```
 
 ## Install (inside this repository, for now)
@@ -83,8 +91,30 @@ like the Flutter plugin's `scripts/vendor_flutter.sh`. In an app:
 npm install /path/to/kiln/react-native
 ```
 
-Then build the app as usual. Autolinking finds `KilnPackage`, and the app's build runs codegen on
-`src/NativeKiln.ts`. Requirements: React Native 0.80 or newer (New Architecture), and an
+npm links the folder (a symlink in `node_modules`), and Metro does not follow a link out of the
+app on its own. Tell it in the app's `metro.config.js`, and resolve `react` / `react-native` from
+the app only, so the bundle has one copy of each:
+
+```js
+const path = require('path');
+const fs = require('fs');
+const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
+
+const kiln = fs.realpathSync(path.join(__dirname, 'node_modules/kiln-react-native'));
+const escape = (p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+module.exports = mergeConfig(getDefaultConfig(__dirname), {
+  watchFolders: [kiln],
+  resolver: {
+    nodeModulesPaths: [path.join(__dirname, 'node_modules')],
+    blockList: [new RegExp(`^${escape(path.join(kiln, 'node_modules'))}/.*`)],
+  },
+});
+```
+
+Set `minSdkVersion = 29` in the app's `android/build.gradle`, then build as usual. Autolinking
+finds `KilnPackage`, and the app's build runs codegen on `src/NativeKiln.ts`. Requirements: React
+Native 0.87 (tested with 0.87.1, New Architecture; older versions were not tried), and an
 **arm64-v8a** phone with minSdk 29. kiln is built for 64-bit ARM only, so an x86_64 emulator fails
 with `UnsatisfiedLinkError`. Model files must be in a place the app can read, such as its files
 directory.
@@ -119,7 +149,7 @@ the rest.
 
 ## Next steps
 
-1. A small test app on the Pixel 8: `npx @react-native-community/cli init`, add this package by
-   path, and chat, transcribe and speak with the test models. Check that tokens stream smoothly.
-2. Vendoring and an npm release.
+1. Vendoring and an npm release, which also removes the Metro setup above.
+2. Embeddings and decision models in an app (the JS tests and the Kotlin library cover them; the
+   app run did chat, speech to text and text to speech).
 3. iOS, once kiln's own iOS build is done.

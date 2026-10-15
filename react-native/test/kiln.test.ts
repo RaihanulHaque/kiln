@@ -44,11 +44,14 @@ function fake() {
     newContext: async (m, ...rest) => { calls.push({ name: 'newContext', args: [m, ...rest] }); return 3; },
     freeContext: async (c) => { calls.push({ name: 'freeContext', args: [c] }); },
     resetContext: async () => {},
-    cancel: (c) => { cancelled.add(c); },
+    cancel: (c) => { calls.push({ name: 'cancel', args: [c] }); cancelled.add(c); },
     stop: (id) => { stoppedIds.add(id); },
     chat: async (ctx, id, messages, options, sampling) => {
       calls.push({ name: 'chat', args: [ctx, id, messages, options, sampling] });
-      for (const p of pieces) {
+      // "say:xyz" streams x, y, z: lets a test give each call its own pieces
+      const last = (messages as { content: string }[]).at(-1)!.content;
+      const own = last.startsWith('say:') ? [...last.slice(4)].map((text) => ({ channel: 'answer', text })) : pieces;
+      for (const p of own) {
         await Promise.resolve();
         if (cancelled.delete(ctx)) throw Object.assign(new Error('cancelled'), { code: 'CANCELLED' });
         if (stoppedIds.has(id)) return { ...stats, stoppedByEos: false, stoppedByUser: true };
@@ -95,13 +98,12 @@ test('chat streams pieces, splits channels and returns the whole reply', async (
 
 test('two calls at once each get only their own pieces', async () => {
   const f = fake();
-  f.setPieces([{ channel: 'answer', text: 'a' }, { channel: 'answer', text: 'b' }]);
   const kiln = new KilnLibrary(f.native);
   const model = await kiln.loadModel('/m.gguf');
   const [c1, c2] = [await model.newContext(), await model.newContext()];
-  const [r1, r2] = await Promise.all([c1.chat([{ role: 'user', content: '1' }]), c2.chat([{ role: 'user', content: '2' }])]);
-  assert.equal(r1.answer, 'ab');
-  assert.equal(r2.answer, 'ab');
+  const [r1, r2] = await Promise.all([c1.chat([{ role: 'user', content: 'say:abc' }]), c2.chat([{ role: 'user', content: 'say:xyz' }])]);
+  assert.equal(r1.answer, 'abc');
+  assert.equal(r2.answer, 'xyz');
 });
 
 test('returning false from onPiece stops quietly', async () => {
@@ -179,4 +181,24 @@ test('closed handles refuse calls and close only once', async () => {
   assert.throws(() => ctx.embed('x'), /closed/);
   await model.close();
   assert.throws(() => model.tokenize('x'), /closed/);
+});
+
+test('aborting one call leaves another call on the same context running', async () => {
+  const f = fake();
+  const ctx = await (await new KilnLibrary(f.native).loadModel('/m.gguf')).newContext();
+  const ac = new AbortController();
+  const first = ctx.chat([{ role: 'user', content: 'say:abcd' }], { signal: ac.signal, onPiece: () => { ac.abort(); } });
+  const second = ctx.chat([{ role: 'user', content: 'say:wxyz' }]);
+  await assert.rejects(first, (e: unknown) => isCancelled(e));
+  assert.equal((await second).answer, 'wxyz');
+  assert.equal(f.calls.filter((c) => c.name === 'cancel').length, 0, 'no context-wide cancel');
+});
+
+test('an already aborted signal rejects without calling native code', async () => {
+  const f = fake();
+  const ctx = await (await new KilnLibrary(f.native).loadModel('/m.gguf')).newContext();
+  const ac = new AbortController();
+  ac.abort();
+  await assert.rejects(ctx.chat([{ role: 'user', content: 'go' }], { signal: ac.signal }), (e: unknown) => isCancelled(e));
+  assert.equal(f.calls.filter((c) => c.name === 'chat').length, 0);
 });

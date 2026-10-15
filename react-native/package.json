@@ -6,21 +6,35 @@
   "types": "lib/index.d.ts",
   "react-native": "src/index.ts",
   "source": "src/index.ts",
-  "files": ["src", "lib", "android", "react-native.config.js", "!android/build"],
+  "files": [
+    "src",
+    "lib",
+    "android",
+    "react-native.config.js",
+    "!android/build"
+  ],
   "license": "MIT",
   "repository": "https://github.com/RaihanulHaque/kiln",
-  "keywords": ["react-native", "llm", "llama", "whisper", "on-device"],
+  "keywords": [
+    "react-native",
+    "llm",
+    "llama",
+    "whisper",
+    "on-device"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "tsc -p tsconfig.test.json && node --test build-test/test/",
-    "codegen": "node node_modules/@react-native/codegen/lib/cli/combine/combine-js-to-schema-cli.js build-codegen/schema.json src/NativeKiln.ts"
+    "codegen": "node node_modules/@react-native/codegen/lib/cli/combine/combine-js-to-schema-cli.js build-codegen/schema.json src/NativeKiln.ts",
+    "prepare": "tsc -p tsconfig.build.json"
   },
   "peerDependencies": {
     "react": "*",
-    "react-native": ">=0.80"
+    "react-native": ">=0.87"
   },
   "devDependencies": {
+    "@react-native/codegen": "0.87.1",
     "@types/node": "^20.0.0",
     "@types/react": "^19.1.1",
     "react": "^19.2.3",

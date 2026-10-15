@@ -38,6 +38,7 @@ import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -50,6 +51,18 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
     private val contexts = ConcurrentHashMap<Int, KilnContext>()
     private val stopped = ConcurrentHashMap.newKeySet<Int>()
     private val ids = AtomicInteger(0)
+    // invalidate() sets this under the lock; a model or context finished after that is freed
+    // at once instead of being added to a registry nobody will clear
+    private val registryLock = Any()
+    private var invalidated = false
+
+    private fun <T : AutoCloseable> register(map: ConcurrentHashMap<Int, T>, value: T): Int = synchronized(registryLock) {
+        if (invalidated) {
+            runCatching { value.close() }
+            throw IllegalStateException("kiln was shut down (the app is reloading)")
+        }
+        ids.incrementAndGet().also { map[it] = value }
+    }
     private val worker: ExecutorService = Executors.newCachedThreadPool { r -> Thread(r, "kiln-worker").apply { isDaemon = true } }
 
     /** Runs [block] off the JS thread and settles [promise] with its result or error. */
@@ -95,8 +108,7 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
         run(promise) {
             val b = Backend.entries.firstOrNull { it.name.equals(backend, ignoreCase = true) } ?: Backend.AUTO
             val m = KilnModel.load(path, ModelParams(backend = b, nGpuLayers = nGpuLayers.toInt(), nThreads = nThreads.toInt(), useMmap = useMmap))
-            val id = ids.incrementAndGet()
-            models[id] = m
+            val id = register(models, m)
             val i = m.info
             Arguments.createMap().apply {
                 putInt("handle", id)
@@ -139,9 +151,7 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
 
     override fun newContext(model: Double, nCtx: Double, nBatch: Double, flashAttn: Boolean, promise: Promise) = run(promise) {
         val c = model(model).newContext(ContextParams(nCtx.toInt(), nBatch.toInt(), flashAttn))
-        val id = ids.incrementAndGet()
-        contexts[id] = c
-        id
+        register(contexts, c)
     }
 
     override fun freeContext(context: Double, promise: Promise) = run(promise) {
@@ -272,12 +282,16 @@ class KilnModule(context: ReactApplicationContext) : NativeKilnSpec(context) {
 
     /** The app is going away (or reloading): stop running calls and free everything. */
     override fun invalidate() {
+        synchronized(registryLock) { invalidated = true }
+        // stop what runs, let the worker finish its calls, then free: a call still running
+        // would otherwise use a freed model or context
         contexts.values.forEach { it.cancel() }
+        worker.shutdown()
+        if (!worker.awaitTermination(10, TimeUnit.SECONDS)) worker.shutdownNow()
         contexts.values.forEach { runCatching { it.close() } }
         contexts.clear()
         models.values.forEach { runCatching { it.close() } }
         models.clear()
-        worker.shutdown()
         super.invalidate()
     }
 }

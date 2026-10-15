@@ -22,10 +22,11 @@
 - **React Native module** in `react-native/` (Android): a TurboModule (`src/NativeKiln.ts`) whose
   Kotlin side calls the Kotlin library above, and a TypeScript API (`Kiln.loadModel`, `KilnModel`,
   `KilnContext` with `chat` streaming to `onPiece`, `AbortSignal` cancelling, `transcribe`,
-  `embed`, `decide`, `speak` to a wav file). Checked on the Linux desktop without an Android SDK:
-  React Native 0.87.1's codegen accepts the spec, the Kotlin module compiles against `react-android`
-  0.87.1 and Android API 36, and 7 tests of the JS layer pass against a fake native module. **Not
-  run in an app yet**; builds only inside this repository (not on npm).
+  `embed`, `decide`, `speak` to a wav file). A new React Native 0.87.1 app with this package added
+  by path ran on the Pixel 8 (Android 17): chat, cache reuse, stop, abort, Parakeet speech to text
+  and Pocket TTS text to speech all worked; the app needs a Metro setting for the linked folder
+  (in `react-native/README.md`). 9 tests of the JS layer pass against a fake native module.
+  Builds only inside this repository (not on npm).
 
 ## 0.5.0
 

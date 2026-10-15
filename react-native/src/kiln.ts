@@ -98,7 +98,10 @@ export interface Reply {
 export interface StreamOptions {
   /** Each piece as it is written. Return false to stop: the call then resolves with stoppedByUser. */
   onPiece?: (piece: Piece) => boolean | void;
-  /** Aborting rejects the call with code "CANCELLED". */
+  /**
+   * Aborting rejects the call with code "CANCELLED". It stops this request only, at its next
+   * piece (or before it starts); other calls on the same context are not touched.
+   */
   signal?: AbortSignal;
 }
 
@@ -165,6 +168,10 @@ export interface SpeakOptions {
 /** The error a kiln call rejects with: `code` is kiln's status ("MODEL_LOAD", "CANCELLED", ...). */
 export interface KilnError extends Error {
   code: string;
+}
+
+function cancelledError(): KilnError {
+  return Object.assign(new Error('cancelled'), { code: 'CANCELLED' });
 }
 
 export function isCancelled(e: unknown): boolean {
@@ -316,7 +323,10 @@ export class KilnContext {
     reply: { answer: string; reasoning: string },
     call: (id: number) => Promise<T>,
   ): Promise<T> {
+    // An abort stops this request only (by its id), never another call on the same context.
+    if (opts.signal?.aborted) throw cancelledError();
     let stopped = false;
+    let aborted = false;
     const req = this.lib.begin((e) => {
       const piece: Piece = { channel: e.channel === 'reasoning' ? 'reasoning' : 'answer', text: e.text, tokenId: e.tokenId };
       if (piece.channel === 'answer') reply.answer += piece.text;
@@ -326,11 +336,15 @@ export class KilnContext {
         this.lib.raw.stop(req.id);
       }
     });
-    const onAbort = () => this.cancel();
+    const onAbort = () => {
+      aborted = true;
+      this.lib.raw.stop(req.id);
+    };
     opts.signal?.addEventListener('abort', onAbort);
     try {
-      if (opts.signal?.aborted) this.cancel();
-      return await call(req.id);
+      const result = await call(req.id);
+      if (aborted) throw cancelledError();
+      return result;
     } finally {
       opts.signal?.removeEventListener('abort', onAbort);
       req.end();

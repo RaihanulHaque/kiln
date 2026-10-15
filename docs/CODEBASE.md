@@ -54,7 +54,7 @@ react-native/
     src/NativeKiln.ts               TurboModule spec (codegen input); src/kiln.ts the TS API, testable with a fake native module
     android/build.gradle            compiles ../android/kiln's Kotlin sources and JNI glue into the RN module
     android/src/main/java/dev/kiln/reactnative/   KilnModule.kt (handles by number, background threads, piece events), KilnPackage.kt
-    test/kiln.test.ts               the JS layer against a fake native module (node --test)
+    test/kiln.test.ts               the JS layer against a fake native module (`npm test` compiles it, then runs node --test)
 scripts/
     fetch_models.sh                 download the six test GGUFs into models/; --media and --speech add the encoders and the speech model
     android-run.sh, android-test.sh push the CLI / C tests to a phone over adb

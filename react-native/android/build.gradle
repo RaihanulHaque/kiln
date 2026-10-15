@@ -11,7 +11,9 @@ if (project.findProperty("android.builtInKotlin")?.toString() == "false") {
 }
 apply plugin: "com.facebook.react"   // runs codegen on src/NativeKiln.ts (codegenConfig in package.json)
 
-def kilnAndroid = file("../../android/kiln")
+// npm installs a package by path as a symlink in node_modules: resolve it to the real folder,
+// or ../../android would point into the app's node_modules
+def kilnAndroid = new File(projectDir.canonicalFile, "../../android/kiln").canonicalFile
 if (!new File(kilnAndroid, "src/main/cpp/kiln_jni.cpp").exists()) {
     throw new GradleException("kiln-react-native: ${kilnAndroid} not found. This package builds inside the kiln repository for now.")
 }
