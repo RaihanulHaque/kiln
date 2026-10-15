@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "outDir": "build-test", "rootDir": ".", "declaration": false, "types": ["node"] },
+  "include": ["src/kiln.ts", "test"]
+}
