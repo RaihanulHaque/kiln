@@ -11,6 +11,13 @@
   on both, and on Linux the decision and embedding numbers match `kiln-cli`. Building libkiln
   from Cargo stops with a message on Android and Windows, where it was not tried. Not on
   crates.io yet.
+- **Kotlin / Android library** in `android/`: one `libkiln_jni.so` (JNI glue with the core linked in
+  statically, c++_static) and a Kotlin API (`KilnModel`, `KilnContext`, `chatFlow` as a coroutine
+  Flow, `KilnException`). Strings cross JNI as UTF-8 byte arrays, not `jstring`. No change to the
+  C ABI. The Kotlin code and the glue were run on the desktop JVM against a desktop build of the
+  same `.so` (Ryzen 5 8500G, 2026-10-15): 12 tests pass, also under `-Xcheck:jni`, which found a
+  JNI call made after a callback threw (fixed). The Gradle / NDK build of the `.aar` and a run on
+  a phone are **not done yet**.
 
 ## 0.5.0
 
