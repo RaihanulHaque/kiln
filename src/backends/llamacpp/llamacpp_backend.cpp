@@ -150,12 +150,19 @@ public:
         if (n >= n_ctx)
             return done(kiln::set_error(KILN_ERR_CONTEXT_FULL, "prompt (" + std::to_string(n) + " tok) does not fit in context (" + std::to_string(n_ctx) + ")"));
 
-        // ---- where to checkpoint (hybrid / recurrent models only): the end of the stable prefix
-        size_t ckpt_at = 0;
-        if (partial_state_ && !in.stable_prefix.empty()) {
-            std::vector<llama_token> pre(in.stable_prefix.size() + 8);
-            int np = llama_tokenize(vocab_, in.stable_prefix.c_str(), (int)in.stable_prefix.size(), pre.data(), (int)pre.size(), true, true);
-            while (np > 0 && ckpt_at < (size_t)np && ckpt_at + 1 < toks.size() && pre[ckpt_at] == toks[ckpt_at]) ++ckpt_at;
+        // ---- where to checkpoint (hybrid / recurrent models only): the end of the system prompt
+        // (reused when only the user message changes) and the end of the stable prefix (reused
+        // by the next turn of a conversation)
+        std::vector<size_t> ckpt_at;
+        if (partial_state_) {
+            for (const std::string* prefix : {&in.system_prefix, &in.stable_prefix}) {
+                if (prefix->empty()) continue;
+                std::vector<llama_token> pre(prefix->size() + 8);
+                int np = llama_tokenize(vocab_, prefix->c_str(), (int)prefix->size(), pre.data(), (int)pre.size(), true, true);
+                size_t k = 0;
+                while (np > 0 && k < (size_t)np && k + 1 < toks.size() && pre[k] == toks[k]) ++k;
+                if (k > 0 && (ckpt_at.empty() || k > ckpt_at.back())) ckpt_at.push_back(k);
+            }
         }
 
         // ---- prefix reuse: keep what the KV cache already has, drop the rest
@@ -194,7 +201,8 @@ public:
         auto t0 = clock_t_::now();
         for (int i = (int)common; i < n; ) {
             int cnt = std::min(n_batch_, n - i);
-            if (i < (int)ckpt_at) cnt = std::min(cnt, (int)ckpt_at - i);   // end a batch exactly at the checkpoint
+            for (size_t c : ckpt_at)   // end a batch exactly at each checkpoint
+                if (i < (int)c) { cnt = std::min(cnt, (int)c - i); break; }
             if (cancel_.load()) { st.stopped_by_user = true; return done(KILN_ERR_CANCELLED); }
             int rc = llama_decode(ctx_, llama_batch_get_one(toks.data() + i, cnt));
             if (rc == 2) { st.stopped_by_user = true; return done(KILN_ERR_CANCELLED); }
@@ -202,7 +210,8 @@ public:
             i += cnt;
             n_past += cnt;
             cache_.insert(cache_.end(), toks.begin() + i - cnt, toks.begin() + i);
-            if (i == (int)ckpt_at) save_checkpoint(ckpt_at);
+            for (size_t c : ckpt_at)
+                if (i == (int)c) save_checkpoint(c);
         }
         st.prompt_ms = ms_since(t0);
 
@@ -485,7 +494,7 @@ private:
     // Saved recurrent state of a hybrid / recurrent model after its first n_tokens cache tokens.
     // Only the part seq_rm cannot rewind is stored (PARTIAL_ONLY); attention KV is truncated instead.
     struct Checkpoint { size_t n_tokens; std::vector<uint8_t> data; };
-    static constexpr size_t kMaxCheckpoints = 2;   // latest turn, plus one back for an edited last message
+    static constexpr size_t kMaxCheckpoints = 3;   // system prompt, latest turn, one back for an edited last message
 
     void save_checkpoint(size_t n_tokens) {
         if (!ckpts_.empty() && ckpts_.back().n_tokens == n_tokens) return;
@@ -600,6 +609,28 @@ public:
                 in.add_generation_prompt = false;
                 auto h = common_chat_templates_apply(tmpls_.get(), in);
                 if (p.prompt.compare(0, h.prompt.size(), h.prompt) == 0) out.stable_prefix = h.prompt;
+            }
+            // The system prefix: render the same system message(s) with a different user message
+            // and keep what both renders share. Rendering the system message alone is not an
+            // option, because some templates (Qwen3.5) refuse a conversation with no user turn.
+            size_t n_sys = 0;
+            while (n_sys < in.messages.size() && in.messages[n_sys].role == "system") ++n_sys;
+            if (n_sys > 0 && n_sys < in.messages.size()) {
+                common_chat_templates_inputs alt;
+                alt.messages.assign(in.messages.begin(), in.messages.begin() + n_sys);
+                common_chat_msg u; u.role = "user"; u.content = "\x01";
+                alt.messages.push_back(std::move(u));
+                alt.add_generation_prompt = false;
+                alt.enable_thinking = in.enable_thinking;
+                alt.reasoning_format = in.reasoning_format;
+                try {
+                    const std::string a = common_chat_templates_apply(tmpls_.get(), alt).prompt;
+                    size_t k = 0;
+                    while (k < a.size() && k < p.prompt.size() && a[k] == p.prompt[k]) ++k;
+                    if (k < out.stable_prefix.size() || out.stable_prefix.empty()) out.system_prefix = p.prompt.substr(0, k);
+                } catch (const std::exception&) {
+                    // no system prefix; the stable prefix still works for multi-turn chat
+                }
             }
             out.starts_in_reasoning = in.enable_thinking && !tags_.start.empty()
                                    && rtrim(p.prompt).size() >= tags_.start.size()

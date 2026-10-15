@@ -182,6 +182,36 @@ fn cancel_from_another_thread_and_panics() {
     handle.cancel();
 }
 
+// The same system prompt with a new question each time (extraction, classification): kiln
+// keeps the system prompt, also on a hybrid model like Qwen3.5, which needs a checkpoint for it.
+#[test]
+fn system_prompt_is_reused_on_a_hybrid_model() {
+    let Some(path) = model_path("Qwen3.5-0.8B-Q4_K_M.gguf") else {
+        return;
+    };
+    let _g = serial();
+    let model = Model::load(&path, &ModelParams::default()).unwrap();
+    let mut ctx = model.context(&ContextParams::default()).unwrap();
+    let sys = "You are a terse geography assistant. Answer with the city name only, one word.";
+    let s = Sampling {
+        max_tokens: 16,
+        ..Sampling::greedy()
+    };
+    let ask = |ctx: &mut Context, q: &str| {
+        ctx.chat_collect(&[Message::system(sys), Message::user(q)], &ChatOptions::default(), &s)
+            .unwrap()
+    };
+    ask(&mut ctx, "What is the capital of France?");
+    let r = ask(&mut ctx, "What is the capital of Italy?");
+    eprintln!(
+        "system reuse: {:?} (cached {} of {})",
+        r.answer, r.stats.cached_tokens, r.stats.prompt_tokens
+    );
+    assert!(r.stats.cached_tokens >= 15, "{:?}", r.stats);
+    assert!(r.stats.cached_tokens < r.stats.prompt_tokens);
+    assert!(r.answer.contains("Rome"), "{:?}", r.answer);
+}
+
 #[test]
 fn thinking_goes_to_its_own_channel() {
     let Some(path) = model_path("Qwen3.5-0.8B-Q4_K_M.gguf") else {

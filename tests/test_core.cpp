@@ -243,6 +243,21 @@ static void test_model(const std::string& path, const char* label, bool expect_t
     s = kiln_chat(c, t1, 1, &co, &sp, Capture::cb, &cap5, &st5);
     CHECK(s == KILN_OK && st5.cached_tokens == 0 && !cap5.answer.empty(), "after reset: %s", kiln_last_error());
 
+    // same system prompt, a new user message each time (extraction, classification): the system
+    // prompt is reused, on hybrid models too, where it needs its own checkpoint
+    {
+        const char* sys = "You are a terse geography assistant. Answer with the city name only, one word.";
+        kiln_chat_message qa[] = { {"system", sys}, {"user", "What is the capital of France?"} };
+        kiln_chat_message qb[] = { {"system", sys}, {"user", "What is the capital of Italy?"} };
+        Capture ca, cb; kiln_gen_stats sa, sb;
+        CHECK(kiln_chat(c, qa, 2, &co, &sp, Capture::cb, &ca, &sa) == KILN_OK, "%s", kiln_last_error());
+        CHECK(kiln_chat(c, qb, 2, &co, &sp, Capture::cb, &cb, &sb) == KILN_OK, "%s", kiln_last_error());
+        fprintf(stderr, "  system reuse: '%s' (prompt %d, cached %d)\n", cb.answer.c_str(), sb.prompt_tokens, sb.cached_tokens);
+        CHECK(sb.cached_tokens >= 15, "system prompt not reused: cached=%d of %d", sb.cached_tokens, sb.prompt_tokens);
+        CHECK(sb.cached_tokens < sb.prompt_tokens, "");
+        CHECK(cb.answer.find("Rome") != std::string::npos, "answer='%s'", cb.answer.c_str());
+    }
+
     // thinking on
     if (expect_thinking) {
         Capture cap6; kiln_gen_stats st6;

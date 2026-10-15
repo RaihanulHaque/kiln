@@ -341,6 +341,37 @@ void main() {
         await m.dispose();
       }
     }, timeout: const Timeout(Duration(minutes: 5)));
+
+    // The same system prompt with a new question each time (extraction, classification): kiln
+    // keeps the system prompt, also on a hybrid model like Qwen3.5, which needs a checkpoint for it.
+    test('the system prompt is reused when only the question changes', () async {
+      final f = await fetch(qwen, speedModels[qwen]!);
+      final m = await kiln.loadModel(f.path);
+      final ctx = await m.createContext();
+      try {
+        const sys = 'You are a terse geography assistant. Answer with the city name only, one word.';
+        Future<(String, KilnGenStats)> ask(String q) async {
+          final gen = ctx.chat([const KilnChatMessage.system(sys), KilnChatMessage.user(q)],
+              sampling: const KilnSamplingParams(temperature: 0, maxTokens: 16, repeatPenalty: 1.0));
+          final answer = StringBuffer();
+          await for (final p in gen.pieces) {
+            if (!p.isReasoning) answer.write(p.text);
+          }
+          return (answer.toString(), await gen.stats);
+        }
+
+        await ask('What is the capital of France?');
+        final (answer, st) = await ask('What is the capital of Italy?');
+        // ignore: avoid_print
+        print('system reuse: "$answer" (cached ${st.cachedTokens} of ${st.promptTokens})');
+        expect(st.cachedTokens, greaterThanOrEqualTo(15));
+        expect(st.cachedTokens, lessThan(st.promptTokens));
+        expect(answer, contains('Rome'));
+      } finally {
+        await ctx.dispose();
+        await m.dispose();
+      }
+    }, timeout: const Timeout(Duration(minutes: 5)));
   });
 
   group('d1-omni decision model', () {

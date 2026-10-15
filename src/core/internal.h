@@ -19,6 +19,11 @@ struct RenderedPrompt {
     // without the assistant prefix. Empty if unknown (raw kiln_generate). Hybrid models save
     // their state here, because templates often rewrite the assistant reply that follows.
     std::string stable_prefix;
+    // Leading part of `prompt` that stays the same when only the last user message changes:
+    // the system message(s) and the opening of the user turn. Lets an app that sends the same
+    // system prompt with a new user message each time (extraction, classification) reuse it on
+    // hybrid models too. Empty when there is no leading system message.
+    std::string system_prefix;
     int32_t     max_reasoning_tokens = 0;      // thinking budget; <= 0 = unlimited
 };
 
