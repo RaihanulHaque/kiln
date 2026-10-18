@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Flutter on Android: phones without the dot-product instruction no longer crash.** The
+  plugin's `libkiln.so` is built for `armv8.2-a+dotprod+fp16`, so a phone whose processor is
+  plain Armv8.0 (Snapdragon 680, the OPPO CPH2819 in testing) died with SIGILL on the first
+  matrix multiply, about 14 s after start. The plugin now also builds `libkiln_armv8.so` with
+  the plain `armv8-a` baseline, and `native.dart` loads it when `/proc/cpuinfo` lacks
+  `asimddp`, `asimdhp` or `fphp`. Phones with those flags load the same library as before.
+  Verified on an OPPO CPH2819 (Snapdragon 680, 3.76 GB RAM): the CLI loads the Hishab Qwen3.5
+  0.8B Q4_K_M and generates at about 10 tok/s; the example app and the Hishab app (built from
+  hishab-offline against this plugin) load `libkiln_armv8.so` and answer. Not yet verified: the
+  fast `libkiln.so` on a Pixel 8 or S26 after this change, and Kotlin and Rust bindings (still
+  baseline only).
 - **Hybrid models reuse the system prompt.** An app that sends the same system prompt with a
   new user message each time (extraction, classification) got no reuse on Qwen3.5 and LFM2:
   their only checkpoint sat at the end of the whole history. kiln now also checkpoints after
