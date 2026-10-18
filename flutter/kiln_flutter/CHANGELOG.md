@@ -1,5 +1,11 @@
-## Unreleased
+## 0.5.1
 
+- **Phones without the dot-product instruction no longer crash.** The plugin now also ships
+  `libkiln_armv8.so`, built for plain Armv8.0 (`armv8-a`). `native.dart` loads it when
+  `/proc/cpuinfo` lacks `asimddp`, `asimdhp` or `fphp`; other phones load `libkiln.so` as
+  before. Verified on an OPPO CPH2819 (Snapdragon 680, 3.76 GB RAM): the example app and the
+  Hishab app load `libkiln_armv8.so` and answer. Not yet verified: `libkiln.so` on a Pixel 8 or
+  S26 with this version.
 - `cancel()` on a generation, transcription or speech now also stops it when it is called
   before the worker isolate has started the call (right after `chat()`, for example). Such a
   cancel used to be lost and the call ran to the end. Each call has a cancel flag in native
