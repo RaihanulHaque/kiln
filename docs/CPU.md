@@ -65,7 +65,9 @@ device has, unless runtime dispatch is on.
   gains are small today.
 
 kiln's Android build baseline is `armv8.2-a+dotprod+fp16`, chosen so one `.so` runs on
-everything. The Pixel 8 has i8mm and SVE and does not use them. Fix: build the CPU backend
+nearly everything. The Flutter plugin also ships `libkiln_armv8.so` (plain `armv8-a`) for the
+phones that lack dotprod or fp16, and `native.dart` picks one from `/proc/cpuinfo`; the Kotlin
+and Rust bindings have no fallback yet. The Pixel 8 has i8mm and SVE and does not use them. Fix: build the CPU backend
 with `GGML_CPU_ALL_VARIANTS` (ggml compiles several kernel sets and picks at runtime from
 `getauxval(AT_HWCAP)`), at the cost of a larger `.so`. On the roadmap; expect 10 to 25% on
 Q8 kernels on i8mm cores, less on Q4_K.

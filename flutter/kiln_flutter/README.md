@@ -168,7 +168,7 @@ Or `await s.wav` for the whole utterance as wav bytes. On a Pixel 8 a 3-second s
 
 | platform | native | verified |
 |---|---|---|
-| Android arm64 | `libkiln.so` built by Gradle + CMake from this repo | Pixel 8: 26 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1) (0.5.0); Galaxy S26 Ultra: 26 of 26 at 0.3.1 |
+| Android arm64 | `libkiln.so` built by Gradle + CMake from this repo; `libkiln_armv8.so` is loaded instead on phones without dot product (Armv8.0) | Pixel 8: 26 integration tests (4 skipped: the speed and media groups, which passed at 0.3.1) (0.5.0); Galaxy S26 Ultra: 26 of 26 at 0.3.1 |
 | iOS 15+ | not in the pub.dev package; from a clone, `kiln.xcframework` via `scripts/build_ios.sh`, Metal | **In progress, not supported yet.** iPhone 16 Pro at v0.1.0: 7 of 9 integration tests; not re-run for v0.2.0 |
 
 Desktop (macOS/Linux) works for development by passing a host build:
