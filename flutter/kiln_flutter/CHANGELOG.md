@@ -1,3 +1,8 @@
+## 0.5.2
+
+- Shorter package description (pub.dev asks for 60 to 180 characters) and `dart format` on
+  the library and example. No change to the code's behaviour.
+
 ## 0.5.1
 
 - **Phones without the dot-product instruction no longer crash.** The plugin now also ships

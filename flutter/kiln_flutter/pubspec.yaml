@@ -1,6 +1,6 @@
 name: kiln_flutter
-description: "On-device AI runtime for Flutter on Android: chat, decision, embedding, speech-to-text and text-to-speech models (GGUF, Whisper, Parakeet, Pocket TTS), with honest stats about what actually ran."
-version: 0.5.1
+description: "On-device AI for Flutter on Android: chat, decision, embedding, speech-to-text and text-to-speech models, with honest stats."
+version: 0.5.2
 repository: https://github.com/RaihanulHaque/kiln
 issue_tracker: https://github.com/RaihanulHaque/kiln/issues
 topics: [llm, on-device, llama-cpp, ffi, android]

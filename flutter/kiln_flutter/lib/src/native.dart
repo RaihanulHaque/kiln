@@ -22,12 +22,16 @@ class KilnNative {
     final override = libraryPathOverride;
     if (override != null) return DynamicLibrary.open(override);
     if (Platform.isAndroid) {
-      return DynamicLibrary.open(_androidHasArmv82() ? 'libkiln.so' : 'libkiln_armv8.so');
+      return DynamicLibrary.open(
+        _androidHasArmv82() ? 'libkiln.so' : 'libkiln_armv8.so',
+      );
     }
     if (Platform.isMacOS) return DynamicLibrary.open('libkiln.dylib');
     if (Platform.isLinux) return DynamicLibrary.open('libkiln.so');
     if (Platform.isIOS) return DynamicLibrary.process();
-    throw UnsupportedError('kiln: unsupported platform ${Platform.operatingSystem}');
+    throw UnsupportedError(
+      'kiln: unsupported platform ${Platform.operatingSystem}',
+    );
   }
 
   /// True when the CPU has what `armv8.2-a+dotprod+fp16` needs: the dot product
@@ -37,7 +41,10 @@ class KilnNative {
   static bool _androidHasArmv82() {
     try {
       final cpuinfo = File('/proc/cpuinfo').readAsStringSync();
-      final line = RegExp(r'^Features\s*:(.*)$', multiLine: true).firstMatch(cpuinfo);
+      final line = RegExp(
+        r'^Features\s*:(.*)$',
+        multiLine: true,
+      ).firstMatch(cpuinfo);
       if (line == null) return false;
       final flags = line.group(1)!.split(RegExp(r'\s+')).toSet();
       return flags.containsAll(const ['asimddp', 'asimdhp', 'fphp']);

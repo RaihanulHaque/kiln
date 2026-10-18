@@ -12,7 +12,9 @@ import 'native.dart';
 import 'types.dart';
 
 const bool _trace = bool.fromEnvironment('KILN_TRACE');
-void _t(String m) { if (_trace) print('[kiln-worker] $m'); } // ignore: avoid_print
+void _t(String m) {
+  if (_trace) print('[kiln-worker] $m'); // ignore: avoid_print
+}
 
 class _Req {
   _Req(this.id, this.op, this.args, [this.stream]);
@@ -33,7 +35,10 @@ class KilnWorker {
 
   static Future<KilnWorker> spawn(String? libraryPath) async {
     final rx = ReceivePort();
-    final isolate = await Isolate.spawn(_main, [rx.sendPort, libraryPath], debugName: 'kiln-worker');
+    final isolate = await Isolate.spawn(_main, [
+      rx.sendPort,
+      libraryPath,
+    ], debugName: 'kiln-worker');
     final send = await rx.first as SendPort;
     final w = KilnWorker._(isolate, send);
     w._rx = ReceivePort();
@@ -48,7 +53,9 @@ class KilnWorker {
     final c = _pending.remove(id);
     if (c == null) return;
     if (m[1] == 'err') {
-      c.completeError(KilnException(b.kiln_status.fromValue(m[2] as int), m[3] as String));
+      c.completeError(
+        KilnException(b.kiln_status.fromValue(m[2] as int), m[3] as String),
+      );
     } else {
       c.complete(m[2]);
     }
@@ -78,7 +85,10 @@ class KilnWorker {
     final k = KilnNative.bindings;
 
     rx.listen((msg) {
-      if (msg is SendPort) { reply = msg; return; }
+      if (msg is SendPort) {
+        reply = msg;
+        return;
+      }
       final req = msg as _Req;
       _t('recv #${req.id} ${req.op}');
       try {
@@ -88,7 +98,12 @@ class KilnWorker {
       } on KilnException catch (e) {
         reply!.send([req.id, 'err', e.status.value, e.message]);
       } catch (e) {
-        reply!.send([req.id, 'err', b.kiln_status.KILN_ERR_INTERNAL.value, e.toString()]);
+        reply!.send([
+          req.id,
+          'err',
+          b.kiln_status.KILN_ERR_INTERNAL.value,
+          e.toString(),
+        ]);
       }
     });
   }
@@ -104,7 +119,9 @@ class KilnWorker {
           final s = k.kiln_probe_device(d);
           if (s != b.kiln_status.KILN_OK) _fail(k, s);
           return KilnDeviceInfo.fromNative(d.ref).toMap();
-        } finally { calloc.free(d); }
+        } finally {
+          calloc.free(d);
+        }
 
       case 'load':
         final p = KilnModelParams.fromMap(r.args['params'] as Map);
@@ -123,9 +140,18 @@ class KilnWorker {
           final info = calloc<b.kiln_model_info>();
           try {
             k.kiln_model_get_info(out.value, info);
-            return {'handle': out.value.address, 'info': KilnModelInfo.fromNative(info.ref).toMap()};
-          } finally { calloc.free(info); }
-        } finally { calloc.free(path); calloc.free(mp); calloc.free(out); }
+            return {
+              'handle': out.value.address,
+              'info': KilnModelInfo.fromNative(info.ref).toMap(),
+            };
+          } finally {
+            calloc.free(info);
+          }
+        } finally {
+          calloc.free(path);
+          calloc.free(mp);
+          calloc.free(out);
+        }
 
       case 'freeModel':
         k.kiln_model_free(Pointer.fromAddress(r.args['handle'] as int));
@@ -140,17 +166,26 @@ class KilnWorker {
           cp.ref.n_ctx = p.nCtx;
           cp.ref.n_batch = p.nBatch;
           cp.ref.flash_attn = p.flashAttn;
-          final s = k.kiln_context_create(Pointer.fromAddress(r.args['model'] as int), cp, out);
+          final s = k.kiln_context_create(
+            Pointer.fromAddress(r.args['model'] as int),
+            cp,
+            out,
+          );
           if (s != b.kiln_status.KILN_OK) _fail(k, s);
           return out.value.address;
-        } finally { calloc.free(cp); calloc.free(out); }
+        } finally {
+          calloc.free(cp);
+          calloc.free(out);
+        }
 
       case 'freeContext':
         k.kiln_context_free(Pointer.fromAddress(r.args['handle'] as int));
         return null;
 
       case 'reset':
-        final s = k.kiln_context_reset(Pointer.fromAddress(r.args['handle'] as int));
+        final s = k.kiln_context_reset(
+          Pointer.fromAddress(r.args['handle'] as int),
+        );
         if (s != b.kiln_status.KILN_OK) _fail(k, s);
         return null;
 
@@ -175,17 +210,24 @@ class KilnWorker {
       case 'speak':
         return _speak(k, r);
     }
-    throw KilnException(b.kiln_status.KILN_ERR_INVALID_ARG, 'unknown op ${r.op}');
+    throw KilnException(
+      b.kiln_status.KILN_ERR_INVALID_ARG,
+      'unknown op ${r.op}',
+    );
   }
 
-  static (Pointer<b.kiln_chat_message>, List<Pointer<Utf8>>) _marshalMessages(List msgs) {
+  static (Pointer<b.kiln_chat_message>, List<Pointer<Utf8>>) _marshalMessages(
+    List msgs,
+  ) {
     final arr = calloc<b.kiln_chat_message>(msgs.length);
     final strings = <Pointer<Utf8>>[];
     for (var i = 0; i < msgs.length; i++) {
       final m = KilnChatMessage.fromMap(msgs[i] as Map);
       final role = m.role.toNativeUtf8();
       final content = m.content.toNativeUtf8();
-      strings..add(role)..add(content);
+      strings
+        ..add(role)
+        ..add(content);
       arr[i].role = role.cast();
       arr[i].content = content.cast();
     }
@@ -201,16 +243,38 @@ class KilnWorker {
       opts.ref.add_assistant_prefix = r.args['addAssistantPrefix'] as bool;
       opts.ref.enable_thinking = r.args['enableThinking'] as bool;
       final model = Pointer<b.kiln_model>.fromAddress(r.args['model'] as int);
-      var need = k.kiln_apply_chat_template(model, arr, msgs.length, opts, nullptr, 0);
+      var need = k.kiln_apply_chat_template(
+        model,
+        arr,
+        msgs.length,
+        opts,
+        nullptr,
+        0,
+      );
       if (need < 0) need = -need;
       final buf = calloc<Char>(need + 1);
       try {
-        final n = k.kiln_apply_chat_template(model, arr, msgs.length, opts, buf, need + 1);
-        if (n < 0) throw KilnException(b.kiln_status.KILN_ERR_BACKEND, cStr(k.kiln_last_error()));
+        final n = k.kiln_apply_chat_template(
+          model,
+          arr,
+          msgs.length,
+          opts,
+          buf,
+          need + 1,
+        );
+        if (n < 0) {
+          throw KilnException(
+            b.kiln_status.KILN_ERR_BACKEND,
+            cStr(k.kiln_last_error()),
+          );
+        }
         return buf.cast<Utf8>().toDartString(length: n);
-      } finally { calloc.free(buf); }
+      } finally {
+        calloc.free(buf);
+      }
     } finally {
-      calloc.free(arr); calloc.free(opts);
+      calloc.free(arr);
+      calloc.free(opts);
       for (final s in strings) {
         calloc.free(s);
       }
@@ -235,13 +299,15 @@ class KilnWorker {
 
     // Called synchronously from kiln_chat on this isolate's thread. Pieces go to the
     // main isolate; cancellation comes back via kiln_cancel, which is thread-safe.
-    final cb = NativeCallable<b.kiln_token_cbFunction>.isolateLocal(
-      (int ch, Pointer<Char> piece, int tok, Pointer<Void> user) {
-        stream.send([ch, piece.cast<Utf8>().toDartString()]);
-        return !_cancelled(r);
-      },
-      exceptionalReturn: false,
-    );
+    final cb = NativeCallable<b.kiln_token_cbFunction>.isolateLocal((
+      int ch,
+      Pointer<Char> piece,
+      int tok,
+      Pointer<Void> user,
+    ) {
+      stream.send([ch, piece.cast<Utf8>().toDartString()]);
+      return !_cancelled(r);
+    }, exceptionalReturn: false);
     try {
       opts.ref = k.kiln_chat_options_default();
       opts.ref.enable_thinking = r.args['enableThinking'] as bool;
@@ -259,17 +325,34 @@ class KilnWorker {
       final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
       if (_cancelled(r)) {
         st.ref.stopped_by_user = true;
-        return {'status': b.kiln_status.KILN_ERR_CANCELLED.value, 'stats': KilnGenStats.fromNative(st.ref).toMap()};
+        return {
+          'status': b.kiln_status.KILN_ERR_CANCELLED.value,
+          'stats': KilnGenStats.fromNative(st.ref).toMap(),
+        };
       }
       _t('kiln_chat enter');
-      final s = k.kiln_chat(ctx, arr, msgs.length, opts, sp, cb.nativeFunction, nullptr, st);
+      final s = k.kiln_chat(
+        ctx,
+        arr,
+        msgs.length,
+        opts,
+        sp,
+        cb.nativeFunction,
+        nullptr,
+        st,
+      );
       _t('kiln_chat exit status=${s.name}');
       final stats = KilnGenStats.fromNative(st.ref).toMap();
-      if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) _fail(k, s);
+      if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) {
+        _fail(k, s);
+      }
       return {'status': s.value, 'stats': stats};
     } finally {
       cb.close();
-      calloc.free(arr); calloc.free(opts); calloc.free(sp); calloc.free(st);
+      calloc.free(arr);
+      calloc.free(opts);
+      calloc.free(sp);
+      calloc.free(st);
       for (final x in strings) {
         calloc.free(x);
       }
@@ -313,7 +396,9 @@ class KilnWorker {
         keys: switch (q.type) {
           KilnQuestionType.yesNo => const ['no', 'yes'],
           KilnQuestionType.choice => [for (final o in q.options) o.key],
-          KilnQuestionType.score => [for (final o in q.options) o.description ?? o.key],
+          KilnQuestionType.score => [
+            for (final o in q.options) o.description ?? o.key,
+          ],
         },
         best: a.best,
         value: a.value,
@@ -323,7 +408,9 @@ class KilnWorker {
       ).toMap();
     } finally {
       if (opts != nullptr) calloc.free(opts);
-      calloc.free(cq); calloc.free(probs); calloc.free(ans);
+      calloc.free(cq);
+      calloc.free(probs);
+      calloc.free(ans);
       for (final x in strings) {
         calloc.free(x);
       }
@@ -337,15 +424,30 @@ class KilnWorker {
     try {
       pp.ref = k.kiln_projector_params_default();
       pp.ref.image_max_tokens = r.args['imageMaxTokens'] as int;
-      final s = k.kiln_model_load_projector(Pointer.fromAddress(r.args['model'] as int), path.cast(), pp, info);
+      final s = k.kiln_model_load_projector(
+        Pointer.fromAddress(r.args['model'] as int),
+        path.cast(),
+        pp,
+        info,
+      );
       if (s != b.kiln_status.KILN_OK) _fail(k, s);
-      return KilnProjectorInfo(supportsImages: info.ref.supports_images, supportsAudio: info.ref.supports_audio,
-          generatesAudio: info.ref.generates_audio, sampleRate: info.ref.sample_rate).toMap();
-    } finally { calloc.free(path); calloc.free(pp); calloc.free(info); }
+      return KilnProjectorInfo(
+        supportsImages: info.ref.supports_images,
+        supportsAudio: info.ref.supports_audio,
+        generatesAudio: info.ref.generates_audio,
+        sampleRate: info.ref.sample_rate,
+      ).toMap();
+    } finally {
+      calloc.free(path);
+      calloc.free(pp);
+      calloc.free(info);
+    }
   }
 
   static Map<String, Object?> _speak(b.KilnBindings k, _Req r) {
-    final voice = r.args['voice'] == null ? null : KilnMedia.fromMap(r.args['voice'] as Map);
+    final voice = r.args['voice'] == null
+        ? null
+        : KilnMedia.fromMap(r.args['voice'] as Map);
     final stream = r.stream!;
     final frees = <Pointer>[];
     Pointer<Char> str(String? s) {
@@ -356,13 +458,15 @@ class KilnWorker {
     }
 
     // each piece of audio is copied out of native memory and sent to the main isolate
-    final cb = NativeCallable<b.kiln_audio_cbFunction>.isolateLocal(
-      (Pointer<Float> samples, int n, int rate, Pointer<Void> user) {
-        stream.send([Float32List.fromList(samples.asTypedList(n)), rate]);
-        return !_cancelled(r);
-      },
-      exceptionalReturn: false,
-    );
+    final cb = NativeCallable<b.kiln_audio_cbFunction>.isolateLocal((
+      Pointer<Float> samples,
+      int n,
+      int rate,
+      Pointer<Void> user,
+    ) {
+      stream.send([Float32List.fromList(samples.asTypedList(n)), rate]);
+      return !_cancelled(r);
+    }, exceptionalReturn: false);
     final text = str(r.args['text'] as String);
     final item = calloc<b.kiln_media>();
     final opts = calloc<b.kiln_speak_options>();
@@ -389,15 +493,22 @@ class KilnWorker {
       final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
       if (_cancelled(r)) {
         st.ref.stopped_by_user = true;
-        return {'status': b.kiln_status.KILN_ERR_CANCELLED.value, 'stats': KilnSpeakStats.fromNative(st.ref).toMap()};
+        return {
+          'status': b.kiln_status.KILN_ERR_CANCELLED.value,
+          'stats': KilnSpeakStats.fromNative(st.ref).toMap(),
+        };
       }
       final s = k.kiln_speak(ctx, text, opts, cb.nativeFunction, nullptr, st);
       final stats = KilnSpeakStats.fromNative(st.ref).toMap();
-      if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) _fail(k, s);
+      if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) {
+        _fail(k, s);
+      }
       return {'status': s.value, 'stats': stats};
     } finally {
       cb.close();
-      calloc.free(item); calloc.free(opts); calloc.free(st);
+      calloc.free(item);
+      calloc.free(opts);
+      calloc.free(st);
       for (final p in frees) {
         calloc.free(p);
       }
@@ -415,13 +526,15 @@ class KilnWorker {
       return p.cast();
     }
 
-    final cb = NativeCallable<b.kiln_token_cbFunction>.isolateLocal(
-      (int ch, Pointer<Char> piece, int tok, Pointer<Void> user) {
-        stream.send(piece.cast<Utf8>().toDartString());
-        return !_cancelled(r);
-      },
-      exceptionalReturn: false,
-    );
+    final cb = NativeCallable<b.kiln_token_cbFunction>.isolateLocal((
+      int ch,
+      Pointer<Char> piece,
+      int tok,
+      Pointer<Void> user,
+    ) {
+      stream.send(piece.cast<Utf8>().toDartString());
+      return !_cancelled(r);
+    }, exceptionalReturn: false);
     final item = calloc<b.kiln_media>();
     final opts = calloc<b.kiln_transcribe_options>();
     final st = calloc<b.kiln_transcribe_stats>();
@@ -444,15 +557,29 @@ class KilnWorker {
       final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
       if (_cancelled(r)) {
         st.ref.stopped_by_user = true;
-        return {'status': b.kiln_status.KILN_ERR_CANCELLED.value, 'stats': KilnTranscribeStats.fromNative(st.ref).toMap()};
+        return {
+          'status': b.kiln_status.KILN_ERR_CANCELLED.value,
+          'stats': KilnTranscribeStats.fromNative(st.ref).toMap(),
+        };
       }
-      final s = k.kiln_transcribe(ctx, item, opts, cb.nativeFunction, nullptr, st);
+      final s = k.kiln_transcribe(
+        ctx,
+        item,
+        opts,
+        cb.nativeFunction,
+        nullptr,
+        st,
+      );
       final stats = KilnTranscribeStats.fromNative(st.ref).toMap();
-      if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) _fail(k, s);
+      if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) {
+        _fail(k, s);
+      }
       return {'status': s.value, 'stats': stats};
     } finally {
       cb.close();
-      calloc.free(item); calloc.free(opts); calloc.free(st);
+      calloc.free(item);
+      calloc.free(opts);
+      calloc.free(st);
       for (final p in frees) {
         calloc.free(p);
       }
@@ -464,7 +591,9 @@ class KilnWorker {
   static Map<String, Object> _embed(b.KilnBindings k, _Req r) {
     final text = r.args['text'] as String?;
     final title = r.args['title'] as String?;
-    final media = [for (final m in r.args['media'] as List) KilnMedia.fromMap(m as Map)];
+    final media = [
+      for (final m in r.args['media'] as List) KilnMedia.fromMap(m as Map),
+    ];
     final cap = r.args['cap'] as int;
     final frees = <Pointer>[];
     Pointer<Char> str(String? s) {
@@ -500,11 +629,22 @@ class KilnWorker {
       final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
       final s = media.isEmpty
           ? k.kiln_embed(ctx, str(text ?? ''), opts, out, cap, st)
-          : k.kiln_embed_media(ctx, str(text), items, media.length, opts, out, cap, st);
+          : k.kiln_embed_media(
+              ctx,
+              str(text),
+              items,
+              media.length,
+              opts,
+              out,
+              cap,
+              st,
+            );
       if (s != b.kiln_status.KILN_OK) _fail(k, s);
       final e = st.ref;
       return KilnEmbedding(
-        vector: Float32List.fromList(out.asTypedList(e.dimensions)),   // a copy: `out` is freed below
+        vector: Float32List.fromList(
+          out.asTypedList(e.dimensions),
+        ), // a copy: `out` is freed below
         tokens: e.tokens,
         mediaTokens: e.media_tokens,
         prefixed: e.prefixed,
@@ -512,7 +652,9 @@ class KilnWorker {
         ms: e.ms,
       ).toMap();
     } finally {
-      calloc.free(opts); calloc.free(st); calloc.free(out);
+      calloc.free(opts);
+      calloc.free(st);
+      calloc.free(out);
       if (items != nullptr) calloc.free(items);
       for (final p in frees) {
         calloc.free(p);
