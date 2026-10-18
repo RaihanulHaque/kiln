@@ -11,7 +11,9 @@ import 'types.dart';
 import 'worker.dart';
 
 const bool _trace = bool.fromEnvironment('KILN_TRACE');
-void _t(String m) { if (_trace) print('[kiln] $m'); } // ignore: avoid_print
+void _t(String m) {
+  if (_trace) print('[kiln] $m'); // ignore: avoid_print
+}
 
 /// Entry point. One [Kiln] per app is plenty; it owns a background isolate
 /// where every blocking native call runs.
@@ -30,9 +32,19 @@ class Kiln {
   Future<KilnDeviceInfo> probeDevice() async =>
       KilnDeviceInfo.fromMap(await _worker.call<Map>('probe', {}));
 
-  Future<KilnModel> loadModel(String path, {KilnModelParams params = const KilnModelParams()}) async {
-    final r = await _worker.call<Map>('load', {'path': path, 'params': params.toMap()});
-    return KilnModel._(this, r['handle'] as int, KilnModelInfo.fromMap(r['info'] as Map));
+  Future<KilnModel> loadModel(
+    String path, {
+    KilnModelParams params = const KilnModelParams(),
+  }) async {
+    final r = await _worker.call<Map>('load', {
+      'path': path,
+      'params': params.toMap(),
+    });
+    return KilnModel._(
+      this,
+      r['handle'] as int,
+      KilnModelInfo.fromMap(r['info'] as Map),
+    );
   }
 
   void dispose() => _worker.dispose();
@@ -46,20 +58,27 @@ class KilnModel {
   /// What actually loaded: backend, quant, size, thinking support.
   final KilnModelInfo info;
 
-  Future<KilnContext> createContext({KilnContextParams params = const KilnContextParams()}) async {
-    final h = await _kiln._worker.call<int>('createContext', {'model': _handle, 'params': params.toMap()});
+  Future<KilnContext> createContext({
+    KilnContextParams params = const KilnContextParams(),
+  }) async {
+    final h = await _kiln._worker.call<int>('createContext', {
+      'model': _handle,
+      'params': params.toMap(),
+    });
     return KilnContext._(this, h);
   }
 
   /// Renders the model's chat template. Mostly for debugging; [KilnContext.chat] does this for you.
-  Future<String> applyChatTemplate(List<KilnChatMessage> messages,
-          {bool addAssistantPrefix = true, bool enableThinking = false}) =>
-      _kiln._worker.call<String>('template', {
-        'model': _handle,
-        'messages': messages.map((m) => m.toMap()).toList(),
-        'addAssistantPrefix': addAssistantPrefix,
-        'enableThinking': enableThinking,
-      });
+  Future<String> applyChatTemplate(
+    List<KilnChatMessage> messages, {
+    bool addAssistantPrefix = true,
+    bool enableThinking = false,
+  }) => _kiln._worker.call<String>('template', {
+    'model': _handle,
+    'messages': messages.map((m) => m.toMap()).toList(),
+    'addAssistantPrefix': addAssistantPrefix,
+    'enableThinking': enableThinking,
+  });
 
   /// Loads the image / audio encoders that belong to an embedding model: its projector file,
   /// an "mmproj" GGUF published next to the model. Call it once after loading the model and
@@ -69,11 +88,19 @@ class KilnModel {
   /// [imageMaxTokens] is the most tokens one image may take; a large photo is scaled down to
   /// fit. Time grows much faster than this number. 0 means 280, a negative value means the
   /// model's own limit.
-  Future<KilnProjectorInfo> loadProjector(String path, {int imageMaxTokens = 0}) async =>
-      KilnProjectorInfo.fromMap(await _kiln._worker
-          .call<Map>('loadProjector', {'model': _handle, 'path': path, 'imageMaxTokens': imageMaxTokens}));
+  Future<KilnProjectorInfo> loadProjector(
+    String path, {
+    int imageMaxTokens = 0,
+  }) async => KilnProjectorInfo.fromMap(
+    await _kiln._worker.call<Map>('loadProjector', {
+      'model': _handle,
+      'path': path,
+      'imageMaxTokens': imageMaxTokens,
+    }),
+  );
 
-  Future<void> dispose() => _kiln._worker.call<void>('freeModel', {'handle': _handle});
+  Future<void> dispose() =>
+      _kiln._worker.call<void>('freeModel', {'handle': _handle});
 }
 
 /// A streaming generation in progress.
@@ -171,7 +198,11 @@ class KilnContext {
     int maxReasoningTokens = 0,
     KilnSamplingParams sampling = const KilnSamplingParams(),
   }) {
-    if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
+    if (_busy) {
+      throw StateError(
+        'kiln: context is busy; await the previous generation or cancel it',
+      );
+    }
     _busy = true;
     _t('chat start');
     final port = ReceivePort();
@@ -210,7 +241,11 @@ class KilnContext {
         });
     return KilnGeneration._(ctrl.stream, stats, () {
       _t('cancel');
-      if (flag.set()) KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
+      if (flag.set()) {
+        KilnNative.bindings.kiln_cancel(
+          Pointer<b.kiln_context>.fromAddress(_handle),
+        );
+      }
       _t('cancel sent');
     });
   }
@@ -229,9 +264,18 @@ class KilnContext {
   /// Throws a [KilnException] with `KILN_ERR_NOT_SUPPORTED` when the model is not a decision
   /// model; check [KilnModelInfo.isDecisionModel].
   Future<KilnDecision> decide(KilnQuestion question, {String? state}) async {
-    if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
-    return KilnDecision.fromMap(await model._kiln._worker
-        .call<Map>('decide', {'context': _handle, 'question': question.toMap(), 'state': state}));
+    if (_busy) {
+      throw StateError(
+        'kiln: context is busy; await the previous generation or cancel it',
+      );
+    }
+    return KilnDecision.fromMap(
+      await model._kiln._worker.call<Map>('decide', {
+        'context': _handle,
+        'question': question.toMap(),
+        'state': state,
+      }),
+    );
   }
 
   /// Turn a text into a vector with an embedding model. Texts with a similar meaning get
@@ -258,8 +302,7 @@ class KilnContext {
     String? title,
     int dimensions = 0,
     bool normalize = true,
-  }) =>
-      _embed(text, const [], kind, title, dimensions, normalize);
+  }) => _embed(text, const [], kind, title, dimensions, normalize);
 
   /// Like [embed], for images and audio, alone or together with [text]. The result is in the
   /// same space as [embed]'s, so a typed query can find a photo or a voice note.
@@ -281,25 +324,41 @@ class KilnContext {
     int dimensions = 0,
     bool normalize = true,
   }) {
-    if (media.isEmpty) throw ArgumentError('embedMedia needs at least one media item; use embed() for text alone');
+    if (media.isEmpty) {
+      throw ArgumentError(
+        'embedMedia needs at least one media item; use embed() for text alone',
+      );
+    }
     return _embed(text, media, KilnEmbedKind.raw, null, dimensions, normalize);
   }
 
-  Future<KilnEmbedding> _embed(String? text, List<KilnMedia> media, KilnEmbedKind kind, String? title,
-      int dimensions, bool normalize) async {
-    if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
+  Future<KilnEmbedding> _embed(
+    String? text,
+    List<KilnMedia> media,
+    KilnEmbedKind kind,
+    String? title,
+    int dimensions,
+    bool normalize,
+  ) async {
+    if (_busy) {
+      throw StateError(
+        'kiln: context is busy; await the previous generation or cancel it',
+      );
+    }
     final n = model.info.nEmbd;
-    return KilnEmbedding.fromMap(await model._kiln._worker.call<Map>('embed', {
-      'context': _handle,
-      'text': text,
-      'media': [for (final m in media) m.toMap()],
-      'kind': kind.index,
-      'title': title,
-      'dimensions': dimensions,
-      'normalize': normalize,
-      // room for the answer; the C side rejects a `dimensions` above the model's size
-      'cap': dimensions > 0 && dimensions < n ? dimensions : n,
-    }));
+    return KilnEmbedding.fromMap(
+      await model._kiln._worker.call<Map>('embed', {
+        'context': _handle,
+        'text': text,
+        'media': [for (final m in media) m.toMap()],
+        'kind': kind.index,
+        'title': title,
+        'dimensions': dimensions,
+        'normalize': normalize,
+        // room for the answer; the C side rejects a `dimensions` above the model's size
+        'cap': dimensions > 0 && dimensions < n ? dimensions : n,
+      }),
+    );
   }
 
   /// Write down what is said in an audio clip (wav, mp3 or flac; a file or its bytes).
@@ -329,7 +388,11 @@ class KilnContext {
     String? prompt,
     int maxTokens = 0,
   }) {
-    if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
+    if (_busy) {
+      throw StateError(
+        'kiln: context is busy; await the previous generation or cancel it',
+      );
+    }
     _busy = true;
     final port = ReceivePort();
     final ctrl = StreamController<String>();
@@ -357,7 +420,11 @@ class KilnContext {
           unawaited(ctrl.close());
         });
     return KilnTranscription._(ctrl.stream, stats, () {
-      if (flag.set()) KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
+      if (flag.set()) {
+        KilnNative.bindings.kiln_cancel(
+          Pointer<b.kiln_context>.fromAddress(_handle),
+        );
+      }
     });
   }
 
@@ -385,7 +452,11 @@ class KilnContext {
     int maxFrames = 0,
     int? seed,
   }) {
-    if (_busy) throw StateError('kiln: context is busy; await the previous generation or cancel it');
+    if (_busy) {
+      throw StateError(
+        'kiln: context is busy; await the previous generation or cancel it',
+      );
+    }
     _busy = true;
     final port = ReceivePort();
     final ctrl = StreamController<KilnAudioPiece>();
@@ -417,14 +488,22 @@ class KilnContext {
           unawaited(ctrl.close());
         });
     return KilnSpeech._(ctrl.stream, stats, () {
-      if (flag.set()) KilnNative.bindings.kiln_cancel(Pointer<b.kiln_context>.fromAddress(_handle));
+      if (flag.set()) {
+        KilnNative.bindings.kiln_cancel(
+          Pointer<b.kiln_context>.fromAddress(_handle),
+        );
+      }
     });
   }
 
   /// Clears the KV cache. Next chat starts from scratch.
-  Future<void> reset() { _t('reset'); return model._kiln._worker.call<void>('reset', {'handle': _handle}); }
+  Future<void> reset() {
+    _t('reset');
+    return model._kiln._worker.call<void>('reset', {'handle': _handle});
+  }
 
-  Future<void> dispose() => model._kiln._worker.call<void>('freeContext', {'handle': _handle});
+  Future<void> dispose() =>
+      model._kiln._worker.call<void>('freeContext', {'handle': _handle});
 }
 
 /// One request's cancel flag, in native memory so the worker isolate can read it. Set by
