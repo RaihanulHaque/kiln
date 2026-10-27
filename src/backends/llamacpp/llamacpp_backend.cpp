@@ -541,7 +541,7 @@ public:
             auto on = common_chat_templates_apply(tmpls_.get(), in);
             in.enable_thinking = false;
             auto off = common_chat_templates_apply(tmpls_.get(), in);
-            tags_.supported = on.supports_thinking && on.prompt != off.prompt;
+            tags_.supported = on.supports_thinking && on.prompt.str() != off.prompt.str();
             tags_.start = on.thinking_start_tag;
             tags_.ends  = on.thinking_end_tags;
         } catch (const std::exception& e) {
@@ -595,12 +595,12 @@ public:
         in.enable_thinking = o.enable_thinking && tags_.supported;
         in.reasoning_format = COMMON_REASONING_FORMAT_NONE;
         try {
-            auto p = common_chat_templates_apply(tmpls_.get(), in);
-            out.prompt = p.prompt;
+            const std::string prompt = common_chat_templates_apply(tmpls_.get(), in).prompt.str();
+            out.prompt = prompt;
             if (in.add_generation_prompt) {
                 in.add_generation_prompt = false;
-                auto h = common_chat_templates_apply(tmpls_.get(), in);
-                if (p.prompt.compare(0, h.prompt.size(), h.prompt) == 0) out.stable_prefix = h.prompt;
+                const std::string h = common_chat_templates_apply(tmpls_.get(), in).prompt.str();
+                if (prompt.compare(0, h.size(), h) == 0) out.stable_prefix = h;
             }
             // The system prefix: render the same system message(s) with a different user message
             // and keep what both renders share. Rendering the system message alone is not an
@@ -616,17 +616,17 @@ public:
                 alt.enable_thinking = in.enable_thinking;
                 alt.reasoning_format = in.reasoning_format;
                 try {
-                    const std::string a = common_chat_templates_apply(tmpls_.get(), alt).prompt;
+                    const std::string a = common_chat_templates_apply(tmpls_.get(), alt).prompt.str();
                     size_t k = 0;
-                    while (k < a.size() && k < p.prompt.size() && a[k] == p.prompt[k]) ++k;
-                    if (k < out.stable_prefix.size() || out.stable_prefix.empty()) out.system_prefix = p.prompt.substr(0, k);
+                    while (k < a.size() && k < prompt.size() && a[k] == prompt[k]) ++k;
+                    if (k < out.stable_prefix.size() || out.stable_prefix.empty()) out.system_prefix = prompt.substr(0, k);
                 } catch (const std::exception&) {
                     // no system prefix; the stable prefix still works for multi-turn chat
                 }
             }
             out.starts_in_reasoning = in.enable_thinking && !tags_.start.empty()
-                                   && rtrim(p.prompt).size() >= tags_.start.size()
-                                   && rtrim(p.prompt).compare(rtrim(p.prompt).size() - tags_.start.size(), tags_.start.size(), tags_.start) == 0;
+                                   && rtrim(prompt).size() >= tags_.start.size()
+                                   && rtrim(prompt).compare(rtrim(prompt).size() - tags_.start.size(), tags_.start.size(), tags_.start) == 0;
             return KILN_OK;
         } catch (const std::exception& e) {
             return kiln::set_error(KILN_ERR_BACKEND, std::string("chat template failed: ") + e.what());
