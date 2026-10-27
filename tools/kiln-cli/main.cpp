@@ -133,7 +133,9 @@ int main(int argc, char** argv) {
     kiln_context_params cp = kiln_context_params_default();
     cp.n_ctx = n_ctx;
     kiln_context* c = nullptr;
-    if (kiln_context_create(m, &cp, &c) != KILN_OK) { fprintf(stderr, "context failed: %s\n", kiln_last_error()); return 1; }
+    if (kiln_context_create(m, &cp, &c) != KILN_OK) { fprintf(stderr, "context failed: %s\n", kiln_last_error()); kiln_model_free(m); return 1; }
+    // Metal aborts at exit if the model or context is still alive, so every exit from here frees both.
+    auto quit = [&](int code) { kiln_context_free(c); kiln_model_free(m); return code; };
 
     fprintf(stderr, "--- kiln %s ---\n", kiln_version());
     fprintf(stderr, "device:   %s | %s | %d cores | %.1f GB RAM\n", dev.soc, dev.abi, dev.cpu_cores, dev.ram_total_bytes / 1e9);
@@ -145,7 +147,7 @@ int main(int argc, char** argv) {
         kiln_projector_info pi;
         kiln_projector_params pp = kiln_projector_params_default();
         pp.image_max_tokens = image_tokens;
-        if (kiln_model_load_projector(m, mmproj.c_str(), &pp, &pi) != KILN_OK) { fprintf(stderr, "projector failed: %s\n", kiln_last_error()); return 1; }
+        if (kiln_model_load_projector(m, mmproj.c_str(), &pp, &pi) != KILN_OK) { fprintf(stderr, "projector failed: %s\n", kiln_last_error()); return quit(1); }
         fprintf(stderr, "projector: images=%s audio=%s\n", pi.supports_images ? "yes" : "no", pi.supports_audio ? "yes" : "no");
     }
 
@@ -221,16 +223,15 @@ int main(int argc, char** argv) {
         const bool ranking = !embed_query.empty();
         if (ranking && embed_texts.empty() && embed_media.empty()) {
             fprintf(stderr, "--query needs something to rank: add --embed texts or --media files\n");
-            kiln_context_free(c); kiln_model_free(m);     // Metal aborts at exit if these are still alive
-            return 2;
+            return quit(2);
         }
         std::vector<std::pair<double, std::string>> ranked;     // printed best first at the end
         if (ranking) {
-            if (!run(embed_query, KILN_EMBED_QUERY, qv, es)) return 1;
+            if (!run(embed_query, KILN_EMBED_QUERY, qv, es)) return quit(1);
             fprintf(stderr, "query:    %d tok in %.1f ms, %d numbers%s\n", es.tokens, es.ms, es.dimensions, es.prefixed ? ", prefix added" : "");
         }
         for (const std::string& t : embed_texts) {
-            if (!run(t, ranking ? KILN_EMBED_DOCUMENT : KILN_EMBED_RAW, v, es)) return 1;
+            if (!run(t, ranking ? KILN_EMBED_DOCUMENT : KILN_EMBED_RAW, v, es)) return quit(1);
             if (ranking) {
                 double sim = 0;
                 for (int i = 0; i < es.dimensions; ++i) sim += (double)qv[i] * v[i];
@@ -245,7 +246,7 @@ int main(int argc, char** argv) {
         for (const std::string& f : embed_media) {
             v.assign(dim > 0 ? dim : 1, 0.0f);
             kiln_media item = {f.c_str(), nullptr, 0};
-            if (kiln_embed_media(c, nullptr, &item, 1, &eo, v.data(), (int32_t)v.size(), &es) != KILN_OK) { fprintf(stderr, "embed failed: %s\n", kiln_last_error()); return 1; }
+            if (kiln_embed_media(c, nullptr, &item, 1, &eo, v.data(), (int32_t)v.size(), &es) != KILN_OK) { fprintf(stderr, "embed failed: %s\n", kiln_last_error()); return quit(1); }
             if (ranking) {
                 double sim = 0;
                 for (int i = 0; i < es.dimensions; ++i) sim += (double)qv[i] * v[i];
@@ -265,7 +266,7 @@ int main(int argc, char** argv) {
 
     if (!ask.empty()) {
         kiln_question_type qt = ask_type == "noul" ? KILN_QUESTION_NOUL : ask_type == "choice" ? KILN_QUESTION_CHOICE : KILN_QUESTION_SCORE;
-        if (ask_type != "noul" && ask_type != "choice" && ask_type != "score") { usage(); return 2; }
+        if (ask_type != "noul" && ask_type != "choice" && ask_type != "score") { usage(); return quit(2); }
         std::vector<kiln_decision_option> opts;
         for (size_t i = 0; i < opt_keys.size(); ++i)
             opts.push_back({opt_keys[i].empty() ? nullptr : opt_keys[i].c_str(), opt_descs[i].c_str()});
@@ -273,7 +274,7 @@ int main(int argc, char** argv) {
         std::vector<float> probs(opts.size() + 2);
         kiln_decision_answer ans;
         if (kiln_decide(c, state.empty() ? nullptr : state.c_str(), &q, probs.data(), (int32_t)probs.size(), &ans) != KILN_OK) {
-            fprintf(stderr, "decide failed: %s\n", kiln_last_error()); return 1;
+            fprintf(stderr, "decide failed: %s\n", kiln_last_error()); return quit(1);
         }
         for (int32_t i = 0; i < ans.n_probs; ++i) {
             std::string label = qt == KILN_QUESTION_NOUL ? (i ? "yes" : "no") : qt == KILN_QUESTION_SCORE ? std::to_string(i) + " " + opt_descs[i] : opt_keys[i];
