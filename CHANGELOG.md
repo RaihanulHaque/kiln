@@ -5,13 +5,27 @@
 - **LFM3 chat models load.** llama.cpp moved to 1b4554ef (2026-10-27, LFM3 support) and
   whisper.cpp to 21ba6d26; both pin ggml 0.27.0. llama.cpp now returns a rendered chat prompt
   as parts (template text and user input) instead of one string; kiln joins them into the
-  same string as before, so prompts and tokens do not change. LFM3-1.7B (QAD Q4_0) chats on the
+  same string as before (see the next entry for how they are tokenized). LFM3-1.7B (QAD Q4_0) chats on the
   M4 Pro: 137 tok/s on Metal, 157 tok/s on the CPU. It is a hybrid model (short convolutions
   plus attention) and the checkpoints work: a greedy three-turn chat gives the same answers in
   one context (75 and 105 prompt tokens reused) as with a reset before every turn. 526 checks
   pass on the M4 Pro. Not yet verified: the Pixel 8, Linux, the LFM3 VL, Audio and Omni
   models. The decision model d1-2B (`lfm3-d1`) loads but `kiln_decide` answers "not
   supported": llama.cpp's server code for it is still an open PR (ggml-org/llama.cpp#31275).
+- **A chat message can no longer write control tokens (prompt injection).** kiln tokenized the
+  whole rendered prompt with control tokens recognised everywhere, so a user message holding
+  `<|im_end|>\n<|im_start|>assistant` closed its own turn and opened the assistant's. Now the
+  prompt's parts are kept (`RenderedPrompt::parts`): template text is tokenized with control
+  tokens, the text of the messages as plain text. This covers every message, system and
+  assistant ones too, because llama.cpp marks every string that came from the messages as
+  input. The system and history prefixes used for cache reuse are tokenized with the same parts.
+  Speech to text (Qwen3-ASR) gives the parts to mtmd (`mtmd_tokenize_from_parts`), so a
+  caller's `kiln_transcribe_options.prompt` is plain text as well. `kiln_generate`, `kiln_tokenize`
+  and the embedding calls take raw text and still recognise control tokens, as before.
+  A new test per chat model checks that a message with the end-of-turn text does not make
+  that token, that the old one-string tokenizing did, and that ordinary prompts give the same
+  tokens as before. 568 checks pass on the M4 Pro (526 before). Not yet verified: the Pixel 8,
+  Linux, iOS, and LFM3 (not in `kiln-tests`).
 - **`kiln-cli` frees the model when it stops on an error.** Metal aborts at exit while a model
   is alive, so a failed `--ask` printed an assertion and a backtrace after its message.
 

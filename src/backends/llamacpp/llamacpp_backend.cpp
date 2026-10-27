@@ -70,6 +70,36 @@ std::string rtrim(std::string s) {
     return s;
 }
 
+// Tokenizes a rendered prompt one part at a time, the first `max_bytes` bytes of it: template
+// text with control tokens recognised, input text (what the messages said) as plain text. One
+// string with parse_special for everything would let a message that contains `<|im_end|>` end
+// its own turn and write the next one. The BOS goes on the first piece.
+bool tokenize_prompt(const llama_vocab* vocab, const kiln::RenderedPrompt& in, size_t max_bytes, std::vector<llama_token>& out) {
+    out.clear();
+    bool first = true;
+    auto add = [&](const char* text, size_t len, bool special) {
+        if (len == 0) return true;
+        const int n = -llama_tokenize(vocab, text, (int)len, nullptr, 0, first, special);
+        if (n <= 0) return n == 0;
+        const size_t at = out.size();
+        out.resize(at + n);
+        const int got = llama_tokenize(vocab, text, (int)len, out.data() + at, n, first, special);
+        if (got < 0) return false;
+        out.resize(at + got);
+        first = false;
+        return true;
+    };
+    if (in.parts.empty()) return add(in.prompt.data(), std::min(in.prompt.size(), max_bytes), true);
+    size_t used = 0;
+    for (const auto& p : in.parts) {
+        if (used >= max_bytes) break;
+        const size_t take = std::min(p.text.size(), max_bytes - used);
+        used += take;
+        if (!add(p.text.data(), take, !p.is_input)) return false;
+    }
+    return true;
+}
+
 struct ThinkTags {
     bool supported = false;
     std::string start;
@@ -131,13 +161,10 @@ public:
             return done(kiln::set_error(KILN_ERR_NOT_SUPPORTED, "embedding models do not generate text; use kiln_embed"));
 
         // ---- tokenize
-        const char* text = in.prompt.c_str();
-        int n = -llama_tokenize(vocab_, text, (int)in.prompt.size(), nullptr, 0, true, true);
-        if (n <= 0) return done(kiln::set_error(KILN_ERR_INVALID_ARG, "empty prompt"));
-        std::vector<llama_token> toks(n);
-        n = llama_tokenize(vocab_, text, (int)in.prompt.size(), toks.data(), n, true, true);
-        if (n < 0) return done(kiln::set_error(KILN_ERR_INTERNAL, "tokenize failed"));
-        toks.resize(n);
+        std::vector<llama_token> toks;
+        if (!tokenize_prompt(vocab_, in, SIZE_MAX, toks)) return done(kiln::set_error(KILN_ERR_INTERNAL, "tokenize failed"));
+        if (toks.empty()) return done(kiln::set_error(KILN_ERR_INVALID_ARG, "empty prompt"));
+        const int n = (int)toks.size();
         st.prompt_tokens = n;
 
         const int n_ctx = (int)llama_n_ctx(ctx_);
@@ -146,15 +173,15 @@ public:
 
         // ---- where to checkpoint (hybrid / recurrent models only): the end of the system prompt
         // (reused when only the user message changes) and the end of the stable prefix (reused
-        // by the next turn of a conversation)
+        // by the next turn of a conversation). Each prefix is tokenized with the same parts as the
+        // prompt, so its tokens are a prefix of `toks` up to where the text was cut.
         std::vector<size_t> ckpt_at;
         if (partial_state_) {
+            std::vector<llama_token> pre;
             for (const std::string* prefix : {&in.system_prefix, &in.stable_prefix}) {
-                if (prefix->empty()) continue;
-                std::vector<llama_token> pre(prefix->size() + 8);
-                int np = llama_tokenize(vocab_, prefix->c_str(), (int)prefix->size(), pre.data(), (int)pre.size(), true, true);
+                if (prefix->empty() || !tokenize_prompt(vocab_, in, prefix->size(), pre)) continue;
                 size_t k = 0;
-                while (np > 0 && k < (size_t)np && k + 1 < toks.size() && pre[k] == toks[k]) ++k;
+                while (k < pre.size() && k + 1 < toks.size() && pre[k] == toks[k]) ++k;
                 if (k > 0 && (ckpt_at.empty() || k > ckpt_at.back())) ckpt_at.push_back(k);
             }
         }
@@ -240,8 +267,35 @@ public:
             mtmd_input_chunks* c = mtmd_input_chunks_init();
             ~Chunks() { mtmd_input_chunks_free(c); }
         } chunks;
-        mtmd_input_text text{in.prompt.c_str(), in.prompt.size(), true, true};
-        const int32_t trc = mtmd_tokenize(mctx, chunks.c, &text, const_cast<const mtmd_bitmap**>(clip.v.data()), clip.v.size());
+        // The prompt's parts, split again at the media marker, go to mtmd as parts of their own:
+        // the same split mtmd_tokenize makes, with plain text for the caller's prompt.
+        const std::string marker = mtmd_get_marker(mctx);
+        std::vector<kiln::PromptPart> whole;
+        if (in.parts.empty()) whole.push_back({in.prompt, false});
+        const std::vector<kiln::PromptPart>& src = in.parts.empty() ? whole : in.parts;
+        std::vector<mtmd_input_text> texts;
+        std::vector<mtmd_input_part> parts;
+        texts.reserve(in.prompt.size() + 1);   // never reallocated: parts point into it
+        size_t n_markers = 0;
+        for (const auto& p : src) {
+            for (size_t at = 0; at <= p.text.size(); ) {
+                const size_t m = p.text.find(marker, at);
+                const size_t end = m == std::string::npos ? p.text.size() : m;
+                if (end > at) {
+                    texts.push_back({p.text.data() + at, end - at, false, !p.is_input});
+                    parts.push_back({&texts.back(), nullptr});
+                }
+                if (m == std::string::npos) break;
+                if (n_markers < clip.v.size()) parts.push_back({nullptr, clip.v[n_markers]});
+                ++n_markers;
+                at = m + marker.size();
+            }
+        }
+        if (n_markers != clip.v.size())
+            return kiln::set_error(KILN_ERR_INVALID_ARG, "the prompt has " + std::to_string(n_markers) + " media markers for " + std::to_string(clip.v.size()) + " clip");
+        std::vector<const mtmd_input_part*> part_ptrs;
+        for (const auto& p : parts) part_ptrs.push_back(&p);
+        const int32_t trc = mtmd_tokenize_from_parts(mctx, chunks.c, part_ptrs.data(), part_ptrs.size(), true);
         if (trc != 0) return kiln::set_error(KILN_ERR_BACKEND, "could not prepare the audio for the model (mtmd_tokenize rc=" + std::to_string(trc) + ")");
 
         const int n     = (int)mtmd_helper_get_n_tokens(chunks.c);
@@ -579,6 +633,11 @@ public:
     int32_t tokenize(const char* text, bool add_special, int32_t* out, int32_t cap) const override {
         return llama_tokenize(vocab_, text, (int)strlen(text), out, cap, add_special, true);
     }
+    std::vector<int32_t> prompt_tokens(const kiln::RenderedPrompt& in, size_t max_bytes) const override {
+        std::vector<llama_token> toks;
+        if (!tokenize_prompt(vocab_, in, max_bytes, toks)) toks.clear();
+        return toks;
+    }
     int32_t detokenize(const int32_t* toks, int32_t n, char* out, int32_t cap) const override {
         return llama_detokenize(vocab_, toks, n, out, cap, false, false);
     }
@@ -595,8 +654,11 @@ public:
         in.enable_thinking = o.enable_thinking && tags_.supported;
         in.reasoning_format = COMMON_REASONING_FORMAT_NONE;
         try {
-            const std::string prompt = common_chat_templates_apply(tmpls_.get(), in).prompt.str();
+            const common_chat_prompt rendered = common_chat_templates_apply(tmpls_.get(), in).prompt;
+            const std::string prompt = rendered.str();
             out.prompt = prompt;
+            out.parts.clear();
+            for (const auto& p : rendered.parts) out.parts.push_back({p.text, p.is_input});
             if (in.add_generation_prompt) {
                 in.add_generation_prompt = false;
                 const std::string h = common_chat_templates_apply(tmpls_.get(), in).prompt.str();
