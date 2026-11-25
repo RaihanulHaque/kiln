@@ -116,6 +116,10 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   from EryriLabs/pocket-tts-GGUF; the Serveurperso ones are for another project and do not load.
   A fixed seed repeats the audio on the Mac and the Pixel 8; a Linux arm64 run differed by three
   frames between two calls, so no test may demand sample-exact repeats.
+- **Never tokenize a rendered chat prompt as one string.** Use `tokenize_prompt` with
+  `RenderedPrompt::parts`: template text with control tokens, message text without, or a
+  message holding `<|im_end|>` ends its own turn. llama-server at 1b4554ef still joins the parts
+  with `.str()`, so it is not a reference for this; `test_prompt_injection` is.
 - **llama.cpp changes a small context behind your back.** Asked for `n_ctx = 32` it gave a
   context of 256 and a batch size below 52. Read both back (`llama_n_ctx`, `llama_n_batch`)
   instead of trusting what was asked for; a batch larger than `llama_n_batch` aborts inside `mtmd`.

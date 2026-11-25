@@ -13,9 +13,18 @@ kiln_status set_error(kiln_status s, const std::string& msg);
 void        log(kiln_log_level lvl, const char* fmt, ...);
 
 // ---- backend interface (backends/backend.h) ----
+// One piece of a rendered prompt. Template text may hold control tokens (`<|im_end|>`);
+// input text comes from a message and is tokenized as plain text, so a user who types
+// `<|im_end|>` gets those characters, not the end of their turn.
+struct PromptPart {
+    std::string text;
+    bool        is_input = false;
+};
+
 // What a rendered chat turn looks like to the generator.
 struct RenderedPrompt {
-    std::string prompt;
+    std::string prompt;                        // all parts joined; the prefixes below compare against it
+    std::vector<PromptPart> parts;             // empty: `prompt` is all template text (raw kiln_generate)
     bool        starts_in_reasoning = false;   // template already opened the think block
     // Leading part of `prompt` that the next turn's prompt will also start with: the history
     // without the assistant prefix. Empty if unknown (raw kiln_generate). Hybrid models save
@@ -89,6 +98,9 @@ public:
     virtual kiln_status render_chat(const kiln_chat_message* msgs, int32_t n, const kiln_chat_options& o,
                                     RenderedPrompt& out) const = 0;
     virtual kiln_status render_transcribe(const kiln_transcribe_options& o, RenderedPrompt& out) const = 0;
+    // The tokens generate() feeds the model for this prompt, the first `max_bytes` bytes of it
+    // only if given. Empty when the backend has no such prompt (whisper.cpp) or on failure.
+    virtual std::vector<int32_t> prompt_tokens(const RenderedPrompt&, size_t max_bytes = SIZE_MAX) const { (void)max_bytes; return {}; }
     virtual kiln_status create_context(const kiln_context_params& p, std::unique_ptr<Context>& out) = 0;
     virtual kiln_status load_projector(const char* path, const kiln_projector_params& p, kiln_projector_info& out) = 0;
 };

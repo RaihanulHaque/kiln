@@ -125,9 +125,12 @@ sequenceDiagram
    `Model::render_chat` in the backend.
 4. **Template** (`llamacpp_backend.cpp`, `render_chat`): builds a `common_chat_templates_inputs`
    with the messages and `enable_thinking`, runs the model's jinja template through
-   llama.cpp's minja. Output: the prompt string, plus whether the prompt already opened a
-   think block (so the splitter starts in reasoning mode).
-5. **Prefix reuse** (`LlamaContext::generate`): tokenizes the prompt, compares with the token
+   llama.cpp's minja. Output: the prompt string, its parts (template text, and input text
+   that came from the messages), plus whether the prompt already opened a think block (so
+   the splitter starts in reasoning mode).
+5. **Prefix reuse** (`LlamaContext::generate`): tokenizes the prompt part by part
+   (`tokenize_prompt`: control tokens such as `<|im_end|>` are recognised in template text
+   only, so a message cannot end its own turn), compares with the token
    list currently in the KV cache, keeps the common prefix. Tries `llama_memory_seq_rm` to drop
    the rest. If the model refuses (recurrent state), restores the newest checkpoint inside
    the common prefix, or clears everything and starts from zero if there is none.
