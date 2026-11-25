@@ -11,6 +11,9 @@
   starts from `mtmd_helper_gen_audio_inp_default()` (temp = model default, stream off). No
   `kiln.h` change. `kiln-tests models`: 568 passed on Linux x86 (Ryzen 5 8500G, CPU) on
   2026-11-25, Pocket TTS round trip included (2.8 s of audio in 0.6 s, Parakeet read it back).
+  Also 568 passed on a Galaxy A17 5G (Exynos 1330, Android 16) on 2026-11-25; there, old and
+  new builds run alternately chat and transcribe at the same speed, and Pocket TTS was about 12%
+  slower in two pairs of runs (see `docs/devices/galaxy-a17-5g.md`).
   Not yet verified: macOS (Metal), the Pixel 8, Linux arm64, iOS.
 - **LFM3 chat models load.** llama.cpp moved to 1b4554ef (2026-10-27, LFM3 support) and
   whisper.cpp to 21ba6d26; both pin ggml 0.27.0. llama.cpp now returns a rendered chat prompt
