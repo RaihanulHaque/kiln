@@ -1,6 +1,6 @@
 {
   "name": "kiln-react-native",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "On-device LLM runtime for React Native: chat, decision, embedding, speech-to-text and text-to-speech models (Android)",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

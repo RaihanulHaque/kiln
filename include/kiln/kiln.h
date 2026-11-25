@@ -25,7 +25,7 @@ extern "C" {
 #endif
 
 #define KILN_VERSION_MAJOR 0
-#define KILN_VERSION_MINOR 5
+#define KILN_VERSION_MINOR 6
 #define KILN_VERSION_PATCH 0
 
 /* ------------------------------------------------------------------ */
@@ -124,6 +124,7 @@ typedef struct kiln_model_info {
     int32_t  n_embd;              /* embedding models: length of the vector kiln_embed returns; else 0 */
     bool     is_speech_model;     /* writes down audio with kiln_transcribe and needs no projector (Whisper, Parakeet);
                                      cannot generate text. Qwen3-ASR is a chat-style model plus a projector, so it reads false */
+    bool     is_ocr_model;        /* reads the text in images with kiln_ocr (OCRia-nano); cannot generate text */
 } kiln_model_info;
 
 KILN_API kiln_status kiln_model_get_info(const kiln_model* m, kiln_model_info* out);
@@ -244,7 +245,7 @@ KILN_API kiln_status kiln_generate(kiln_context* c,
                                    kiln_gen_stats* stats);
 
 /* Thread-safe. Stops the call running on this context (kiln_chat, kiln_generate, kiln_decide,
- * kiln_embed*, kiln_transcribe, kiln_speak), which returns KILN_ERR_CANCELLED. It counts from the
+ * kiln_embed*, kiln_transcribe, kiln_speak, kiln_ocr), which returns KILN_ERR_CANCELLED. It counts from the
  * moment the call starts, prompt rendering included. With no call running it does nothing: it
  * never stops a later call. */
 KILN_API void kiln_cancel(kiln_context* c);
@@ -493,6 +494,61 @@ KILN_API kiln_status kiln_speak(kiln_context* c, const char* text,
                                 const kiln_speak_options* opts,
                                 kiln_audio_cb cb, void* user,
                                 kiln_speak_stats* stats);
+
+/* ------------------------------------------------------------------ */
+/* Text recognition (OCR)                                              */
+/* ------------------------------------------------------------------ */
+
+/* Reads the printed text in an image: a photo of a page, a receipt, a form. The model is
+ * OCRia-nano-1 (LlamaIndex, 8 M parameters in all): a line detector, a router that picks a
+ * script for each line, and four recognizers (Latin; Chinese, Japanese and Korean; Arabic and
+ * Hebrew; and about 17 more scripts, Bengali and Devanagari among them). Convert its ONNX files
+ * once with scripts/convert_ocria.py into one GGUF, then kiln_model_load it like any model
+ * (kiln_model_info.is_ocr_model reads true), create a context and call kiln_ocr.
+ * Its license is not open: free for research, personal use and organisations under $2M of
+ * revenue and of funding, not for a competing OCR product. Read it before shipping. */
+
+typedef struct kiln_ocr_options {
+    int32_t long_side;            /* the page is shrunk so its longer side is at most this many pixels
+                                     before the lines are found; <= 0 = 1600. Smaller is faster and
+                                     misses small print */
+    float   min_confidence;       /* lines read with a lower confidence (0..1) are dropped; <= 0 = keep all */
+} kiln_ocr_options;
+
+KILN_API kiln_ocr_options kiln_ocr_options_default(void);
+
+/* One line of text found in the image. */
+typedef struct kiln_ocr_line {
+    const char* text;             /* UTF-8; valid only during the callback */
+    float       x0, y0, x1, y1;   /* bounding box in image pixels (left, top, right, bottom) */
+    float       quad[8];          /* the line's corners in reading order (x, y) x 4: top-left, top-right,
+                                     bottom-right, bottom-left; a slanted line has a slanted quad */
+    float       confidence;       /* mean probability of the line's characters, 0..1 */
+    int32_t     script;           /* the recognizer that read it: 0 Latin, 1 CJK, 2 RTL, 3 other scripts */
+} kiln_ocr_line;
+
+/* Called once per line, top to bottom, left to right within a row. Return false to stop. */
+typedef bool (*kiln_ocr_cb)(const kiln_ocr_line* line, void* user);
+
+typedef struct kiln_ocr_stats {
+    int32_t width, height;        /* the image */
+    int32_t lines;                /* lines passed to the callback */
+    int32_t lines_found;          /* boxes the detector found (some read as nothing or as junk) */
+    double  detect_ms;            /* finding the lines */
+    double  read_ms;              /* routing and reading them */
+    double  ms;                   /* whole call, decoding the image file included */
+    bool    upside_down;          /* the page was read turned half a turn */
+    bool    stopped_by_user;
+} kiln_ocr_stats;
+
+/* Reads the text in one image (jpg, png, bmp, gif: a path or the file's bytes) and passes each
+ * line to cb. Blocking; kiln_cancel stops it. Does not touch a conversation held in the context.
+ * opts, cb and stats may be NULL. Returns KILN_ERR_NOT_SUPPORTED on a model that is not an OCR
+ * model. A photo's EXIF orientation is not applied: turn the image upright first. */
+KILN_API kiln_status kiln_ocr(kiln_context* c, const kiln_media* image,
+                              const kiln_ocr_options* opts,
+                              kiln_ocr_cb cb, void* user,
+                              kiln_ocr_stats* stats);
 
 /* ------------------------------------------------------------------ */
 /* Logging                                                             */

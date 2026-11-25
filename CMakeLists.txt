@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(kiln VERSION 0.5.0 LANGUAGES C CXX)
+project(kiln VERSION 0.6.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -99,6 +99,9 @@ set(KILN_SOURCES
     src/probe/probe.cpp
     src/backends/llamacpp/llamacpp_backend.cpp
     src/backends/whispercpp/whispercpp_backend.cpp
+    src/backends/ocr/ocr_backend.cpp
+    src/backends/ocr/ocr_graph.cpp
+    src/backends/ocr/ocr_image.cpp
 )
 
 if(KILN_BUILD_SHARED)

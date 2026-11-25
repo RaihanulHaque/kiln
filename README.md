@@ -22,7 +22,8 @@ maintainers happened to own. kiln is built the other way round:
 
 v0.3.0 added embedding models (text, images and audio); v0.3.1 fixes core selection on chips
 with no little cores; v0.4.0 adds speech to text (`kiln_transcribe`) with Whisper, Parakeet
-and Qwen3-ASR; v0.5.0 adds text to speech (`kiln_speak`) with Pocket TTS. Run on 2026-10-12 and 2026-10-13 on the phones, the MacBook, the Linux
+and Qwen3-ASR; v0.5.0 adds text to speech (`kiln_speak`) with Pocket TTS; v0.6.0 adds text
+recognition (`kiln_ocr`) with OCRia-nano-1, run on ggml without llama.cpp, and moves to llama.cpp 1.0.0. Run on 2026-10-12 and 2026-10-13 on the phones, the MacBook, the Linux
 desktop and a Linux container. The iPhone row is still from
 v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 

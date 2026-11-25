@@ -16,7 +16,7 @@ import java.io.File
 class DeviceTest {
     @Test
     fun loadsAndProbes() {
-        assertEquals("0.5.0", Kiln.version)
+        assertEquals("0.6.0", Kiln.version)
         val d = Kiln.probeDevice()
         assertEquals("arm64-v8a", d.abi)
         assertTrue("$d", d.cpuCores > 0 && d.cpuBigCores in 1..d.cpuCores)

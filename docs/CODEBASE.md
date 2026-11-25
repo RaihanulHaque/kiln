@@ -10,7 +10,7 @@ include/kiln/kiln.h                 the public C API. The only header bindings s
 src/core/internal.h                 C++ interfaces Backend / Model / Context that backends implement
 src/core/kiln.cpp                   C API functions: validate args, pick a backend, forward
 src/core/error.cpp                  thread-local last-error string, logging
-src/core/registry.cpp               ordered list of backends: llama.cpp, then whisper.cpp; each reads its own file format
+src/core/registry.cpp               ordered list of backends: OCR, llama.cpp, whisper.cpp; each reads its own file format
 src/probe/probe.cpp                 device probe: SoC, cores, clocks -> fast-core mask, RAM, ISA bits
 src/backends/llamacpp/
     llamacpp_backend.cpp            the main backend: load, template, generate, threadpool pinning
@@ -24,7 +24,12 @@ src/backends/llamacpp/
 src/backends/whispercpp/
     whispercpp_backend.cpp          Whisper and Parakeet through whisper.cpp's two libraries: sniff the file, load, decode
                                     the audio (its own static miniaudio), stream the segments, timings
-tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query / --mmproj / --media (embedding models), --transcribe (speech models), --speak / --voice (text to speech)
+src/backends/ocr/                   OCRia-nano-1 text recognition on ggml (no llama.cpp): a GGUF with architecture "ocria"
+    ocr_backend.cpp                 Backend / Model / Context, and the page pipeline: detect boxes, route, read, filter
+    ocr_graph.cpp                   runs one converted ONNX graph (detector, router or a recognizer) as a ggml graph
+    ocr_image.cpp                   resize, grey, perspective crop, components, rotated rectangles, to OpenCV's definitions
+scripts/convert_ocria.py            OCRia-nano-1's ONNX files -> one GGUF: weights, each graph as JSON, charsets
+tools/kiln-cli/main.cpp             command-line harness; --chat, --think, --think-budget, --ask (decision models), --embed / --query / --mmproj / --media (embedding models), --transcribe (speech models), --speak / --voice (text to speech), --ocr / --boxes / --quads (OCR)
 tools/kiln-bench/main.cpp           resource sampler + repeated-run benchmark for chat, decision, embedding and speech models
 tools/barrier-lab/main.cpp          standalone experiment (not in the CMake build): split work + ggml-style barrier
 tests/test_core.cpp                 the C test suite (host and device)
@@ -245,6 +250,51 @@ projector generates audio (`MediaProjector::generates_audio`, from `mtmd_gen_aud
 To check a change: `llama-tts` from the submodule with the same model, voice and seed, then
 Parakeet on both outputs; the words must match (`test_speak` does the round trip).
 
+## One `kiln_ocr` call
+
+`OcrContext::ocr` in `src/backends/ocr/ocr_backend.cpp`. The model is OCRia-nano-1 (LlamaIndex),
+not a language model: six small networks, converted from ONNX by `scripts/convert_ocria.py`. The
+steps around the networks are a port of LiteParse's `ocria` engine (Apache 2.0), with the same
+constants.
+
+1. **Image.** stb_image (compiled static, so it does not meet mtmd's copy) decodes the file to
+   RGB. EXIF orientation is not applied.
+2. **Detect.** The page is shrunk (OpenCV's INTER_AREA, `ocr_image.cpp`) so its long side is at
+   most `long_side` and both sides are multiples of 32, scaled to -1..1, and run through the
+   detector. Its output is a probability map at half size; cells above the threshold (0.55, from
+   `det.meta.json`) form 4-connected regions; each region with a mean probability of 0.6 becomes a
+   rotated rectangle, grown back to the full line height (the targets were shrunk by 0.3), then
+   collinear boxes are merged and sorted in rows of 8 pixels.
+3. **Crop.** Each box is cut out with a perspective warp (bicubic, OpenCV's fixed-point table).
+4. **Route.** Each crop, grey and 32 pixels high, tiled to 512 wide, goes through the router:
+   four script scores and an upside-down score. Lines take the page's script unless confidently
+   another; a page whose width votes "upside down" is turned half a turn.
+5. **Read.** Each script's lines, sorted by width and batched 32 at a time padded to a multiple of
+   128 pixels, go through that script's recognizer; per step of 4 pixels (8 for CJK) the best
+   character wins, repeats and blanks are dropped (CTC). Then two second looks: "rescue" re-reads
+   a weak Latin page with the script the router saw, and lines routed off the page's script are
+   also read by the page's recognizer.
+6. **Filter and hand over.** Empty readings and junk (no letter or digit, or two unsure ones) are
+   dropped; each line goes to `kiln_ocr_cb` with its box, quad, confidence and script, in reading
+   order (reversed on an upside-down page).
+
+`ocr_graph.cpp` turns each graph's JSON (op, inputs, outputs, attributes) into ggml calls. Image
+tensors are kept **channels-first** (ggml ne = C, W, H, N): a 1x1 convolution is then one
+`ggml_mul_mat` over every pixel, and a depthwise one takes `conv_2d_dw_direct`'s SIMD path, with
+its kernel rearranged once at load (the plain layout's depthwise loop was four times slower). A
+convolution's bias, ReLU and FakeQuant (the 8-bit Latin recognizer's rounding: divide by the scale,
+round half to even with the 1.5 x 2^23 float trick, as ONNX does) run as one custom op when each is
+the only reader of the one before. The first layer (3x3 over one channel) is a custom op too, and
+the detector's RGB-to-grey step is done on the host while the input is copied in. The allocator is
+kept per graph, so its memory is reused between runs. A recognizer's scores come back as stored,
+one step's scores side by side, which is the order the CTC decoder reads them in.
+
+To check a change: run each graph on the same input through ONNX Runtime (`pip install onnx
+onnxruntime`) and through kiln; on 2026-11-25 every output matched to 1e-6 (the Latin recognizer
+only after the rounding and division above). For the pipeline, crop a line with OpenCV
+(`cv2.warpPerspective`, INTER_CUBIC, BORDER_REPLICATE) at the quad `kiln-cli --quads` prints and
+read it with ONNX Runtime: the text and confidence must match kiln's.
+
 ## One `kiln_transcribe` call
 
 Two paths, chosen by the model that was loaded.
@@ -342,6 +392,7 @@ calling thread; the Dart layer turns that into an async stream.
 | add an API call | `kiln.h`, `kiln.cpp`, then the backend; re-run ffigen; add to `kiln.dart` |
 | change thread/pin policy | `probe.cpp` (which cores are "fast") and `create_context` in the backend |
 | support a new engine | implement `Backend/Model/Context` from `internal.h` (`whispercpp_backend.cpp` is the small example), register in `registry.cpp` |
+| run another small ONNX model on ggml | add its ops to `ocr_graph.cpp` and to `SUPPORTED` in `scripts/convert_ocria.py`; compare every output with ONNX Runtime |
 | change how thinking is detected | `LlamaModel` constructor (empirical on/off render) |
 | change the thinking budget behaviour | the end of the sampling loop, `LlamaContext::sample_loop` |
 | support a speech model that writes another header | `transcript_filter.h`, and a case in `test_transcript_filter` with the pieces it writes |

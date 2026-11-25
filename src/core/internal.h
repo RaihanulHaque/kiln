@@ -71,6 +71,12 @@ public:
                                    kiln_token_cb cb, void* user, kiln_transcribe_stats& stats) = 0;
     virtual kiln_status speak(const char* text, const kiln_speak_options& o, kiln_audio_cb cb, void* user,
                               kiln_speak_stats& stats) = 0;
+    // only the OCR backend reads images as text
+    virtual kiln_status ocr(const kiln_media& image, const kiln_ocr_options& o, kiln_ocr_cb cb, void* user,
+                            kiln_ocr_stats& stats) {
+        (void)image; (void)o; (void)cb; (void)user; (void)stats;
+        return set_error(KILN_ERR_NOT_SUPPORTED, "not an OCR model; kiln_ocr needs OCRia-nano (scripts/convert_ocria.py)");
+    }
 
 private:
     std::atomic<uint64_t> call_{0};            // number of the running call, 0 = none

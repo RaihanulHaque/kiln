@@ -134,6 +134,32 @@ bool audio_cb(const float* samples, int32_t n, int32_t rate, void* user) {
     return go_on == JNI_TRUE;
 }
 
+struct OcrSink {
+    JNIEnv*   env;
+    jobject   sink;
+    jmethodID mid;
+    bool      failed = false;
+};
+
+// One line: its text as UTF-8 and 14 numbers: x0, y0, x1, y1, the quad's 8 coordinates,
+// confidence, script.
+bool ocr_cb(const kiln_ocr_line* l, void* user) {
+    auto* o = static_cast<OcrSink*>(user);
+    if (o->failed) return false;
+    jbyteArray text = to_bytes(o->env, l->text ? l->text : "");
+    float nums[14] = {l->x0, l->y0, l->x1, l->y1};
+    for (int i = 0; i < 8; ++i) nums[4 + i] = l->quad[i];
+    nums[12] = l->confidence;
+    nums[13] = (float)l->script;
+    jfloatArray f = o->env->NewFloatArray(14);
+    if (f) o->env->SetFloatArrayRegion(f, 0, 14, nums);
+    const jboolean go_on = o->env->CallBooleanMethod(o->sink, o->mid, text, f);
+    o->env->DeleteLocalRef(text);
+    o->env->DeleteLocalRef(f);
+    if (o->env->ExceptionCheck()) { o->failed = true; return false; }
+    return go_on == JNI_TRUE;
+}
+
 // ---- shared argument decoding ----
 
 kiln_sampling_params sampling(JNIEnv* env, jfloatArray f, jlongArray i) {
@@ -265,12 +291,12 @@ JNI(jlong, modelLoad)(JNIEnv* env, jclass, jbyteArray path, jint backend, jint n
 JNI(void, modelFree)(JNIEnv*, jclass, jlong m) { kiln_model_free(handle<kiln_model>(m)); }
 
 // nums: backend used, n_params, n_ctx_train, n_vocab, gpu layers used, model bytes, thinking,
-// decision, embedding, n_embd, speech. Returns backend name, arch, quant.
+// decision, embedding, n_embd, speech, ocr. Returns backend name, arch, quant.
 JNI(jobjectArray, modelInfo)(JNIEnv* env, jclass, jlong m, jlongArray nums) {
     kiln_model_info i{};
     if (fail(env, kiln_model_get_info(handle<kiln_model>(m), &i))) return nullptr;
     put(env, nums, {i.backend_used, i.n_params, i.n_ctx_train, i.n_vocab, i.n_gpu_layers_used, (jlong)i.model_bytes,
-                    i.supports_thinking, i.is_decision_model, i.is_embedding_model, i.n_embd, i.is_speech_model});
+                    i.supports_thinking, i.is_decision_model, i.is_embedding_model, i.n_embd, i.is_speech_model, i.is_ocr_model});
     jobjectArray out = env->NewObjectArray(3, env->FindClass("[B"), nullptr);
     const char* s[] = {i.backend_name, i.arch, i.quant};
     for (int k = 0; k < 3; ++k) {
@@ -463,5 +489,21 @@ JNI(void, speak)(JNIEnv* env, jclass, jlong c, jbyteArray text, jbyteArray voice
     if (a.failed) return;
     put(env, stats, {st.audio_seconds, (double)st.sample_rate, (double)st.frames, (double)st.prompt_tokens, st.prompt_ms, st.gen_ms, st.ms,
                      (double)st.stopped_by_eos, (double)st.stopped_by_user});
+    fail(env, s);
+}
+
+// stats: width, height, lines, lines found, detect ms, read ms, ms, upside down, user.
+JNI(void, ocr)(JNIEnv* env, jclass, jlong c, jbyteArray path, jbyteArray data, jint long_side, jfloat min_confidence,
+               jobject sink, jdoubleArray stats) {
+    MediaItem image(env, path, data);
+    kiln_ocr_options o = kiln_ocr_options_default();
+    if (long_side > 0) o.long_side = long_side;
+    o.min_confidence = min_confidence;
+    OcrSink k{env, sink, sink ? env->GetMethodID(env->GetObjectClass(sink), "onLine", "([B[F)Z") : nullptr};
+    kiln_ocr_stats st{};
+    const kiln_status s = kiln_ocr(handle<kiln_context>(c), image.get(), &o, sink ? ocr_cb : nullptr, &k, &st);
+    if (k.failed) return;
+    put(env, stats, {(double)st.width, (double)st.height, (double)st.lines, (double)st.lines_found, st.detect_ms, st.read_ms, st.ms,
+                     (double)st.upside_down, (double)st.stopped_by_user});
     fail(env, s);
 }

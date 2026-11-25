@@ -131,6 +131,7 @@ class KilnModelInfo {
     this.isEmbeddingModel = false,
     this.nEmbd = 0,
     this.isSpeechModel = false,
+    this.isOcrModel = false,
   });
 
   factory KilnModelInfo.fromNative(b.kiln_model_info i) => KilnModelInfo(
@@ -148,6 +149,7 @@ class KilnModelInfo {
     isEmbeddingModel: i.is_embedding_model,
     nEmbd: i.n_embd,
     isSpeechModel: i.is_speech_model,
+    isOcrModel: i.is_ocr_model,
   );
 
   final KilnBackend backend;
@@ -170,6 +172,10 @@ class KilnModelInfo {
   /// that transcribes once its projector is loaded.
   final bool isSpeechModel;
 
+  /// An OCRia-nano file: reads the text in images (kiln_ocr; not wrapped in Dart yet) and
+  /// cannot generate text.
+  final bool isOcrModel;
+
   Map<String, Object> toMap() => {
     'backend': backend.index,
     'backendName': backendName,
@@ -185,6 +191,7 @@ class KilnModelInfo {
     'isEmbeddingModel': isEmbeddingModel,
     'nEmbd': nEmbd,
     'isSpeechModel': isSpeechModel,
+    'isOcrModel': isOcrModel,
   };
   factory KilnModelInfo.fromMap(Map m) => KilnModelInfo(
     backend: KilnBackend.values[m['backend']],
@@ -201,6 +208,7 @@ class KilnModelInfo {
     isEmbeddingModel: m['isEmbeddingModel'] ?? false,
     nEmbd: m['nEmbd'] ?? 0,
     isSpeechModel: m['isSpeechModel'] ?? false,
+    isOcrModel: m['isOcrModel'] ?? false,
   );
 
   @override
@@ -209,7 +217,8 @@ class KilnModelInfo {
       '${(modelBytes / 1e9).toStringAsFixed(2)} GB, via $backendName'
       '${supportsThinking ? ', thinking' : ''}${isDecisionModel ? ', decision model' : ''}'
       '${isEmbeddingModel ? ', embedding model ($nEmbd numbers)' : ''}'
-      '${isSpeechModel ? ', speech model' : ''}';
+      '${isSpeechModel ? ', speech model' : ''}'
+      '${isOcrModel ? ', OCR model' : ''}';
 }
 
 class KilnModelParams {

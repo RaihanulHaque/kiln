@@ -61,6 +61,17 @@ against 9.85 s on average, about 14%, in reading the voice and in generating ali
 in a warming phone, with the order above, are too few to be sure. Worth re-checking on a cool
 phone before a release.
 
+## OCR (0.6.0, branch `feat/ocr`)
+
+`kiln-tests models` with OCRia-nano-1 added: 603 passed, 0 failed on 2026-11-25. Whole pages on
+the two big cores, `kiln-cli --ocr`, the second of two calls (warm):
+
+| page | first port | after the speed work | Ryzen 5 8500G, after |
+|---|---|---|---|
+| English test page, 1400 x 528, 9 lines | 0.70 s (detect 0.42, read 0.27) | 0.27 s (detect 0.15, read 0.11) | 0.06 s |
+| Bengali test page, 1000 x 384, 4 lines | | 0.13 s | 0.03 s |
+| receipt photo, 600 x 600, 8 lines | | 0.43 s (read 0.34: the second looks re-read every line with the CJK recognizer) | 0.08 s |
+
 ## Which cores to use: the sweep
 
 A ~60-token prompt and 200 generated tokens, twice per setting, `kiln-cli`, `KILN_CPU_MASK`

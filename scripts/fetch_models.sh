@@ -2,16 +2,18 @@
 # Download the GGUFs the C test suite and benchmarks expect into models/.
 # Skips files already present. ~1.7 GB total; --media adds the image / audio encoders
 # for the kiln_embed_media tests (~0.9 GB more), --speech the speech model for the
-# kiln_transcribe tests (~1.0 GB more).
-# usage: scripts/fetch_models.sh [--media] [--speech]
+# kiln_transcribe tests (~1.0 GB more), --ocr OCRia-nano-1 for kiln_ocr (16 MB, converted
+# here from its ONNX files: needs python3 with onnx, numpy and pyyaml).
+# usage: scripts/fetch_models.sh [--media] [--speech] [--ocr]
 set -euo pipefail
 # a mistyped flag must not look like a successful setup that then skips the media tests
-MEDIA=0; SPEECH=0
+MEDIA=0; SPEECH=0; OCR=0
 for arg in "$@"; do
   case "$arg" in
     --media)  MEDIA=1 ;;
     --speech) SPEECH=1 ;;
-    *) echo "unknown argument: $arg" >&2; echo "usage: scripts/fetch_models.sh [--media] [--speech]" >&2; exit 2 ;;
+    --ocr)    OCR=1 ;;
+    *) echo "unknown argument: $arg" >&2; echo "usage: scripts/fetch_models.sh [--media] [--speech] [--ocr]" >&2; exit 2 ;;
   esac
 done
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -49,4 +51,23 @@ if [ "$SPEECH" = 1 ]; then
   # text to speech: Pocket TTS (Kyutai, CC-BY-4.0), English, in llama.cpp's format (backbone + mmproj)
   fetch pocket-tts-en.gguf        "https://huggingface.co/EryriLabs/pocket-tts-GGUF/resolve/main/pocket-tts-en.gguf"
   fetch mmproj-pocket-tts-en.gguf "https://huggingface.co/EryriLabs/pocket-tts-GGUF/resolve/main/mmproj-pocket-tts-en.gguf"
+fi
+
+if [ "$OCR" = 1 ]; then
+  # OCRia-nano-1 (LlamaIndex): ONNX files under the OCRia-nano-1 Model License, which is not
+  # open (free for research, personal use and organisations under $2M of revenue and funding;
+  # read it before shipping). kiln reads one GGUF, converted here from a pinned revision.
+  if [ -f "$ROOT/models/ocria-nano-1.gguf" ]; then
+    echo "have ocria-nano-1.gguf"
+  else
+    O=https://huggingface.co/llamaindex/OCRia-nano-1/resolve/53d45fe6803a568deedb081550c2fdb97cc99f97
+    mkdir -p "$ROOT/models/ocria-nano-1"
+    for f in det.onnx det.meta.json router.onnx LICENSE \
+             rec_latin.onnx rec_latin.charset.json rec_cjk.onnx rec_cjk.charset.json \
+             rec_rtl.onnx rec_rtl.charset.json rec_rtl.meta.json rec_world.onnx rec_world.charset.json; do
+      fetch "ocria-nano-1/$f" "$O/$f"
+    done
+    python3 "$ROOT/scripts/convert_ocria.py" "$ROOT/models/ocria-nano-1" "$ROOT/models/ocria-nano-1.gguf" ||
+      { echo "conversion failed: pip install onnx numpy pyyaml, then run scripts/fetch_models.sh --ocr again" >&2; exit 1; }
+  fi
 fi

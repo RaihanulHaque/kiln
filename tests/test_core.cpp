@@ -6,6 +6,7 @@
 #include "../src/probe/fast_cores.h"      // header-only rules, tested with layouts of real chips
 #include "../src/backends/llamacpp/transcript_filter.h"   // header-only, tested with the pieces a speech model writes
 #include "../src/core/internal.h"     // kiln::Model::prompt_tokens: the token ids a chat prompt becomes
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -13,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1102,6 +1104,132 @@ static void test_speak(const std::string& path, const std::string& mmproj, const
     remove(wav_path.c_str());
 }
 
+// Text recognition: OCRia-nano reads three drawn pages. The words are checked, not exact
+// strings: a reading can change by one character between processors (see CLAUDE.md on
+// reference numbers), while the words below are read at 0.98 and more.
+struct OcrRun {
+    std::vector<std::string> text;
+    std::vector<int> script;
+    std::vector<std::array<float, 4>> box;
+    std::vector<float> conf;
+    int stop_after = 0;
+};
+static bool ocr_collect(const kiln_ocr_line* l, void* u) {
+    auto* r = static_cast<OcrRun*>(u);
+    r->text.push_back(l->text);
+    r->script.push_back(l->script);
+    r->box.push_back({l->x0, l->y0, l->x1, l->y1});
+    r->conf.push_back(l->confidence);
+    return !(r->stop_after > 0 && (int)r->text.size() >= r->stop_after);
+}
+static std::string joined(const OcrRun& r) {
+    std::string s;
+    for (const auto& t : r.text) s += t + "\n";
+    return s;
+}
+
+static void test_ocr(const std::string& path, const std::string& chat_model, const std::string& media) {
+    SECTION("OCRia-nano (text recognition)");
+    if (!exists(path)) { fprintf(stderr, "  SKIP (missing %s; scripts/fetch_models.sh --ocr)\n", path.c_str()); return; }
+    const std::string en = media + "/ocr_english.png", bn = media + "/ocr_bengali.png", flipped = media + "/ocr_english_upside_down.png";
+    if (!exists(en) || !exists(bn) || !exists(flipped)) { fprintf(stderr, "  SKIP (missing the ocr_*.png test pages)\n"); return; }
+    kiln_model* m = nullptr;
+    CHECK(kiln_model_load(path.c_str(), nullptr, &m) == KILN_OK, "%s", kiln_last_error());
+    if (!m) return;
+    kiln_model_info mi;
+    CHECK(kiln_model_get_info(m, &mi) == KILN_OK && mi.is_ocr_model && !mi.is_embedding_model && !mi.is_speech_model, "is_ocr_model=%d", mi.is_ocr_model);
+    CHECK(strcmp(mi.arch, "ocria") == 0 && mi.n_params > 3500000 && mi.n_params < 4500000, "arch=%s params=%lld", mi.arch, (long long)mi.n_params);
+    kiln_context* c = nullptr;
+    CHECK(kiln_context_create(m, nullptr, &c) == KILN_OK, "%s", kiln_last_error());
+    if (!c) { kiln_model_free(m); return; }
+
+    // an OCR model does nothing else
+    kiln_chat_message msg = {"user", "hi"};
+    CHECK(kiln_chat(c, &msg, 1, nullptr, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "chat on an OCR model");
+
+    // the English invoice: nine lines, top to bottom, all Latin
+    kiln_media img = {en.c_str(), nullptr, 0};
+    OcrRun r; kiln_ocr_stats st;
+    CHECK(kiln_ocr(c, &img, nullptr, ocr_collect, &r, &st) == KILN_OK, "%s", kiln_last_error());
+    const std::string all = joined(r);
+    CHECK(st.width == 1400 && st.height == 528 && st.lines == (int)r.text.size(), "%dx%d lines=%d", st.width, st.height, st.lines);
+    CHECK(r.text.size() == 9, "%zu lines:\n%s", r.text.size(), all.c_str());
+    for (const char* w : {"Invoice No. 2026-1125", "25 November 2026", "Rahi Haque", "Mango juice", "Brown bread", "205.50", "Thank you for shopping"})
+        CHECK(all.find(w) != std::string::npos, "'%s' not read:\n%s", w, all.c_str());
+    CHECK(!r.text.empty() && r.text[0].find("Invoice") != std::string::npos, "first line '%s'", r.text.empty() ? "" : r.text[0].c_str());
+    bool boxes_ok = true, latin = true, conf_ok = true;
+    for (size_t i = 0; i < r.box.size(); ++i) {
+        const auto& b = r.box[i];
+        boxes_ok &= b[0] >= 0 && b[1] >= 0 && b[2] <= 1400 && b[3] <= 528 && b[0] < b[2] && b[1] < b[3];
+        latin &= r.script[i] == 0;
+        conf_ok &= r.conf[i] > 0.9f && r.conf[i] <= 1.0f;
+        if (i > 0) boxes_ok &= b[1] >= r.box[i - 1][1] - 10;     // rows in order
+    }
+    CHECK(boxes_ok && latin && conf_ok, "boxes=%d latin=%d conf=%d", boxes_ok, latin, conf_ok);
+    CHECK(!st.upside_down && st.detect_ms > 0 && st.read_ms > 0 && st.ms >= st.detect_ms + st.read_ms, "times %.0f %.0f %.0f", st.detect_ms, st.read_ms, st.ms);
+    fprintf(stderr, "  English page: %d lines in %.0f ms (detect %.0f, read %.0f)\n", st.lines, st.ms, st.detect_ms, st.read_ms);
+
+    // the same page from file bytes, and a callback that stops after two lines
+    std::vector<uint8_t> bytes;
+    { std::ifstream f(en, std::ios::binary); bytes.assign(std::istreambuf_iterator<char>(f), {}); }
+    kiln_media from_mem = {nullptr, bytes.data(), bytes.size()};
+    OcrRun r2; r2.stop_after = 2; kiln_ocr_stats st2;
+    CHECK(kiln_ocr(c, &from_mem, nullptr, ocr_collect, &r2, &st2) == KILN_OK, "%s", kiln_last_error());
+    CHECK(r2.text.size() == 2 && st2.stopped_by_user && r2.text[0] == r.text[0], "stop: %zu lines, stopped=%d", r2.text.size(), st2.stopped_by_user);
+
+    // a confidence floor drops lines; a smaller page size still reads large print
+    kiln_ocr_options o = kiln_ocr_options_default();
+    CHECK(o.long_side == 1600 && o.min_confidence == 0.f, "defaults");
+    o.min_confidence = 0.995f;
+    OcrRun r3;
+    CHECK(kiln_ocr(c, &img, &o, ocr_collect, &r3, nullptr) == KILN_OK && r3.text.size() < r.text.size() && !r3.text.empty(), "min_confidence kept %zu", r3.text.size());
+    o = kiln_ocr_options_default(); o.long_side = 960;
+    OcrRun r4;
+    CHECK(kiln_ocr(c, &img, &o, ocr_collect, &r4, nullptr) == KILN_OK && joined(r4).find("Total due") != std::string::npos, "long_side 960:\n%s", joined(r4).c_str());
+
+    // upside down: found out, and the lines still come in reading order
+    kiln_media fl = {flipped.c_str(), nullptr, 0};
+    OcrRun r5; kiln_ocr_stats st5;
+    CHECK(kiln_ocr(c, &fl, nullptr, ocr_collect, &r5, &st5) == KILN_OK && st5.upside_down, "upside_down=%d", st5.upside_down);
+    CHECK(!r5.text.empty() && r5.text[0].find("Invoice") != std::string::npos && joined(r5).find("Thank you") != std::string::npos,
+          "upside down:\n%s", joined(r5).c_str());
+
+    // Bengali goes to the recognizer for other scripts
+    kiln_media bimg = {bn.c_str(), nullptr, 0};
+    OcrRun r6;
+    CHECK(kiln_ocr(c, &bimg, nullptr, ocr_collect, &r6, nullptr) == KILN_OK && r6.text.size() == 4, "%zu Bengali lines", r6.text.size());
+    const std::string ball = joined(r6);
+    for (const char* w : {"\xe0\xa6\xb8\xe0\xa7\x8b\xe0\xa6\xa8\xe0\xa6\xbe\xe0\xa6\xb0",          // সোনার
+                          "\xe0\xa6\xac\xe0\xa6\xbe\xe0\xa6\x82\xe0\xa6\xb2\xe0\xa6\xbe",          // বাংলা
+                          "\xe0\xa6\xa2\xe0\xa6\xbe\xe0\xa6\x95\xe0\xa6\xbe"})                     // ঢাকা
+        CHECK(ball.find(w) != std::string::npos, "Bengali word not read:\n%s", ball.c_str());
+    bool world = !r6.script.empty();
+    for (int s : r6.script) world &= s == 3;
+    CHECK(world, "Bengali lines not routed to the world recognizer");
+
+    // bad input
+    const uint8_t junk[16] = {1, 2, 3, 4};
+    kiln_media bad = {nullptr, junk, sizeof junk};
+    CHECK(kiln_ocr(c, &bad, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "junk bytes");
+    kiln_media none = {nullptr, nullptr, 0};
+    CHECK(kiln_ocr(c, &none, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "no image");
+    CHECK(kiln_ocr(nullptr, &img, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_INVALID_ARG, "no context");
+    kiln_context_free(c);
+    kiln_model_free(m);
+
+    // kiln_ocr on a chat model
+    if (exists(chat_model)) {
+        kiln_model* cm = nullptr; kiln_context* cc = nullptr;
+        if (kiln_model_load(chat_model.c_str(), nullptr, &cm) == KILN_OK && kiln_context_create(cm, nullptr, &cc) == KILN_OK) {
+            CHECK(kiln_ocr(cc, &img, nullptr, nullptr, nullptr, nullptr) == KILN_ERR_NOT_SUPPORTED, "ocr on a chat model");
+            kiln_model_info ci; kiln_model_get_info(cm, &ci);
+            CHECK(!ci.is_ocr_model, "chat model says OCR");
+        }
+        if (cc) kiln_context_free(cc);
+        if (cm) kiln_model_free(cm);
+    }
+}
+
 int main(int argc, char** argv) {
     std::string dir = argc > 1 ? argv[1] : "models";
     kiln_set_log_level(KILN_LOG_ERROR);
@@ -1132,6 +1260,7 @@ int main(int argc, char** argv) {
     test_speech_builtin(dir + "/ggml-base-q5_1.bin", "Whisper base q5_1 (speech to text, whisper.cpp)", "whisper", "English", media);
     test_speech_builtin(dir + "/ggml-parakeet-tdt-0.6b-v3-q8_0.bin", "Parakeet TDT 0.6B v3 q8_0 (speech to text, whisper.cpp)", "parakeet", "", media);
     test_speak(dir + "/pocket-tts-en.gguf", dir + "/mmproj-pocket-tts-en.gguf", dir + "/ggml-parakeet-tdt-0.6b-v3-q8_0.bin", media);
+    test_ocr(dir + "/ocria-nano-1.gguf", dir + "/LiquidAI_LFM2.5-350M_Q4_K_M.gguf", media);
     fprintf(stderr, "\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

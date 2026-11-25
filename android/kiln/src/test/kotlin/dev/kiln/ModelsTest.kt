@@ -39,7 +39,7 @@ class ModelsTest {
     fun probeVersionAndDefaults() {
         val d = Kiln.probeDevice()
         assertTrue("$d", d.cpuCores > 0 && d.cpuBigCores > 0 && d.ramTotalBytes > 0)
-        assertEquals("0.5.0", Kiln.version)
+        assertEquals("0.6.0", Kiln.version)
         // the Kotlin defaults are kiln's defaults
         val n = Native.defaults()
         val s = Sampling()
@@ -361,6 +361,49 @@ class ModelsTest {
         val w = wordsOnly(heard.text)
         assertTrue("Parakeet heard \"${heard.text}\"", w.contains("train") && w.contains("london"))
         println("read back: \"${heard.text}\"")
+    }
+
+    @Test
+    fun ocrEnglishBengaliAndUpsideDown() {
+        KilnModel.load(model("ocria-nano-1.gguf")).use { m ->
+            assertTrue("${m.info}", m.info.isOcrModel && !m.info.isSpeechModel && m.info.arch == "ocria")
+            m.newContext().use { ctx ->
+                val en = ctx.ocrCollect(Media.File(media("ocr_english.png")))
+                assertEquals(en.text, 9, en.lines.size)
+                assertTrue(en.text, en.lines[0].text.startsWith("Invoice No. 2026-1125") && en.text.contains("Total due: BDT 205.50"))
+                assertTrue("${en.stats}", en.stats.width == 1400 && en.stats.height == 528 && !en.stats.upsideDown)
+                for (l in en.lines) {
+                    assertTrue("$l", l.script == Script.LATIN && l.confidence > 0.9f && l.left < l.right && l.top < l.bottom && l.quad.size == 8)
+                }
+                // from bytes; stop after the first line
+                val bytes = File(media("ocr_english.png")).readBytes()
+                var n = 0
+                val st = ctx.ocr(Media.Bytes(bytes)) { n++; false }
+                assertTrue("$st", st.stoppedByUser && n == 1)
+                // upside down: the lines still come in reading order
+                val up = ctx.ocrCollect(Media.File(media("ocr_english_upside_down.png")))
+                assertTrue(up.text, up.stats.upsideDown && up.lines[0].text.startsWith("Invoice"))
+                // Bengali goes to the recognizer for other scripts; UTF-8 crosses JNI intact
+                val bn = ctx.ocrCollect(Media.File(media("ocr_bengali.png")), OcrOptions(minConfidence = 0.5f))
+                assertTrue(bn.text, bn.lines.size == 4 && bn.lines.all { it.script == Script.OTHER })
+                assertTrue(bn.text, bn.text.contains("সোনার বাংলা") && bn.text.contains("ঢাকা"))
+                // an exception from the callback reaches the caller
+                try {
+                    ctx.ocr(Media.File(media("ocr_english.png"))) { throw IllegalStateException("from onLine") }
+                    fail("exception lost")
+                } catch (e: IllegalStateException) {
+                    assertEquals("from onLine", e.message)
+                }
+                // not an image
+                try {
+                    ctx.ocr(Media.Bytes(byteArrayOf(1, 2, 3, 4)))
+                    fail("junk accepted")
+                } catch (e: KilnException) {
+                    assertEquals(Status.INVALID_ARG, e.status)
+                }
+                println("OCR: ${en.lines.size} lines in ${"%.0f".format(en.stats.ms)} ms; Bengali: ${bn.text.replace('\n', '|')}")
+            }
+        }
     }
 
     /** 16-bit mono PCM wav in memory. */

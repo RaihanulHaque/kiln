@@ -10,4 +10,4 @@ keywords = ["llm", "llama", "whisper", "inference", "on-device"]
 categories = ["api-bindings", "science"]
 
 [dependencies]
-kiln-sys = { path = "../kiln-sys", version = "0.5.0" }
+kiln-sys = { path = "../kiln-sys", version = "0.6.0" }

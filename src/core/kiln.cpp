@@ -216,6 +216,24 @@ kiln_status kiln_speak(kiln_context* c, const char* text, const kiln_speak_optio
     return s;
 }
 
+kiln_ocr_options kiln_ocr_options_default(void) {
+    kiln_ocr_options o{}; o.long_side = 1600; o.min_confidence = 0.f; return o;
+}
+
+kiln_status kiln_ocr(kiln_context* c, const kiln_media* image, const kiln_ocr_options* opts,
+                     kiln_ocr_cb cb, void* user, kiln_ocr_stats* stats) {
+    kiln_ocr_stats st{};
+    if (stats) *stats = st;
+    if (!c || !image) return set_error(KILN_ERR_INVALID_ARG, "null handle/image");
+    if (!image->path && (!image->data || image->size == 0)) return set_error(KILN_ERR_INVALID_ARG, "image without path or data");
+    kiln_ocr_options o = opts ? *opts : kiln_ocr_options_default();
+    if (o.long_side <= 0) o.long_side = 1600;
+    CallScope call(*c->impl);
+    kiln_status s = c->impl->ocr(*image, o, cb, user, st);
+    if (stats) *stats = st;
+    return s;
+}
+
 kiln_transcribe_options kiln_transcribe_options_default(void) {
     kiln_transcribe_options o{}; o.language = nullptr; o.prompt = nullptr; o.max_tokens = 0; return o;
 }
