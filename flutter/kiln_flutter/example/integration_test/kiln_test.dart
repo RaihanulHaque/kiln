@@ -736,4 +736,61 @@ void main() {
       }
     }, timeout: const Timeout(Duration(minutes: 20)));
   });
+
+  group('OCR (OCRia-nano-1)', () {
+    // The model's license is not open and nothing hosts it: convert it with
+    // scripts/fetch_models.sh --ocr and adb push models/ocria-nano-1.gguf into the app's folder.
+    // `flutter test` reinstalls the app and wipes that folder, so push while the run is still
+    // downloading LFM2.5 in setUpAll (wait for the folder to appear, then push).
+    test('reads the printed test page', () async {
+      final f = model('ocria-nano-1.gguf');
+      if (f == null) {
+        markTestSkipped('push ocria-nano-1.gguf into ${dir.path} (scripts/fetch_models.sh --ocr makes it)');
+        return;
+      }
+      final m = await kiln.loadModel(f.path);
+      try {
+        expect(m.info.isOcrModel, isTrue);
+        final ctx = await m.createContext();
+        try {
+          final r = await ctx.ocr(KilnMedia.bytes(ocrEnglishPng));
+          // ignore: avoid_print
+          print('ocr: ${r.stats}\n${r.text}');
+          expect(r.lines, hasLength(9));
+          expect(r.lines.first.text, 'Invoice No. 2026-1125');
+          expect(r.text, contains('Total due: BDT 205.50'));
+          expect(r.lines.every((l) => l.confidence > 0.9), isTrue);
+          expect(r.lines.first.quad, hasLength(8));
+          expect(r.lines.first.script, KilnOcrScript.latin);
+          expect(r.stats.width, 1400);
+          expect(r.stats.upsideDown, isFalse);
+          // from a file too, the same text
+          final file = File('${dir.path}/ocr_english.png')..writeAsBytesSync(ocrEnglishPng);
+          expect((await ctx.ocr(KilnMedia.file(file.path))).text, r.text);
+          // a high bar drops every line; not an image is refused
+          expect((await ctx.ocr(KilnMedia.bytes(ocrEnglishPng), minConfidence: 1.01)).lines, isEmpty);
+          Matcher status(String name) => throwsA(isA<KilnException>().having((e) => e.status.name, 'status', name));
+          await expectLater(ctx.ocr(KilnMedia.bytes(speechTrainWav)), status('KILN_ERR_INVALID_ARG'));
+          await ctx.dispose();
+        } catch (_) {
+          await ctx.dispose();
+          rethrow;
+        }
+      } finally {
+        await m.dispose();
+      }
+    }, timeout: const Timeout(Duration(minutes: 5)));
+
+    test('ocr on a chat model is refused', () async {
+      final m = await kiln.loadModel(model(lfm)!.path);
+      final ctx = await m.createContext();
+      try {
+        await expectLater(ctx.ocr(KilnMedia.bytes(ocrEnglishPng)),
+            throwsA(isA<KilnException>().having((e) => e.status.name, 'status', 'KILN_ERR_NOT_SUPPORTED')));
+      } finally {
+        await ctx.dispose();
+        await m.dispose();
+      }
+    });
+  });
 }

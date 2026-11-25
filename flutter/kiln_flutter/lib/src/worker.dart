@@ -209,6 +209,8 @@ class KilnWorker {
 
       case 'speak':
         return _speak(k, r);
+      case 'ocr':
+        return _ocr(k, r);
     }
     throw KilnException(
       b.kiln_status.KILN_ERR_INVALID_ARG,
@@ -504,6 +506,78 @@ class KilnWorker {
         _fail(k, s);
       }
       return {'status': s.value, 'stats': stats};
+    } finally {
+      cb.close();
+      calloc.free(item);
+      calloc.free(opts);
+      calloc.free(st);
+      for (final p in frees) {
+        calloc.free(p);
+      }
+    }
+  }
+
+  /// Collects every line and returns them with the stats: a page has tens of lines, so one
+  /// message back is simpler than a stream.
+  static Map<String, Object?> _ocr(b.KilnBindings k, _Req r) {
+    final image = KilnMedia.fromMap(r.args['image'] as Map);
+    final lines = <Map<String, Object>>[];
+    final frees = <Pointer>[];
+    final cb = NativeCallable<b.kiln_ocr_cbFunction>.isolateLocal((
+      Pointer<b.kiln_ocr_line> line,
+      Pointer<Void> user,
+    ) {
+      final l = line.ref;
+      final text = l.text == nullptr ? '' : l.text.cast<Utf8>().toDartString();
+      lines.add(
+        KilnOcrLine(
+          text: text,
+          left: l.x0,
+          top: l.y0,
+          right: l.x1,
+          bottom: l.y1,
+          quad: [for (var i = 0; i < 8; i++) l.quad[i]],
+          confidence: l.confidence,
+          script: KilnOcrScript.values[l.script.clamp(0, 3)],
+        ).toMap(),
+      );
+      return !_cancelled(r);
+    }, exceptionalReturn: false);
+    final item = calloc<b.kiln_media>();
+    final opts = calloc<b.kiln_ocr_options>();
+    final st = calloc<b.kiln_ocr_stats>();
+    try {
+      final bytes = image.bytes;
+      if (bytes == null) {
+        final p = image.path!.toNativeUtf8();
+        frees.add(p);
+        item.ref.path = p.cast();
+      } else {
+        final buf = calloc<Uint8>(bytes.isEmpty ? 1 : bytes.length);
+        frees.add(buf);
+        buf.asTypedList(bytes.length).setAll(0, bytes);
+        item.ref.path = nullptr;
+        item.ref.data = buf;
+        item.ref.size = bytes.length;
+      }
+      opts.ref = k.kiln_ocr_options_default();
+      opts.ref.long_side = r.args['longSide'] as int;
+      opts.ref.min_confidence = r.args['minConfidence'] as double;
+      final ctx = Pointer<b.kiln_context>.fromAddress(r.args['context'] as int);
+      if (_cancelled(r)) {
+        st.ref.stopped_by_user = true;
+        return {
+          'status': b.kiln_status.KILN_ERR_CANCELLED.value,
+          'lines': lines,
+          'stats': KilnOcrStats.fromNative(st.ref).toMap(),
+        };
+      }
+      final s = k.kiln_ocr(ctx, item, opts, cb.nativeFunction, nullptr, st);
+      final stats = KilnOcrStats.fromNative(st.ref).toMap();
+      if (s != b.kiln_status.KILN_OK && s != b.kiln_status.KILN_ERR_CANCELLED) {
+        _fail(k, s);
+      }
+      return {'status': s.value, 'lines': lines, 'stats': stats};
     } finally {
       cb.close();
       calloc.free(item);

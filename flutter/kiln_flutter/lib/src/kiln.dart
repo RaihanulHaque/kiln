@@ -496,6 +496,51 @@ class KilnContext {
     });
   }
 
+  /// Read the printed text in an image (jpg, png, bmp, gif; a file or its bytes) with an OCR
+  /// model ([KilnModelInfo.isOcrModel], OCRia-nano-1 converted by kiln's
+  /// `scripts/convert_ocria.py`).
+  ///
+  /// ```dart
+  /// final model = await kiln.loadModel('/path/to/ocria-nano-1.gguf');
+  /// final ctx = await model.createContext();
+  /// final r = await ctx.ocr(KilnMedia.file('/path/to/receipt.jpg'));
+  /// print(r.text);                    // one line per line, top to bottom
+  /// print(r.lines.first.confidence);  // 0..1
+  /// ```
+  ///
+  /// [longSide] shrinks the page so its longer side is at most that many pixels before lines
+  /// are found (0 = 1600); smaller is faster and misses small print. Lines read with a lower
+  /// confidence than [minConfidence] are dropped (0 keeps all). A photo's EXIF orientation is
+  /// not applied: turn the image upright first. A page that is upside down is found and read
+  /// the right way round ([KilnOcrStats.upsideDown]). Printed text only; handwriting reads
+  /// poorly. Throws `KILN_ERR_NOT_SUPPORTED` on a model that is not an OCR model.
+  Future<KilnOcrResult> ocr(
+    KilnMedia image, {
+    int longSide = 0,
+    double minConfidence = 0,
+  }) async {
+    if (_busy) {
+      throw StateError(
+        'kiln: context is busy; await the previous generation or cancel it',
+      );
+    }
+    _busy = true;
+    try {
+      final r = await model._kiln._worker.call<Map>('ocr', {
+        'context': _handle,
+        'image': image.toMap(),
+        'longSide': longSide,
+        'minConfidence': minConfidence,
+      });
+      return KilnOcrResult(
+        [for (final l in r['lines'] as List) KilnOcrLine.fromMap(l as Map)],
+        KilnOcrStats.fromMap(r['stats'] as Map),
+      );
+    } finally {
+      _busy = false;
+    }
+  }
+
   /// Clears the KV cache. Next chat starts from scratch.
   Future<void> reset() {
     _t('reset');

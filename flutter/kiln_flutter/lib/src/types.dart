@@ -862,3 +862,136 @@ class KilnPiece {
 /// Helper: read a C string field into Dart.
 String cStr(Pointer<Char> p) =>
     p == nullptr ? '' : p.cast<Utf8>().toDartString();
+
+/// Which recognizer read an OCR line. [other] covers about 17 scripts, Bengali and Devanagari
+/// among them.
+enum KilnOcrScript { latin, cjk, rtl, other }
+
+/// One line of text found in an image by [KilnContext.ocr]. Coordinates are image pixels.
+class KilnOcrLine {
+  const KilnOcrLine({
+    required this.text,
+    required this.left,
+    required this.top,
+    required this.right,
+    required this.bottom,
+    required this.quad,
+    required this.confidence,
+    required this.script,
+  });
+
+  final String text;
+
+  /// The bounding box.
+  final double left, top, right, bottom;
+
+  /// The corners in reading order, (x, y) x 4: top-left, top-right, bottom-right,
+  /// bottom-left. A slanted line has a slanted quad.
+  final List<double> quad;
+
+  /// Mean probability of the line's characters, 0..1.
+  final double confidence;
+  final KilnOcrScript script;
+
+  Map<String, Object> toMap() => {
+    'text': text,
+    'box': [left, top, right, bottom],
+    'quad': quad,
+    'confidence': confidence,
+    'script': script.index,
+  };
+
+  factory KilnOcrLine.fromMap(Map m) {
+    final box = (m['box'] as List).cast<double>();
+    return KilnOcrLine(
+      text: m['text'] as String,
+      left: box[0],
+      top: box[1],
+      right: box[2],
+      bottom: box[3],
+      quad: (m['quad'] as List).cast<double>(),
+      confidence: m['confidence'] as double,
+      script: KilnOcrScript.values[(m['script'] as int).clamp(0, 3)],
+    );
+  }
+
+  @override
+  String toString() => 'KilnOcrLine("$text", ${confidence.toStringAsFixed(2)})';
+}
+
+/// How an OCR call went. See [KilnContext.ocr].
+class KilnOcrStats {
+  const KilnOcrStats({
+    required this.width,
+    required this.height,
+    required this.lines,
+    required this.linesFound,
+    required this.detectMs,
+    required this.readMs,
+    required this.ms,
+    required this.upsideDown,
+    required this.stoppedByUser,
+  });
+
+  factory KilnOcrStats.fromNative(b.kiln_ocr_stats s) => KilnOcrStats(
+    width: s.width,
+    height: s.height,
+    lines: s.lines,
+    linesFound: s.lines_found,
+    detectMs: s.detect_ms,
+    readMs: s.read_ms,
+    ms: s.ms,
+    upsideDown: s.upside_down,
+    stoppedByUser: s.stopped_by_user,
+  );
+
+  /// The image size in pixels.
+  final int width, height;
+
+  /// Lines handed over, and boxes the detector found (some read as nothing or as junk).
+  final int lines, linesFound;
+
+  /// Finding the lines, reading them, and the whole call (decoding the image included), in ms.
+  final double detectMs, readMs, ms;
+
+  /// The page was read turned half a turn; the lines still come in reading order.
+  final bool upsideDown;
+  final bool stoppedByUser;
+
+  Map<String, Object> toMap() => {
+    'width': width,
+    'height': height,
+    'lines': lines,
+    'linesFound': linesFound,
+    'detectMs': detectMs,
+    'readMs': readMs,
+    'ms': ms,
+    'upsideDown': upsideDown,
+    'stoppedByUser': stoppedByUser,
+  };
+
+  factory KilnOcrStats.fromMap(Map m) => KilnOcrStats(
+    width: m['width'] as int,
+    height: m['height'] as int,
+    lines: m['lines'] as int,
+    linesFound: m['linesFound'] as int,
+    detectMs: m['detectMs'] as double,
+    readMs: m['readMs'] as double,
+    ms: m['ms'] as double,
+    upsideDown: m['upsideDown'] as bool,
+    stoppedByUser: m['stoppedByUser'] as bool,
+  );
+
+  @override
+  String toString() =>
+      'KilnOcrStats($lines lines in ${ms.toStringAsFixed(0)} ms: detect ${detectMs.toStringAsFixed(0)}, '
+      'read ${readMs.toStringAsFixed(0)}, ${width}x$height${upsideDown ? ', upside down' : ''})';
+}
+
+/// The text of an image: its lines in reading order. [text] has one line per line.
+class KilnOcrResult {
+  const KilnOcrResult(this.lines, this.stats);
+  final List<KilnOcrLine> lines;
+  final KilnOcrStats stats;
+  String get text => lines.map((l) => l.text).join('\n');
+}
