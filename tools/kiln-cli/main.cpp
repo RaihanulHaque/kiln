@@ -35,6 +35,10 @@ static void usage() {
         "  --transcribe  an audio file (wav, mp3, flac) to write down; Qwen3-ASR needs --mmproj, Whisper and Parakeet do not\n"
         "       kiln-cli -m pocket-tts-en.gguf --mmproj mmproj-pocket-tts-en.gguf --speak \"text\" --voice clip.wav [--wav out.wav] [--language en]\n"
         "  --speak  text to say with a text-to-speech model; --voice is a few seconds of the voice to imitate; writes a 16-bit wav\n"
+        "OCR models:\n"
+        "       kiln-cli -m ocria-nano-1.gguf --ocr page.jpg [--ocr page2.png]... [--long-side 1600] [--boxes]\n"
+        "  --ocr    an image (jpg, png, bmp, gif) whose text to read; prints one line of text per line found\n"
+        "  --boxes  also print each line's box, confidence and script; --quads also its four corners\n"
         "  --language    the language spoken, when known; without it the model works it out\n");
 }
 
@@ -74,6 +78,9 @@ int main(int argc, char** argv) {
     std::vector<std::string> clips;
     std::string language;
     std::vector<std::string> speak;
+    std::vector<std::string> ocr_images;
+    int ocr_long_side = 0;
+    bool ocr_boxes = false, ocr_quads = false;
     std::string voice, wav_out = "out.wav";
     bool max_tokens_set = false;
     int image_tokens = 0;
@@ -105,6 +112,10 @@ int main(int argc, char** argv) {
         else if (a == "--transcribe") clips.push_back(next());
         else if (a == "--language") language = next();
         else if (a == "--speak") speak.push_back(next());
+        else if (a == "--ocr")   ocr_images.push_back(next());
+        else if (a == "--long-side") ocr_long_side = atoi(next());
+        else if (a == "--boxes") ocr_boxes = true;
+        else if (a == "--quads") ocr_boxes = ocr_quads = true;
         else if (a == "--voice") voice = next();
         else if (a == "--wav") wav_out = next();
         else if (a == "--image-tokens") image_tokens = atoi(next());
@@ -141,7 +152,7 @@ int main(int argc, char** argv) {
     fprintf(stderr, "device:   %s | %s | %d cores | %.1f GB RAM\n", dev.soc, dev.abi, dev.cpu_cores, dev.ram_total_bytes / 1e9);
     fprintf(stderr, "backend:  %s (gpu layers: %d)\n", mi.backend_name, mi.n_gpu_layers_used);
     fprintf(stderr, "model:    %s %s, %.2fB params, %.2f GB resident, ctx_train=%d, thinking=%s\n",
-            mi.arch, mi.quant, mi.n_params / 1e9, mi.model_bytes / 1e9, mi.n_ctx_train, mi.is_decision_model ? "n/a (decision model)" : mi.is_embedding_model ? "n/a (embedding model)" : mi.is_speech_model ? "n/a (speech model)" : mi.supports_thinking ? "yes" : "no");
+            mi.arch, mi.quant, mi.n_params / 1e9, mi.model_bytes / 1e9, mi.n_ctx_train, mi.is_decision_model ? "n/a (decision model)" : mi.is_embedding_model ? "n/a (embedding model)" : mi.is_speech_model ? "n/a (speech model)" : mi.is_ocr_model ? "n/a (OCR model)" : mi.supports_thinking ? "yes" : "no");
 
     if (!mmproj.empty()) {
         kiln_projector_info pi;
@@ -149,6 +160,37 @@ int main(int argc, char** argv) {
         pp.image_max_tokens = image_tokens;
         if (kiln_model_load_projector(m, mmproj.c_str(), &pp, &pi) != KILN_OK) { fprintf(stderr, "projector failed: %s\n", kiln_last_error()); return quit(1); }
         fprintf(stderr, "projector: images=%s audio=%s\n", pi.supports_images ? "yes" : "no", pi.supports_audio ? "yes" : "no");
+    }
+
+    if (!ocr_images.empty()) {
+        kiln_ocr_options oo = kiln_ocr_options_default();
+        if (ocr_long_side > 0) oo.long_side = ocr_long_side;
+        struct Print { bool boxes, quads; };
+        Print pr{ocr_boxes, ocr_quads};
+        auto on_line = [](const kiln_ocr_line* l, void* u) {
+            if (static_cast<Print*>(u)->boxes) {
+                static const char* scripts[4] = {"latin", "cjk", "rtl", "world"};
+                printf("[%4.0f %4.0f %4.0f %4.0f] %.3f %-5s  ", l->x0, l->y0, l->x1, l->y1, l->confidence,
+                       l->script >= 0 && l->script < 4 ? scripts[l->script] : "?");
+            }
+            printf("%s", l->text);
+            if (static_cast<Print*>(u)->quads)
+                printf("  | quad %.2f,%.2f %.2f,%.2f %.2f,%.2f %.2f,%.2f", l->quad[0], l->quad[1], l->quad[2], l->quad[3],
+                       l->quad[4], l->quad[5], l->quad[6], l->quad[7]);
+            printf("\n");
+            return true;
+        };
+        int failed = 0;
+        for (const std::string& f : ocr_images) {
+            kiln_media img = {f.c_str(), nullptr, 0};
+            kiln_ocr_stats os;
+            const kiln_status s = kiln_ocr(c, &img, &oo, on_line, &pr, &os);
+            fflush(stdout);
+            if (s != KILN_OK) { fprintf(stderr, "ocr failed: %s\n", kiln_last_error()); ++failed; continue; }
+            fprintf(stderr, "          %dx%d image, %d lines (%d boxes) in %.0f ms | detect %.0f ms, read %.0f ms%s\n",
+                    os.width, os.height, os.lines, os.lines_found, os.ms, os.detect_ms, os.read_ms, os.upside_down ? " | upside down" : "");
+        }
+        return quit(failed ? 1 : 0);
     }
 
     if (!speak.empty()) {

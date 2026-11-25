@@ -170,6 +170,8 @@ pub struct ModelInfo {
     pub n_embd: i32,
     /// Whisper or Parakeet: transcribes without a projector. False for Qwen3-ASR.
     pub is_speech_model: bool,
+    /// OCRia-nano: reads the text in images with `kiln_ocr` (not wrapped in Rust yet); cannot write text.
+    pub is_ocr_model: bool,
 }
 
 impl From<&sys::kiln_model_info> for ModelInfo {
@@ -189,6 +191,7 @@ impl From<&sys::kiln_model_info> for ModelInfo {
             is_embedding_model: m.is_embedding_model,
             n_embd: m.n_embd,
             is_speech_model: m.is_speech_model,
+            is_ocr_model: m.is_ocr_model,
         }
     }
 }

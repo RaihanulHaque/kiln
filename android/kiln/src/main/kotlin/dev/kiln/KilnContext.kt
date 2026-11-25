@@ -206,6 +206,33 @@ class KilnContext internal constructor(private val model: KilnModel, handle: Lon
         return Speech(all, if (rate > 0) rate else stats.sampleRate, stats)
     }
 
+    /**
+     * OCR models (OCRia-nano): reads the printed text in an image (jpg, png, bmp, gif) and hands
+     * each line to [onLine], in reading order. Return false to stop. The conversation is kept.
+     * A photo's EXIF orientation is not applied: pass an upright image.
+     */
+    @JvmOverloads
+    fun ocr(image: Media, options: OcrOptions = OcrOptions(), onLine: (OcrLine) -> Boolean = { true }): OcrStats =
+        call { h ->
+            val stats = DoubleArray(OcrStats.SIZE)
+            val sink = object : LineSink {
+                override fun onLine(text: ByteArray, nums: FloatArray): Boolean = onLine(OcrLine.of(text, nums))
+            }
+            Native.ocr(h, image.pathBytes(), image.dataBytes(), options.longSide, options.minConfidence, sink, stats)
+            OcrStats.of(stats)
+        }
+
+    /** [ocr], collecting every line. */
+    @JvmOverloads
+    fun ocrCollect(image: Media, options: OcrOptions = OcrOptions()): OcrResult {
+        val lines = ArrayList<OcrLine>()
+        val stats = ocr(image, options) {
+            lines.add(it)
+            true
+        }
+        return OcrResult(lines, stats)
+    }
+
     /** Stops a running call, waits for it, and frees the context. */
     override fun close() {
         noReentry()

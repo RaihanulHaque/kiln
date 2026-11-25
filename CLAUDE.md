@@ -1,7 +1,8 @@
 # kiln
 
-On-device LLM runtime (chat, decision, embedding, speech-to-text and text-to-speech models): a C core
-(`include/kiln/kiln.h`) over llama.cpp, plus whisper.cpp for Whisper and Parakeet, with a device probe,
+On-device LLM runtime (chat, decision, embedding, speech-to-text and text-to-speech models, and OCR): a C core
+(`include/kiln/kiln.h`) over llama.cpp, plus whisper.cpp for Whisper and Parakeet and a small ggml engine
+for OCRia-nano (OCR), with a device probe,
 CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desktop.
 `docs/CODEBASE.md` is the file-by-file map; `docs/CONCEPTS.md` explains the ideas in plain words.
 
@@ -26,8 +27,8 @@ CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desk
 ```bash
 git submodule update --init --recursive      # CMake also does this if the submodule is empty
 cmake --preset host && cmake --build --preset host -j
-scripts/fetch_models.sh --media --speech     # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders and 1.9 GB for the speech models)
-./build/host/kiln-tests models               # 505 checks at 0.5.0 (349 without --speech); without --media the image / audio tests are skipped
+scripts/fetch_models.sh --media --speech --ocr   # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders, 1.9 GB for the speech models, 16 MB for OCR)
+./build/host/kiln-tests models               # 603 checks at 0.6.0 (35 of them OCR); without --media the image / audio tests are skipped
 ./build/host/kiln-cli -m models/<file>.gguf --chat
 ```
 
@@ -127,6 +128,22 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   `image_max_tokens` defaults to 280. Test with a phone-sized photo, not only small images.
 - **A GGUF's training context can be wrong.** EmbeddingGemma 2 states 262144 tokens; its card
   says 8192. Do not size a context from that number.
+- **OCR (`kiln_ocr`) is OCRia-nano-1, run by kiln's own small ggml engine** (`src/backends/ocr/`), not
+  llama.cpp: a detector, a router and four recognizers converted from ONNX by `scripts/convert_ocria.py`
+  into one GGUF with architecture `ocria`, which only the OCR backend accepts (it is registered first).
+  `ocr_graph.cpp` builds each graph's ggml calls from the JSON in the file; the page steps around them
+  are a port of LiteParse's `ocria` engine and keep its constants. The reference is ONNX Runtime on the
+  same input tensor (every graph within 1e-6) and, for whole lines, OpenCV crops at the quad
+  `kiln-cli --quads` prints. The Latin recognizer is 8-bit: its FakeQuant must divide by the scale and
+  round half to even, or about 5% of its confidences move by up to 0.07 (ggml_round rounds halves away
+  from zero; the 1.5 x 2^23 trick does it right). Image tensors are channels-first (ne = C, W, H, N);
+  ggml's depthwise convolution in the plain layout is a scalar loop four times slower. Profile one
+  graph node at a time with `ggml_graph_view` (ggml-impl.h) before guessing where the time goes:
+  on 2026-11-25 the 8-bit rounding as five ggml ops was two thirds of the Latin recognizer. The license of the weights is not open; kiln ships none.
+  The A17 test run is described in `docs/devices/galaxy-a17-5g.md`.
+- **ffigen on Linux needs clang's own headers.** With only `libclang-21` installed it stops at
+  `stddef.h`; pass `--compiler-opts "-I$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/19/include"`.
+  A failed run writes an empty bindings file: check `git diff --stat` before committing.
 - **`kiln_bindings_generated.dart` is generated.** After changing `kiln.h`, run
   `dart run ffigen --config ffigen.yaml` in `flutter/kiln_flutter`; do not edit it by hand.
 - **`rust/kiln-sys/src/bindings.rs` is generated too.** After changing `kiln.h`, run
@@ -139,7 +156,7 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   NDK folders also hold a static libc that crashes a dynamic program. Windows stops with a message.
 - **The Kotlin binding (`android/`) is written by hand.** A `kiln.h` change needs the C call in
   `kiln_jni.cpp`, the `external fun` in `Native.kt` and the Kotlin type; the host test
-  `probeVersionAndDefaults` compares the Kotlin defaults with kiln's and the version with "0.5.0"
+  `probeVersionAndDefaults` compares the Kotlin defaults with kiln's and the version with "0.6.0"
   (bump it with the rest). Strings cross JNI as UTF-8 byte arrays, never `jstring` (modified UTF-8
   breaks emoji). Each callback piece is a local reference and must be deleted at once: Android
   allows only a few hundred.

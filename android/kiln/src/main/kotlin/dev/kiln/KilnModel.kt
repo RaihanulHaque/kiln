@@ -20,13 +20,13 @@ class KilnModel private constructor(handle: Long) : AutoCloseable {
 
     /** What actually happened at load: backend, architecture, quantisation, and what kind of model this is. */
     val info: ModelInfo = run {
-        val n = LongArray(11)
+        val n = LongArray(12)
         val s = Native.modelInfo(handle, n)
         ModelInfo(
             backendUsed = Backend.entries.getOrElse(n[0].toInt()) { Backend.AUTO }, backendName = s[0].str(), arch = s[1].str(),
             quant = s[2].str(), nParams = n[1], nCtxTrain = n[2].toInt(), nVocab = n[3].toInt(), nGpuLayersUsed = n[4].toInt(),
             modelBytes = n[5], supportsThinking = n[6] != 0L, isDecisionModel = n[7] != 0L, isEmbeddingModel = n[8] != 0L,
-            nEmbd = n[9].toInt(), isSpeechModel = n[10] != 0L,
+            nEmbd = n[9].toInt(), isSpeechModel = n[10] != 0L, isOcrModel = n[11] != 0L,
         )
     }
 

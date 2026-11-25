@@ -55,11 +55,20 @@ internal object Native {
         ctx: Long, text: ByteArray, voicePath: ByteArray?, voiceData: ByteArray?, language: ByteArray?, maxFrames: Int, topK: Int,
         topP: Float, seed: Long, sink: AudioSink?, stats: DoubleArray,
     )
+
+    @JvmStatic external fun ocr(
+        ctx: Long, path: ByteArray?, data: ByteArray?, longSide: Int, minConfidence: Float, sink: LineSink?, stats: DoubleArray,
+    )
 }
 
 /** Called from native code for each token piece: the raw bytes, which may end mid-character. */
 internal interface PieceSink {
     fun onPiece(channel: Int, bytes: ByteArray, tokenId: Int): Boolean
+}
+
+/** Called from native code with each line of text found in an image (see kiln_jni.cpp for the numbers). */
+internal interface LineSink {
+    fun onLine(text: ByteArray, nums: FloatArray): Boolean
 }
 
 /** Called from native code with each piece of generated audio. */

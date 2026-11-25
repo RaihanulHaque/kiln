@@ -2,7 +2,7 @@ package dev.kiln
 
 /** Library-wide calls. Loading the native library happens on first use of any kiln class. */
 object Kiln {
-    /** kiln's version, e.g. "0.5.0". */
+    /** kiln's version, e.g. "0.6.0". */
     val version: String by lazy { Native.version().str() }
 
     /** What kiln finds on this device: processor, fast cores, memory, GPU. */

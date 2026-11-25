@@ -418,7 +418,10 @@ class KilnBindings {
         )
       >();
 
-  /// Thread-safe. Requests the in-flight kiln_generate on this context to stop.
+  /// Thread-safe. Stops the call running on this context (kiln_chat, kiln_generate, kiln_decide,
+  /// kiln_embed*, kiln_transcribe, kiln_speak, kiln_ocr), which returns KILN_ERR_CANCELLED. It counts from the
+  /// moment the call starts, prompt rendering included. With no call running it does nothing: it
+  /// never stops a later call.
   void kiln_cancel(ffi.Pointer<kiln_context> c) {
     return _kiln_cancel(c);
   }
@@ -739,6 +742,57 @@ class KilnBindings {
         )
       >();
 
+  kiln_ocr_options kiln_ocr_options_default() {
+    return _kiln_ocr_options_default();
+  }
+
+  late final _kiln_ocr_options_defaultPtr =
+      _lookup<ffi.NativeFunction<kiln_ocr_options Function()>>(
+        'kiln_ocr_options_default',
+      );
+  late final _kiln_ocr_options_default = _kiln_ocr_options_defaultPtr
+      .asFunction<kiln_ocr_options Function()>();
+
+  /// Reads the text in one image (jpg, png, bmp, gif: a path or the file's bytes) and passes each
+  /// line to cb. Blocking; kiln_cancel stops it. Does not touch a conversation held in the context.
+  /// opts, cb and stats may be NULL. Returns KILN_ERR_NOT_SUPPORTED on a model that is not an OCR
+  /// model. A photo's EXIF orientation is not applied: turn the image upright first.
+  kiln_status kiln_ocr(
+    ffi.Pointer<kiln_context> c,
+    ffi.Pointer<kiln_media> image,
+    ffi.Pointer<kiln_ocr_options> opts,
+    kiln_ocr_cb cb,
+    ffi.Pointer<ffi.Void> user,
+    ffi.Pointer<kiln_ocr_stats> stats,
+  ) {
+    return kiln_status.fromValue(_kiln_ocr(c, image, opts, cb, user, stats));
+  }
+
+  late final _kiln_ocrPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<kiln_context>,
+            ffi.Pointer<kiln_media>,
+            ffi.Pointer<kiln_ocr_options>,
+            kiln_ocr_cb,
+            ffi.Pointer<ffi.Void>,
+            ffi.Pointer<kiln_ocr_stats>,
+          )
+        >
+      >('kiln_ocr');
+  late final _kiln_ocr = _kiln_ocrPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<kiln_context>,
+          ffi.Pointer<kiln_media>,
+          ffi.Pointer<kiln_ocr_options>,
+          kiln_ocr_cb,
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<kiln_ocr_stats>,
+        )
+      >();
+
   void kiln_set_log_callback(kiln_log_cb cb, ffi.Pointer<ffi.Void> user) {
     return _kiln_set_log_callback(cb, user);
   }
@@ -968,6 +1022,10 @@ final class kiln_model_info extends ffi.Struct {
   /// cannot generate text. Qwen3-ASR is a chat-style model plus a projector, so it reads false
   @ffi.Bool()
   external bool is_speech_model;
+
+  /// reads the text in images with kiln_ocr (OCRia-nano); cannot generate text
+  @ffi.Bool()
+  external bool is_ocr_model;
 }
 
 final class kiln_context extends ffi.Opaque {}
@@ -1433,7 +1491,7 @@ final class kiln_speak_stats extends ffi.Struct {
   @ffi.Int32()
   external int prompt_tokens;
 
-  /// reading the text and encoding the voice
+  /// encoding the voice reference and reading the text (the voice is most of it)
   @ffi.Double()
   external double prompt_ms;
 
@@ -1448,6 +1506,105 @@ final class kiln_speak_stats extends ffi.Struct {
   /// the model ended the sentence itself (false = max_frames or the caller)
   @ffi.Bool()
   external bool stopped_by_eos;
+
+  @ffi.Bool()
+  external bool stopped_by_user;
+}
+
+/// Reads the printed text in an image: a photo of a page, a receipt, a form. The model is
+/// OCRia-nano-1 (LlamaIndex, 8 M parameters in all): a line detector, a router that picks a
+/// script for each line, and four recognizers (Latin; Chinese, Japanese and Korean; Arabic and
+/// Hebrew; and about 17 more scripts, Bengali and Devanagari among them). Convert its ONNX files
+/// once with scripts/convert_ocria.py into one GGUF, then kiln_model_load it like any model
+/// (kiln_model_info.is_ocr_model reads true), create a context and call kiln_ocr.
+/// Its license is not open: free for research, personal use and organisations under $2M of
+/// revenue and of funding, not for a competing OCR product. Read it before shipping.
+final class kiln_ocr_options extends ffi.Struct {
+  /// the page is shrunk so its longer side is at most this many pixels
+  /// before the lines are found; <= 0 = 1600. Smaller is faster and
+  /// misses small print
+  @ffi.Int32()
+  external int long_side;
+
+  /// lines read with a lower confidence (0..1) are dropped; <= 0 = keep all
+  @ffi.Float()
+  external double min_confidence;
+}
+
+/// One line of text found in the image.
+final class kiln_ocr_line extends ffi.Struct {
+  /// UTF-8; valid only during the callback
+  external ffi.Pointer<ffi.Char> text;
+
+  /// bounding box in image pixels (left, top, right, bottom)
+  @ffi.Float()
+  external double x0;
+
+  @ffi.Float()
+  external double y0;
+
+  @ffi.Float()
+  external double x1;
+
+  @ffi.Float()
+  external double y1;
+
+  /// the line's corners in reading order (x, y) x 4: top-left, top-right,
+  /// bottom-right, bottom-left; a slanted line has a slanted quad
+  @ffi.Array.multi([8])
+  external ffi.Array<ffi.Float> quad;
+
+  /// mean probability of the line's characters, 0..1
+  @ffi.Float()
+  external double confidence;
+
+  /// the recognizer that read it: 0 Latin, 1 CJK, 2 RTL, 3 other scripts
+  @ffi.Int32()
+  external int script;
+}
+
+typedef kiln_ocr_cbFunction =
+    ffi.Bool Function(
+      ffi.Pointer<kiln_ocr_line> line,
+      ffi.Pointer<ffi.Void> user,
+    );
+typedef Dartkiln_ocr_cbFunction =
+    bool Function(ffi.Pointer<kiln_ocr_line> line, ffi.Pointer<ffi.Void> user);
+
+/// Called once per line, top to bottom, left to right within a row. Return false to stop.
+typedef kiln_ocr_cb = ffi.Pointer<ffi.NativeFunction<kiln_ocr_cbFunction>>;
+
+final class kiln_ocr_stats extends ffi.Struct {
+  /// the image
+  @ffi.Int32()
+  external int width;
+
+  @ffi.Int32()
+  external int height;
+
+  /// lines passed to the callback
+  @ffi.Int32()
+  external int lines;
+
+  /// boxes the detector found (some read as nothing or as junk)
+  @ffi.Int32()
+  external int lines_found;
+
+  /// finding the lines
+  @ffi.Double()
+  external double detect_ms;
+
+  /// routing and reading them
+  @ffi.Double()
+  external double read_ms;
+
+  /// whole call, decoding the image file included
+  @ffi.Double()
+  external double ms;
+
+  /// the page was read turned half a turn
+  @ffi.Bool()
+  external bool upside_down;
 
   @ffi.Bool()
   external bool stopped_by_user;
@@ -1490,7 +1647,7 @@ typedef kiln_log_cb = ffi.Pointer<ffi.NativeFunction<kiln_log_cbFunction>>;
 
 const int KILN_VERSION_MAJOR = 0;
 
-const int KILN_VERSION_MINOR = 5;
+const int KILN_VERSION_MINOR = 6;
 
 const int KILN_VERSION_PATCH = 0;
 

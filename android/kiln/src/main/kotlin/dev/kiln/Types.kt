@@ -74,6 +74,8 @@ data class ModelInfo(
     val nEmbd: Int,
     /** Whisper or Parakeet: transcribes without a projector. False for Qwen3-ASR. */
     val isSpeechModel: Boolean,
+    /** OCRia-nano: reads the text in images with [KilnContext.ocr]; cannot write text. */
+    val isOcrModel: Boolean = false,
 )
 
 data class ProjectorParams(
@@ -329,5 +331,67 @@ data class SpeakStats(
 
 /** Generated audio: mono floats in -1..1. */
 class Speech(val samples: FloatArray, val sampleRate: Int, val stats: SpeakStats)
+
+data class OcrOptions(
+    /** The page is shrunk so its longer side is at most this many pixels before lines are found; <= 0 = 1600. */
+    val longSide: Int = 0,
+    /** Lines read with a lower confidence (0..1) are dropped; 0 = keep all. */
+    val minConfidence: Float = 0f,
+)
+
+/** Which recognizer read a line. OTHER covers about 17 scripts, Bengali and Devanagari among them. */
+enum class Script { LATIN, CJK, RTL, OTHER }
+
+/** One line of text found in an image. Coordinates are image pixels. */
+data class OcrLine(
+    val text: String,
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+    /** The corners in reading order (x, y) x 4: top-left, top-right, bottom-right, bottom-left. */
+    val quad: FloatArray,
+    /** Mean probability of the line's characters, 0..1. */
+    val confidence: Float,
+    val script: Script,
+) {
+    override fun equals(other: Any?): Boolean =
+        other is OcrLine && text == other.text && left == other.left && top == other.top && right == other.right &&
+            bottom == other.bottom && quad.contentEquals(other.quad) && confidence == other.confidence && script == other.script
+    override fun hashCode(): Int = text.hashCode() * 31 + quad.contentHashCode()
+
+    internal companion object {
+        fun of(text: ByteArray, n: FloatArray) = OcrLine(
+            text.str(), n[0], n[1], n[2], n[3], n.copyOfRange(4, 12), n[12], Script.entries.getOrElse(n[13].toInt()) { Script.LATIN },
+        )
+    }
+}
+
+data class OcrStats(
+    val width: Int,
+    val height: Int,
+    /** Lines handed over. */
+    val lines: Int,
+    /** Boxes the detector found (some read as nothing or as junk). */
+    val linesFound: Int,
+    val detectMs: Double,
+    val readMs: Double,
+    /** The whole call, decoding the image included. */
+    val ms: Double,
+    /** The page was read turned half a turn; the lines still come in reading order. */
+    val upsideDown: Boolean,
+    val stoppedByUser: Boolean,
+) {
+    internal companion object {
+        const val SIZE = 9
+        fun of(s: DoubleArray) =
+            OcrStats(s[0].toInt(), s[1].toInt(), s[2].toInt(), s[3].toInt(), s[4], s[5], s[6], s[7] != 0.0, s[8] != 0.0)
+    }
+}
+
+/** The text of an image: its lines in reading order, and [text] with one line per line. */
+class OcrResult(val lines: List<OcrLine>, val stats: OcrStats) {
+    val text: String get() = lines.joinToString("\n") { it.text }
+}
 
 enum class LogLevel { ERROR, WARN, INFO, DEBUG }

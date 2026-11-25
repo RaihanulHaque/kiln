@@ -1,6 +1,39 @@
 # Changelog
 
-## Unreleased
+## Unreleased (0.6.0)
+
+- **Text recognition: `kiln_ocr` with OCRia-nano-1.** A new call reads the printed text in an
+  image (jpg, png, bmp, gif; a path or the bytes) and hands over each line with its box, its four
+  corners, a confidence and the script that read it. The model is LlamaIndex's OCRia-nano-1: a line
+  detector, a router and four recognizers (Latin; CJK; Arabic and Hebrew; about 17 more scripts,
+  Bengali among them), 3.9 M parameters for the OCR part. It is not a language model and llama.cpp
+  does not run it: a third backend (`src/backends/ocr/`) runs its graphs on ggml directly, with the
+  steps around them ported from LiteParse (Apache 2.0). `scripts/convert_ocria.py` turns the ONNX
+  files into one 16 MB GGUF (`scripts/fetch_models.sh --ocr` downloads and converts a pinned
+  revision); LayoutNet (tables and layout) is not converted. Each of the six graphs matches ONNX
+  Runtime to 1e-6 on the same input; a line cropped with OpenCV at kiln's box and read by ONNX
+  Runtime gives kiln's text and confidence. Not ported yet: sideways pages, column gutters, faint
+  single characters, look-alike letter folding and right-to-left reordering. **The model's license
+  is not open** (free for research, personal use and organisations under $2M of revenue and of
+  funding, not for a competing OCR product); kiln ships no weights.
+  ABI change: `kiln_ocr`, `kiln_ocr_options`, `kiln_ocr_line`, `kiln_ocr_stats`, `kiln_ocr_cb`,
+  `kiln_ocr_options_default`, and `kiln_model_info.is_ocr_model` (the struct grew). Version 0.6.0;
+  the Rust and Flutter bindings are regenerated and carry `is_ocr_model`, without an `ocr` call yet.
+  Kotlin (Android) has `KilnContext.ocr` / `ocrCollect`. `kiln-cli -m models/ocria-nano-1.gguf --ocr page.jpg [--boxes]`.
+  Speed: the first port ran 4 to 20 times slower than ONNX Runtime per network, nearly all of it
+  in ggml's convolution kernels. Four changes, each checked against ONNX Runtime (still within
+  1e-6): image tensors are kept channels-first, so a 1x1 convolution is one matrix multiply and a
+  depthwise one takes ggml's SIMD path; a convolution's bias, ReLU and 8-bit rounding run as one
+  vectorised pass (a custom ggml op); the first layer (3x3 over one channel) has a small kernel of
+  its own, and the detector's grey conversion is done while the page is copied in; the graph's
+  memory is kept between runs. Per network on the Ryzen 5 8500G (8 threads), ONNX Runtime / kiln
+  before / kiln now: detector 24 / 110 / 37 ms, Latin recognizer 6.4 / 75 / 16 ms, world
+  recognizer 7.8 / 21 / 5.9 ms, CJK recognizer 2.7 / - / 3.8 ms, router 0.4 / 6.5 / 1.5 ms. A whole
+  page: the 1400 x 528 English test page in 0.06 s on the Ryzen (0.18 s before) and 0.27 s on a
+  Galaxy A17 5G (0.70 s before), all nine lines right; the Bengali page right but for one joined
+  letter (মূল্য read as "মূলয", the model's own reading). `kiln-tests models`: 603 passed on Linux
+  x86 (35 of them OCR) and on the Galaxy A17 5G (Exynos 1330); Kotlin host tests 14 passed,
+  Rust 17. Not yet verified: macOS, iOS, Flutter and Rust calls, the Kotlin binding on a phone.
 
 - **llama.cpp 1.0.0.** llama.cpp moved to the `v1.0.0` tag (b1b770d, 2026-11-13) and
   whisper.cpp to `v1.9.6` (96ec4d98); both pin ggml 1.0.0 and their `ggml/` folders match, so
