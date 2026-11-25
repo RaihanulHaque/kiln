@@ -14,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "kiln-android"
-include(":kiln", ":lekha")
+include(":kiln", ":lekha", ":receipt")
