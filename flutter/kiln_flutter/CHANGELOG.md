@@ -1,15 +1,23 @@
-## 0.6.0 (unreleased)
+## 0.6.0
+
+Text recognition, llama.cpp 1.0.0 and LFM3. Verified on a Galaxy A17 5G (Exynos 1330, Android
+16) on 2026-11-25: the whole integration test with `KILN_MEDIA` and `KILN_SPEECH` on, 31 passed
+and 3 skipped (the speed group). Android arm64 only, as before.
 
 - **Text recognition: `KilnContext.ocr(image, {longSide, minConfidence})`** reads the printed
   text in an image (a file or its bytes) with an OCR model (`KilnModelInfo.isOcrModel`,
   OCRia-nano-1 converted by kiln's `scripts/convert_ocria.py`) and returns a `KilnOcrResult`:
   the lines in reading order (`KilnOcrLine`: text, box, four corners, confidence, which
   recognizer read it) and `KilnOcrStats`. A photo's EXIF orientation is not applied: turn it
-  upright first. The model's license is not open and nothing hosts it, so the integration test
-  runs only when `ocria-nano-1.gguf` has been pushed into the example app's folder.
-- Verified on a Galaxy A17 5G (2026-11-25): the OCR group of the integration test passes (the
-  test page, 9 lines in 466 ms; a chat model refuses `ocr`), and the Hishab app scans receipts
-  with it. The other groups were not re-run for this change.
+  upright first. Printed text only; handwriting reads poorly. The model's license is not open
+  (free for personal use and organisations under $2M of revenue and funding) and the package
+  ships no weights. On the A17 the test page (9 lines) takes 466 ms.
+- **The core moves to llama.cpp 1.0.0** (and whisper.cpp 1.9.6, ggml 1.0.0). **LFM3 chat
+  models load.** No change to the Dart API apart from `ocr`.
+- **A chat message can no longer write control tokens.** The text of a message is tokenized
+  apart from the template, so a user who types `<|im_end|>` gets those characters, not the
+  token (prompt injection).
+- `KilnModelInfo.isOcrModel` is new.
 
 ## 0.5.2
 
