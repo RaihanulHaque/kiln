@@ -33,7 +33,10 @@
   Galaxy A17 5G (0.70 s before), all nine lines right; the Bengali page right but for one joined
   letter (মূল্য read as "মূলয", the model's own reading). `kiln-tests models`: 603 passed on Linux
   x86 (35 of them OCR) and on the Galaxy A17 5G (Exynos 1330); Kotlin host tests 14 passed,
-  Rust 17. Not yet verified: macOS, iOS, Flutter and Rust calls, the Kotlin binding on a phone.
+  Rust 17. Also 603 passed on macOS (M4 Pro, Metal for llama.cpp and whisper.cpp; OCR runs on
+  the CPU) on 2026-11-25, and `kiln-cli --ocr` read the English test page in 39 to 46 ms there
+  (detect about 22 ms, read about 20 ms), all nine lines right.
+  Not yet verified: iOS, Flutter and Rust calls, the Kotlin binding on a phone.
 
 - **llama.cpp 1.0.0.** llama.cpp moved to the `v1.0.0` tag (b1b770d, 2026-11-13) and
   whisper.cpp to `v1.9.6` (96ec4d98); both pin ggml 1.0.0 and their `ggml/` folders match, so
@@ -50,7 +53,8 @@
   `docs/devices/galaxy-a17-5g.md`). The bindings on Linux x86: Rust 17 tests (cargo builds
   llama.cpp 1.0.0 itself), Kotlin 13 host tests, React Native codegen, typecheck and 9 tests;
   the Flutter example app builds, its integration test was not run.
-  Not yet verified: macOS (Metal), the Pixel 8, Linux arm64, iOS.
+  macOS (M4 Pro, Metal): 603 passed on 2026-11-25 with the OCR entry above, which includes these
+  checks. Not yet verified: the Pixel 8, Linux arm64, iOS.
 - **LFM3 chat models load.** llama.cpp moved to 1b4554ef (2026-10-27, LFM3 support) and
   whisper.cpp to 21ba6d26; both pin ggml 0.27.0. llama.cpp now returns a rendered chat prompt
   as parts (template text and user input) instead of one string; kiln joins them into the

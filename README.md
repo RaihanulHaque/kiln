@@ -23,7 +23,7 @@ maintainers happened to own. kiln is built the other way round:
 v0.3.0 added embedding models (text, images and audio); v0.3.1 fixes core selection on chips
 with no little cores; v0.4.0 adds speech to text (`kiln_transcribe`) with Whisper, Parakeet
 and Qwen3-ASR; v0.5.0 adds text to speech (`kiln_speak`) with Pocket TTS; v0.6.0 adds text
-recognition (`kiln_ocr`) with OCRia-nano-1, run on ggml without llama.cpp, and moves to llama.cpp 1.0.0 (OCR run on Linux x86 and a Galaxy A17 5G only; not yet on macOS,
+recognition (`kiln_ocr`) with OCRia-nano-1, run on ggml without llama.cpp, and moves to llama.cpp 1.0.0 (OCR run on Linux x86, a Galaxy A17 5G and macOS (M4 Pro); not yet on
 iOS, or through Flutter and Rust). The rest was run on 2026-10-12 and 2026-10-13 on the phones, the MacBook, the Linux
 desktop and a Linux container. The iPhone row is still from
 v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
@@ -33,7 +33,7 @@ v0.1.0, and the chat benchmarks were not repeated since v0.1.0:
 | Galaxy S26 Ultra (Snapdragon 8 Elite Gen 5, Android 17), v0.3.1 | llama.cpp CPU, 6 threads pinned | 319 C checks, 26 Flutter integration tests, example app, benchmarks; [profile](docs/devices/galaxy-s26-ultra.md) |
 | Pixel 8 (Tensor G3, Android 16), v0.5.0 | llama.cpp CPU, 5 threads pinned; whisper.cpp CPU | 505 C checks, 26 Flutter integration tests (4 skipped); chat, decision and embedding benchmarks at v0.3.0 |
 | iPhone 16 Pro (A18 Pro, iOS 26.6), v0.1.0 | llama.cpp Metal | **In progress, not supported yet.** 7 of 9 Flutter integration tests at v0.1.0; not re-run since |
-| MacBook Pro M4 Pro, v0.5.0 | llama.cpp Metal; whisper.cpp Metal | 505 C checks (three speech-to-text models, one text-to-speech model); chat benchmarks at v0.1.0 |
+| MacBook Pro M4 Pro, v0.6.0 | llama.cpp Metal; whisper.cpp Metal; OCR on the CPU | 603 C checks (35 of them OCR) on 2026-11-25; the English OCR test page in about 45 ms; chat benchmarks at v0.1.0 |
 | Ryzen 5 8500G desktop (Linux x86_64), v0.5.0 | llama.cpp and whisper.cpp CPU, 8 threads | 505 C checks, with Whisper, Parakeet and Pocket TTS (2026-10-14) |
 | Ryzen 5 8500G desktop, MacBook Pro M4 Pro and Pixel 8, Rust bindings (`rust/`) | the same, linked statically from Cargo (NDK on Android) | 11 Rust tests over the same models (chat, decision, embeddings, images, Whisper, Parakeet, Pocket TTS) on all three, 2026-10-15/16; iOS and Windows not tried |
 | Ryzen 5 8500G and M4 Pro desktop JVMs, Pixel 8 (Android 17): Kotlin API (`android/`) | the JNI glue, and the `.aar` built with the NDK | 12 Kotlin tests over the same models on both desktops; on the Pixel 8 the device test (load, probe, chat with LFM2.5 350M); 2026-10-15 |
