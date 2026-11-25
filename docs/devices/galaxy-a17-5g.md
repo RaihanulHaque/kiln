@@ -42,8 +42,10 @@ is about four times slower than real time here, most of it in reading the voice 
 ## llama.cpp 1.0.0 against the version before
 
 The same phone, `main` (llama.cpp `781dbc5`, whisper.cpp `0c7be696`) and this branch, run
-alternately (old, new, old, new) so that heat hits both alike. The phone warmed during the runs:
-LFM2.5 fell from about 50 to 37 tok/s in both builds.
+alternately (old, new, old, new). The phone warmed during the runs (LFM2.5 fell from about 50 to
+37 tok/s in both builds), and since every new run came straight after an old one, the new build
+always started on a slightly warmer phone: the order favours the old build. A fair re-check
+would also run new before old (new, old, old, new).
 
 | | old | new (v1.0.0) |
 |---|---|---|
@@ -52,9 +54,10 @@ LFM2.5 fell from about 50 to 37 tok/s in both builds.
 | Whisper base, 3.1 s clip, 2 runs | 8.8 s, 7.4 s | 7.5 s, 7.6 s |
 | Pocket TTS, same sentence, 2 runs | 8.8 s, 8.5 s | 9.6 s, 10.1 s |
 
-Chat and Whisper are the same within the noise. Pocket TTS was slower in both pairs (about 12%,
-in reading the voice and in generating alike); two pairs are too few to be sure. Worth
-re-checking on a quiet, cool phone before a release.
+Chat and Whisper are the same within the noise. Pocket TTS was slower in both pairs (8.65 s
+against 9.85 s on average, about 14%, in reading the voice and in generating alike); two pairs
+in a warming phone, with the order above, are too few to be sure. Worth re-checking on a cool
+phone before a release.
 
 ## Which cores to use: the sweep
 
