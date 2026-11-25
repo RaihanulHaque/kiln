@@ -34,8 +34,9 @@ Or tap **Model file** in the app and choose the `.gguf`; it is copied into the a
 - **Boxes**: draw the line boxes or not. Blue Latin, purple World (Bengali, Hindi, ...),
   red CJK, green Arabic / Hebrew.
 
-kiln does not apply a photo's EXIF orientation, so a camera photo stored sideways is turned
-upright by the app and handed over as a JPEG. Any other picture goes to kiln byte for byte.
+kiln does not apply a photo's EXIF orientation (the "turn this" tag cameras write), so any
+picture with that tag, from the camera, the gallery or a share, is turned upright by the app and
+handed over as a JPEG. A picture without it goes to kiln byte for byte.
 
 ## Where it was run
 

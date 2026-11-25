@@ -121,11 +121,16 @@ class MainActivity : Activity() {
         try {
             ctx?.close()
             model?.close()
+            ctx = null       // cleared at once, so a failed load below leaves nothing half closed
+            model = null
             val t0 = System.nanoTime()
             val m = KilnModel.load(file.absolutePath)
             if (!m.info.isOcrModel) {
                 m.close()
-                post { modelLine.text = "${file.name} is not an OCR model (it is ${m.info.arch})." }
+                post {
+                    modelLine.text = "${file.name} is not an OCR model (it is ${m.info.arch})."
+                    setBusy(false)
+                }
                 return
             }
             model = m
@@ -140,7 +145,10 @@ class MainActivity : Activity() {
                 setBusy(false)
             }
         } catch (e: KilnException) {
-            post { modelLine.text = "Could not load ${file.name}: ${e.message}" }
+            post {
+                modelLine.text = "Could not load ${file.name}: ${e.message}"
+                setBusy(false)
+            }
         }
     }
 
@@ -153,7 +161,8 @@ class MainActivity : Activity() {
                 val dst = File(filesDir, modelName)
                 val tmp = File(filesDir, "$modelName.part")
                 contentResolver.openInputStream(uri)!!.use { inp -> tmp.outputStream().use { inp.copyTo(it) } }
-                tmp.renameTo(dst)
+                dst.delete()
+                check(tmp.renameTo(dst)) { "could not move the copy into place" }
                 loadModel()
             } catch (e: Exception) {
                 post {
@@ -244,11 +253,16 @@ class MainActivity : Activity() {
         return Page("$name (turned upright)", jpeg, preview, preview.width.toFloat() / upright.width)
     }
 
+    /** Decodes at most `longest` pixels on the long side: a cheap power-of-two step while decoding, then an exact scale. */
     private fun decodeAtMost(bytes: ByteArray, w: Int, h: Int, longest: Int): Bitmap {
         var sample = 1
         while (max(w, h) / (sample * 2) >= longest) sample *= 2
         val o = BitmapFactory.Options().apply { inSampleSize = sample }
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+        val b = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+        val long = max(b.width, b.height)
+        if (long <= longest) return b
+        val s = longest.toFloat() / long
+        return Bitmap.createScaledBitmap(b, (b.width * s).toInt().coerceAtLeast(1), (b.height * s).toInt().coerceAtLeast(1), true)
     }
 
     // ---- showing the result ----------------------------------------------------------------
