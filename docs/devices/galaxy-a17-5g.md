@@ -24,7 +24,7 @@ one, below the "at least half" rule in `src/probe/fast_cores.h`, so they are dro
 
 ## Tests
 
-`kiln-tests models`: **568 passed, 0 failed** (llama.cpp v1.0.0, whisper.cpp v1.9.6, with the
+`kiln-tests models`: **568 passed, 0 failed** before OCR (603 with it, see below) (llama.cpp v1.0.0, whisper.cpp v1.9.6, with the
 changes of #43 and #44). Times from that run, one call each:
 
 | | A17 | Pixel 8, for comparison |
@@ -69,8 +69,8 @@ the two big cores, `kiln-cli --ocr`, the second of two calls (warm):
 | page | first port | after the speed work | Ryzen 5 8500G, after |
 |---|---|---|---|
 | English test page, 1400 x 528, 9 lines | 0.70 s (detect 0.42, read 0.27) | 0.27 s (detect 0.15, read 0.11) | 0.06 s |
-| Bengali test page, 1000 x 384, 4 lines | | 0.13 s | 0.03 s |
-| receipt photo, 600 x 600, 8 lines | | 0.43 s (read 0.34: the second looks re-read every line with the CJK recognizer) | 0.08 s |
+| Bengali test page, 1000 x 384, 4 lines | not measured | 0.13 s | 0.03 s |
+| receipt photo, 600 x 600, 8 lines | not measured | 0.43 s (read 0.34: the second looks re-read every line with the CJK recognizer) | 0.08 s |
 
 ## Which cores to use: the sweep
 

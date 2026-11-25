@@ -19,7 +19,7 @@
   ABI change: `kiln_ocr`, `kiln_ocr_options`, `kiln_ocr_line`, `kiln_ocr_stats`, `kiln_ocr_cb`,
   `kiln_ocr_options_default`, and `kiln_model_info.is_ocr_model` (the struct grew). Version 0.6.0;
   the Rust and Flutter bindings are regenerated and carry `is_ocr_model`, without an `ocr` call yet.
-  Kotlin (Android) has `KilnContext.ocr` / `ocrCollect`. `kiln-cli --ocr page.jpg [--boxes]`.
+  Kotlin (Android) has `KilnContext.ocr` / `ocrCollect`. `kiln-cli -m models/ocria-nano-1.gguf --ocr page.jpg [--boxes]`.
   Speed: the first port ran 4 to 20 times slower than ONNX Runtime per network, nearly all of it
   in ggml's convolution kernels. Four changes, each checked against ONNX Runtime (still within
   1e-6): image tensors are kept channels-first, so a 1x1 convolution is one matrix multiply and a

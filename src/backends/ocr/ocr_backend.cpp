@@ -620,7 +620,10 @@ bool OcrContext::read_lines(const std::vector<Img>& crops_in, std::vector<std::p
             const size_t sc = script_chars(groups[i], out[i].first);
             // a confident reading that is mostly the routed script stands
             const bool routed_ok = out[i].second >= kKeepConf && sc >= 2 && sc > latin_letters(out[i].first);
-            if (!routed_ok && (out[i].second < res[k].second + 0.1f || sc < 3)) out[i] = res[k];
+            if (!routed_ok && (out[i].second < res[k].second + 0.1f || sc < 3)) {
+                out[i] = res[k];
+                groups[i] = dom;    // the script reported is the one that read the text
+            }
         }
     }
     return true;

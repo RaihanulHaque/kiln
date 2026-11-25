@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace kiln::ocr {
@@ -41,7 +42,9 @@ std::vector<Component> components4(const std::vector<uint8_t>& mask, size_t w, s
 
 struct RotRect { float cx, cy, w, h, angle; };   // angle of the w side, in degrees
 RotRect min_area_rect(const std::vector<std::pair<float, float>>& pts);   // cv2.minAreaRect
-Quad box_points(const RotRect& r);                                         // cv2.boxPoints
+// cv2.boxPoints order (bottom-left, top-left, top-right, bottom-right), not Quad order: pass the
+// result through order_quad before crop
+Quad box_points(const RotRect& r);
 
 // Perspective-crop a (possibly rotated) line quad; a box clearly taller than wide is turned flat
 Img crop(const Img& img, const Quad& q);

@@ -67,7 +67,9 @@ if [ "$OCR" = 1 ]; then
              rec_rtl.onnx rec_rtl.charset.json rec_rtl.meta.json rec_world.onnx rec_world.charset.json; do
       fetch "ocria-nano-1/$f" "$O/$f"
     done
-    python3 "$ROOT/scripts/convert_ocria.py" "$ROOT/models/ocria-nano-1" "$ROOT/models/ocria-nano-1.gguf" ||
+    # written under another name first, so an interrupted run leaves no half file behind
+    python3 "$ROOT/scripts/convert_ocria.py" "$ROOT/models/ocria-nano-1" "$ROOT/models/ocria-nano-1.gguf.part" &&
+      mv "$ROOT/models/ocria-nano-1.gguf.part" "$ROOT/models/ocria-nano-1.gguf" ||
       { echo "conversion failed: pip install onnx numpy pyyaml, then run scripts/fetch_models.sh --ocr again" >&2; exit 1; }
   fi
 fi
