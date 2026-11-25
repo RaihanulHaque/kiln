@@ -402,7 +402,9 @@ public:
         else mtmd_helper_gen_audio_reset(gen_);
         if (!gen_) return kiln::set_error(KILN_ERR_BACKEND, "could not start audio generation");
         struct Gen { mtmd_helper_gen_audio* g; } gen{gen_};
-        mtmd_helper_gen_audio_inp inp{};
+        // Start from llama.cpp's defaults: a zeroed struct would set temp = 0, which turns off
+        // the model's sampling noise (greedy frames) and changes the voice. stream stays false.
+        mtmd_helper_gen_audio_inp inp = mtmd_helper_gen_audio_inp_default();
         inp.seq_id = 0; inp.prompt = text; inp.prompt_len = strlen(text);
         inp.speaker_ref = voice.v.empty() ? nullptr : voice.v[0];
         inp.lang  = o.language && *o.language ? o.language : (gi.type == MTMD_GEN_AUDIO_TYPE_QWEN3TTS ? "en" : nullptr);

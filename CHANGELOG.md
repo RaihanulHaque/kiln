@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **llama.cpp 1.0.0.** llama.cpp moved to the `v1.0.0` tag (b1b770d, 2026-11-13) and
+  whisper.cpp to `v1.9.6` (96ec4d98); both pin ggml 1.0.0 and their `ggml/` folders match, so
+  libkiln still holds one ggml. v1.0.0 removed 35 deprecated functions, `llama_set_warmup`,
+  `defrag_thold` and `clip.h`; kiln used none of them. One change did matter: the text to speech
+  input (`mtmd_helper_gen_audio_inp`) gained `temp`, where 0 means "no sampling noise". kiln
+  zeroed the struct, so Pocket TTS would have lost its noise and sounded different; it now
+  starts from `mtmd_helper_gen_audio_inp_default()` (temp = model default, stream off). No
+  `kiln.h` change. `kiln-tests models`: 568 passed on Linux x86 (Ryzen 5 8500G, CPU) on
+  2026-11-25, Pocket TTS round trip included (2.8 s of audio in 0.6 s, Parakeet read it back).
+  Not yet verified: macOS (Metal), the Pixel 8, Linux arm64, iOS.
 - **LFM3 chat models load.** llama.cpp moved to 1b4554ef (2026-10-27, LFM3 support) and
   whisper.cpp to 21ba6d26; both pin ggml 0.27.0. llama.cpp now returns a rendered chat prompt
   as parts (template text and user input) instead of one string; kiln joins them into the
