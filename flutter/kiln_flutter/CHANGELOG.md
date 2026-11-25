@@ -1,3 +1,16 @@
+## 0.6.0 (unreleased)
+
+- **Text recognition: `KilnContext.ocr(image, {longSide, minConfidence})`** reads the printed
+  text in an image (a file or its bytes) with an OCR model (`KilnModelInfo.isOcrModel`,
+  OCRia-nano-1 converted by kiln's `scripts/convert_ocria.py`) and returns a `KilnOcrResult`:
+  the lines in reading order (`KilnOcrLine`: text, box, four corners, confidence, which
+  recognizer read it) and `KilnOcrStats`. A photo's EXIF orientation is not applied: turn it
+  upright first. The model's license is not open and nothing hosts it, so the integration test
+  runs only when `ocria-nano-1.gguf` has been pushed into the example app's folder.
+- Verified on a Galaxy A17 5G (2026-11-25): the OCR group of the integration test passes (the
+  test page, 9 lines in 466 ms; a chat model refuses `ocr`), and the Hishab app scans receipts
+  with it. The other groups were not re-run for this change.
+
 ## 0.5.2
 
 - Shorter package description (pub.dev asks for 60 to 180 characters) and `dart format` on
