@@ -92,7 +92,7 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   not llama.cpp: they are whole speech models with their own decoders, and their files are
   ggml's older format (`lmgg` magic, `.bin`), not GGUF. `Backend::can_load` sniffs the first bytes,
   so each backend sees only its own format. whisper.cpp must pin the same ggml as llama.cpp
-  (both 0.26.0 today): its CMake takes the `ggml` target a parent already made. When bumping
+  (both 0.27.0 today): its CMake takes the `ggml` target a parent already made. When bumping
   either submodule, check `ggml/CMakeLists.txt` in both. The engines are not thread-safe per
   model: `SpeechModel::mutex()` serialises calls from different contexts.
 - **miniaudio is compiled twice into libkiln**, once by llama.cpp's mtmd and once by the

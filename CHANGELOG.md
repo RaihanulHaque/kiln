@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **LFM3 chat models load.** llama.cpp moved to 1b4554ef (2026-10-27, LFM3 support) and
+  whisper.cpp to 21ba6d26; both pin ggml 0.27.0. llama.cpp now returns a rendered chat prompt
+  as parts (template text and user input) instead of one string; kiln joins them into the
+  same string as before, so prompts and tokens do not change. LFM3-1.7B (QAD Q4_0) chats on the
+  M4 Pro: 137 tok/s on Metal, 157 tok/s on the CPU. It is a hybrid model (short convolutions
+  plus attention) and the checkpoints work: a greedy three-turn chat gives the same answers in
+  one context (75 and 105 prompt tokens reused) as with a reset before every turn. 526 checks
+  pass on the M4 Pro. Not yet verified: the Pixel 8, Linux, the LFM3 VL, Audio and Omni
+  models. The decision model d1-2B (`lfm3-d1`) loads but `kiln_decide` answers "not
+  supported": llama.cpp's server code for it is still an open PR (ggml-org/llama.cpp#31275).
+- **`kiln-cli` frees the model when it stops on an error.** Metal aborts at exit while a model
+  is alive, so a failed `--ask` printed an assertion and a backtrace after its message.
+
 - **Flutter on Android: phones without the dot-product instruction no longer crash.** The
   plugin's `libkiln.so` is built for `armv8.2-a+dotprod+fp16`, so a phone whose processor is
   plain Armv8.0 (Snapdragon 680, the OPPO CPH2819 in testing) died with SIGILL on the first

@@ -81,7 +81,7 @@ endif()
 add_subdirectory(third_party/llama.cpp EXCLUDE_FROM_ALL)
 
 # ---- whisper.cpp (pinned submodule): Whisper and Parakeet speech models. It finds the ggml
-# target llama.cpp already made (both pin ggml 0.26.0), so libkiln holds one copy of ggml. ----
+# target llama.cpp already made (both pin ggml 0.27.0), so libkiln holds one copy of ggml. ----
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/whisper.cpp/CMakeLists.txt")
     message(FATAL_ERROR "third_party/whisper.cpp is empty. Run: git submodule update --init --recursive")
 endif()
