@@ -12,6 +12,7 @@ flutter/**/.flutter-plugins*
 flutter/**/*.iml
 flutter/**/android/local.properties
 flutter/**/android/.gradle/
+react-native/android/.gradle/
 flutter/**/.idea/
 # rust
 /rust/target/

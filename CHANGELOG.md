@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased (0.6.0)
+## 0.6.0 (2026-11-25)
+
+Released as `kiln_flutter` 0.6.0 on pub.dev. Where it was run: `kiln-tests models` gives 603
+passed on Linux x86 (Ryzen 5 8500G), the Galaxy A17 5G and macOS (M4 Pro, Metal); the Flutter
+integration test gives 31 passed and 3 skipped (the speed group) on the Galaxy A17 5G with
+`KILN_MEDIA` and `KILN_SPEECH` on. Not run at 0.6.0: the Pixel 8, Linux arm64, iOS.
+
+- **Flutter: `KilnContext.ocr`** wraps `kiln_ocr` (lines, boxes, corners, confidence, stats).
+  The Hishab app uses it to scan shop receipts.
 
 - **Text recognition: `kiln_ocr` with OCRia-nano-1.** A new call reads the printed text in an
   image (jpg, png, bmp, gif; a path or the bytes) and hands over each line with its box, its four

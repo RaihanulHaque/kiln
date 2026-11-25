@@ -204,7 +204,22 @@ Android: `cmake --preset android-arm64`, then `scripts/android-test.sh`. iOS: `s
   reproduces the table (KL divergence from F16 on the host, kiln-bench on the phone).
 - `third_party/llama.cpp` has its own `CLAUDE.md`/`AGENTS.md`; those are for that project, not this one.
 
-## Not yet verified (as of 0.5.0)
+## Not yet verified (as of 0.6.0)
+
+0.6.0 (text recognition, `kiln_ocr` with OCRia-nano-1; llama.cpp 1.0.0; LFM3): `kiln-tests models`
+gives 603 passed on Linux x86, the Galaxy A17 5G and macOS (M4 Pro) on 2026-11-25. The Flutter
+integration test (31 passed, 3 skipped: speed; `KILN_MEDIA` and `KILN_SPEECH` on) on the A17.
+`kiln_flutter` 0.6.0 published to pub.dev on 2026-11-25. The OCR model is not hosted (license):
+the Flutter OCR test needs `ocria-nano-1.gguf` pushed into the example app's folder while the run
+downloads LFM2.5 (`flutter test` wipes the folder on install). The phone must stay awake: with
+the screen locked Android blocks the test app's network (`blocked=APP_BACKGROUND`). Still open:
+
+- The Pixel 8 and Linux arm64 at 0.6.0; iOS, as before.
+- OCR: sideways pages, faint single characters, a leading `1` lost in large bold type
+  (`1,530.00` read as `,530.00`), faded Bangla digits read as look-alikes from other scripts.
+- OCR through Rust and React Native; real receipt photos in the Hishab app.
+
+## Earlier (0.5.0)
 
 0.5.0 (text to speech, `kiln_speak`, Pocket TTS): `kiln-tests models` gives 505 passed on macOS
 (M4 Pro, Metal), Android (Pixel 8) and Linux arm64 (Docker) on 2026-10-13. Flutter `speak` with
