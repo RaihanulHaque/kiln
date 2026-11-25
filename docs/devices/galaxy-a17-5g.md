@@ -53,6 +53,8 @@ would also run new before old (new, old, old, new).
 | Qwen3.5 0.8B, prompt / generate tok/s, mean of 3 | 54.4 / 14.5 | 54.4 / 13.3 |
 | Whisper base, 3.1 s clip, 2 runs | 8.8 s, 7.4 s | 7.5 s, 7.6 s |
 | Pocket TTS, same sentence, 2 runs | 8.8 s, 8.5 s | 9.6 s, 10.1 s |
+| of which reading the voice | 4.9 s, 4.7 s | 5.2 s, 5.4 s |
+| of which generating | 3.9 s, 3.8 s | 4.4 s, 4.6 s |
 
 Chat and Whisper are the same within the noise. Pocket TTS was slower in both pairs (8.65 s
 against 9.85 s on average, about 14%, in reading the voice and in generating alike); two pairs
