@@ -143,8 +143,27 @@ void probe_cpu(kiln_device_info& d) {
             { std::ifstream f(p); long v = 0; if (f >> v && v > 0) caps[i] = v; else caps_ok = false; }
         }
         if (!caps_ok) caps.clear();
-        const uint64_t mask = fast_core_mask(freqs, caps);
+        uint64_t mask = fast_core_mask(freqs, caps);
+
+        // SMT: keep one hardware thread per physical core. A core is named by the first cpu of its
+        // thread_siblings_list ("0,6" or "0-1"), which lists only the cpu itself without SMT; core_id
+        // alone is not enough, as some ARM kernels number cores within each cluster.
+        std::vector<long> core(n, -1);
+        for (int i = 0; i < n; ++i) {
+            char p[96];
+            snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list", i);
+            std::ifstream f(p);
+            long first = -1;
+            if (f >> first && first >= 0) core[i] = first;
+        }
+        // SMT with all cores alike: count one thread per core but do not pin. Six threads held to
+        // six cpus slowed Parakeet's decoder by 30% on the 8500G: any other thread on the machine
+        // stops one of them, and every small graph waits for it. Unpinned, the idle siblings take
+        // that work.
+        const uint64_t per_core = one_per_core_mask(core);
+        if (per_core && mask) mask &= per_core;
         if (mask) { d.cpu_fast_mask = mask; d.cpu_big_cores = __builtin_popcountll(mask); }
+        else if (per_core) d.cpu_big_cores = __builtin_popcountll(per_core);
     }
 #endif
     if (d.cpu_big_cores <= 0) d.cpu_big_cores = d.cpu_cores;

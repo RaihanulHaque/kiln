@@ -10,6 +10,16 @@ integration test gives 31 passed and 3 skipped (the speed group) on the Galaxy A
 - **Flutter: `KilnContext.ocr`** wraps `kiln_ocr` (lines, boxes, corners, confidence, stats).
   The Hishab app uses it to scan shop receipts.
 
+- **One thread per physical core on x86 with SMT.** The probe counted hardware threads as cores,
+  so on the Ryzen 5 8500G (6 cores, 12 threads) kiln started 8 threads and two cores ran two each.
+  It now reads which cpus share a core (`thread_siblings_list`) and counts one thread per core (6 there); a chip
+  with a fast-core mask keeps one cpu per core in it. Cores that are all alike are still not
+  pinned: pinning six threads to six cpus made Parakeet's decoder 30% slower. Parakeet runs 20%
+  faster on that machine (90x to 108x real time on 400 LibriSpeech clips); chat is unchanged
+  (46 to 48 tok/s for Qwen3.5 0.8B). Phones and Apple silicon have no SMT, so nothing changes
+  there; unit tests cover the 8500G layout, adjacent siblings and a phone. Run on
+  Linux x86 only. No ABI change. `docs/CPU.md` §8 has the numbers.
+
 - **Text recognition: `kiln_ocr` with OCRia-nano-1.** A new call reads the printed text in an
   image (jpg, png, bmp, gif; a path or the bytes) and hands over each line with its box, its four
   corners, a confidence and the script that read it. The model is LlamaIndex's OCRia-nano-1: a line

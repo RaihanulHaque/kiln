@@ -28,7 +28,7 @@ CLI and benchmark tools, and a Flutter plugin. Targets are Android, iOS and desk
 git submodule update --init --recursive      # CMake also does this if the submodule is empty
 cmake --preset host && cmake --build --preset host -j
 scripts/fetch_models.sh --media --speech --ocr   # test GGUFs into models/ (~1.7 GB, plus 0.9 GB of image / audio encoders, 1.9 GB for the speech models, 16 MB for OCR)
-./build/host/kiln-tests models               # 603 checks at 0.6.0 (35 of them OCR); without --media the image / audio tests are skipped
+./build/host/kiln-tests models               # 609 checks at 0.6.0 (35 of them OCR); without --media the image / audio tests are skipped
 ./build/host/kiln-cli -m models/<file>.gguf --chat
 ```
 
@@ -274,5 +274,5 @@ the Pixel 8 (`--dart-define=KILN_MEDIA=true` for the image and audio test). Stil
 
 Known gaps: speech models take one clip per call, from a file or file bytes, and the clip has to fit in the context; embedding models take one input per call; no video, no raw pixels or samples
 (files or file bytes only); images and audio are for embedding models only, not chat. Decision models take a text state only (no images or audio,
-only the lfm2-d1-omni family); the probe counts hyperthreads as cores and trusts max frequency
+only the lfm2-d1-omni family); the probe trusts max frequency
 to tell cores apart (`docs/CPU.md` §8).

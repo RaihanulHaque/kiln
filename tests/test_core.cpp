@@ -88,6 +88,21 @@ static void test_core_selection() {
     CHECK(default_thread_count(4, 4, true) == 4, "4-core threads");
     CHECK(default_thread_count(10, 10, true) == 8, "10 fast cores");
     CHECK(default_thread_count(0, 0, false) == 4, "unknown");
+
+    // SMT: one hardware thread per physical core
+    using kiln::one_per_core_mask;
+    // Ryzen 5 8500G, read on 2026-11-26: thread_siblings_list "0,6", "1,7", ... "5,11" for cpu 0..11
+    const std::vector<long> r8500 = {0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5};
+    CHECK(one_per_core_mask(r8500) == 0x3full, "8500G mask=%llx", (unsigned long long)one_per_core_mask(r8500));
+    // siblings next to each other ("0-1", "2-3", ...), as on many Intel laptops
+    CHECK(one_per_core_mask({0, 0, 2, 2, 4, 4, 6, 6}) == 0x55ull, "adjacent siblings");
+    // phones: every cpu lists only itself, nothing to change
+    CHECK(one_per_core_mask({0, 1, 2, 3, 4, 5, 6, 7, 8}) == 0, "Pixel 8 layout");
+    // a core id that could not be read turns the rule off
+    CHECK(one_per_core_mask({0, 1, -1, 1}) == 0, "unknown core id");
+    CHECK(one_per_core_mask({}) == 0, "no cpus");
+    // the 8500G end to end: no fast mask (all clocks equal), so 6 threads and no pinning
+    CHECK(default_thread_count(12, 6, false) == 6, "8500G threads=%d", default_thread_count(12, 6, false));
 }
 
 // What a speech model writes, cut into pieces the way tokens arrive. No model needed.

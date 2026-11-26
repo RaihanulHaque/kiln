@@ -124,8 +124,9 @@ Still wrong or unknown on:
   only mix tiers whose frequencies are within ~10% of each other.
 - 2+6 budget layouts: 2 fast threads may lose to 6 slow ones on bandwidth. Unknown without
   measuring.
-- x86 with SMT, and chips whose cores differ but report one max frequency (§8): the probe sees
-  identical cores, builds no mask, does not pin, and counts hyperthreads as cores.
+- chips whose cores differ but report one max frequency (§8): the probe sees identical cores,
+  builds no mask and does not pin. (SMT itself is handled since 2026-11-26: one thread per
+  physical core.)
 
 **Direction**: measure, don't assume. The probe gives candidate core sets (fastest cluster
 only, fastest two clusters, all-but-little, everything). On first run with a model, kiln can
@@ -208,7 +209,26 @@ So on this chip the best set is one thread per physical core, and kiln's default
 threads only matches it because of the 8-thread cap. A 4-core / 8-thread laptop would get two
 workers per core. The probe change: count physical cores from
 `/sys/devices/system/cpu/cpu*/topology/core_id`, and do not trust max frequency to tell cores
-apart. Not implemented yet.
+apart.
+
+**Done for SMT on 2026-11-26** (`one_per_core_mask` in `src/probe/fast_cores.h`). The probe reads each
+cpu's `topology/thread_siblings_list` (not `core_id`: some ARM kernels number cores per cluster);
+when two cpus share a core it counts one thread per core.
+With all cores alike it does not pin: six threads held to cpus 0-5 made Parakeet's decoder 30%
+slower (any other thread on the machine stops one of them, and each of the decoder's small
+graphs waits for it), while six unpinned threads were the fastest of the three. Where a fast-core
+mask exists, the mask keeps one cpu per core. On this machine, alternating old (8 threads,
+unpinned) and new (6, unpinned), twice each:
+
+| workload | old | new |
+|---|---|---|
+| Parakeet TDT-CTC 110M, 400 test-clean clips: encoder | 30.6-31.4 s | 25.3-25.8 s |
+| the same: whole calls | 90x real time | 108-109x |
+| Qwen3.5 0.8B Q4_K_M, 128 tokens, 3 runs x 2: tok/s | 36.5-47.0 | 46.3-48.6 |
+| LFM2.5 350M Q4_K_M, the same | 119.7-129.9 | 120.2-130.9 |
+
+Chat generation stays at the memory wall, as above; speech, compute bound, gains 20%. Still
+open here: the Zen 4 / Zen 4c difference (the frequency label is the same for both).
 
 Benchmark on a quiet machine: the default configuration dropped by a third (44 to 30 tok/s)
 while Zoom and a browser were running, on unchanged code.

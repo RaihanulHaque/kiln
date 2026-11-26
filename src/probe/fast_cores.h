@@ -39,6 +39,30 @@ inline uint64_t fast_core_mask(const std::vector<long>& max_freq, const std::vec
     return mask;
 }
 
+// core[i]: an id for the physical core that cpu i belongs to (the probe uses the first cpu of
+// its thread_siblings_list), -1 when it could not be read. Returns the mask of the lowest-numbered cpu of each physical
+// core when some core has two or more hardware threads (SMT), or 0 when every cpu is its own
+// core (phones, Apple silicon) or a value is missing.
+//
+// ggml's kernels keep a core busy with one thread, and each op waits for its slowest thread, so
+// two threads on one core make every op slower. Ryzen 5 8500G (6 cores, 12 threads, cpu n and
+// n+6 share a core): Parakeet 110M's encoder took 1570-1611 ms on 6 threads against 1849-1935
+// on kiln's former 8 (docs/CPU.md section 8 has the same finding for chat).
+inline uint64_t one_per_core_mask(const std::vector<long>& core) {
+    uint64_t mask = 0;
+    bool smt = false;
+    for (size_t i = 0; i < core.size() && i < 64; ++i) {
+        if (core[i] < 0) return 0;
+        bool first = true;
+        for (size_t j = 0; j < i; ++j) {
+            if (core[j] == core[i]) { first = false; break; }
+        }
+        if (first) mask |= (1ull << i);
+        else smt = true;
+    }
+    return smt ? mask : 0;
+}
+
 // Threads to start when the app does not say. cores: all cores; fast: cores in the mask (or
 // `cores` when unknown); pinned: threads will be pinned to the mask.
 //
