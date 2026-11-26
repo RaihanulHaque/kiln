@@ -900,11 +900,11 @@ final class kiln_device_info extends ffi.Struct {
   @ffi.Int32()
   external int cpu_cores;
 
-  /// cores kiln treats as fast: all but the little cores, = cpu_cores if unknown
+  /// cores kiln treats as fast: all but the little cores, one per physical core with SMT, = cpu_cores if unknown
   @ffi.Int32()
   external int cpu_big_cores;
 
-  /// bitmask of those cores (bit i = cpu i); 0 = no affinity info
+  /// bitmask of those cores (bit i = cpu i); 0 = no affinity info (kiln does not pin)
   @ffi.Uint64()
   external int cpu_fast_mask;
 
