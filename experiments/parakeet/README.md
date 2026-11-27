@@ -27,11 +27,17 @@ again in `build/asr/` (git-ignored). `RESULTS.md` has every measurement so far.
    LibriSpeech through kiln-cli (Metal): 289x / 272x real time, was 196x / 190x; WER 2.60% /
    5.45%. `kiln-tests models` 603 passed. On a Galaxy A17 (OpenMP, 2 fast cores) the decoder is
    about 12% faster and 1 or 2 decoder threads are even. `RESULTS.md`, phase 3c.
+9. **Conv module padding in one op** (`ggml_pad_ext` reading the transposed GLU output) instead of
+   a transpose copy, pad, roll and pad: encoder output bit-identical, A17 encoder 0.3-1.5% faster.
 
 ## Next
 
 - The encoder is the time now: two thirds on the M4 Pro (Metal), about 88% on the Galaxy A17
-  (6.9 of 7.9 s for the 20 clips, 21x real time on its two fast cores). Phone speed comes from it.
+  (6.9 of 7.9 s for the 20 clips, 21x real time on its two fast cores). Phase 3d (`RESULTS.md`)
+  found no large lever on the A17: the weights already use ggml's repacked Q8_0 kernel, the little
+  cores make it slower, Q4_0 is not faster. Left: fuse bias adds with what follows (12% of the time
+  is ADD), project the attention positions once per clip length rather than per call (4.5%), the
+  attention's rel-shift pad and copy. Each is a few percent.
 - The 1-thread decoder on the Ryzen (OpenMP, 6 to 8 threads) is not measured;
   `PARAKEET_DEC_THREADS=n` and `prof/decprof` do it.
 - Attention for long clips (32% at 35 s), the GLU sigmoid, the scheduler rebuild per clip length.

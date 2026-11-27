@@ -236,3 +236,50 @@ Before (patch at d4a56fa, decoder on 2 threads) against after, alternated 3 time
 On the phone the encoder is about 88% of the time (6.9 s of 7.9 s), so the decoder change is
 small there. The 1-thread decoder on the Ryzen (OpenMP, 6 to 8 threads) is not measured.
 
+# Phase 3d: the encoder on a phone (2026-11-27, Galaxy A17 5G)
+
+`encprof` built for Android like `decprof` (phase 3c), run on the two Cortex-A78 (`taskset c0`,
+`-t 2`), 20 reference clips, Q8_0.
+
+## Profile, one 10.6 s clip (598 ms, 18x real time; node sums 642 ms, so about 7% profiler overhead)
+
+| by op | share |
+|---|---|
+| MUL_MAT (weights and attention) | 65.8% |
+| ADD (biases, residuals) | 12.2% |
+| CONT | 5.9% |
+| PAD | 3.7% |
+| CONV_2D_DW, SILU, MUL, SOFT_MAX, SIGMOID, the front end's custom op | 1-2% each |
+
+By category (`cats.py`): weight matmuls 50.5%, other small ops 25.3%, attention 13.8%, front end
+7.4%. Per-node times include the views just before a node (a RESHAPE shows 11 ms), so single
+small rows overstate.
+
+## What does not help on the A17
+
+| try | result (20 clips, encoder) |
+|---|---|
+| more cores: 2 fast + 2 little (`0xcc`, 4 threads) | 9.1-9.8 s, against 7.8-8.5 s on the 2 fast cores |
+| all 8 cores (`0xff`) | 18.0-18.1 s: ggml gives each thread an equal share, so the A78s wait for the A55s |
+| Q4_0 weights | 7.29 / 7.64 s against Q8_0 7.20 / 7.57 s (alternated): not faster |
+| Q5_0 weights | 18.3 / 21.2 s |
+
+The weights already sit in ggml's `CPU_REPACK` buffer (158 tensors, 105 MB; `q8_0_4x4` for
+dot-product cores), so the matmuls run the best kernel ggml has for this CPU. The encoder is
+compute bound, unlike chat, so halving the weight bytes buys nothing.
+
+Accuracy of the smaller formats (LibriSpeech through kiln-cli, M4 Pro Metal):
+
+| weights | size | test-clean | test-other |
+|---|---|---|---|
+| Q8_0 | 123 MB | 2.602% | 5.451% |
+| Q4_0 | 66 MB | 2.817% | 5.661% |
+| Q5_0 | 80 MB | 2.676% | 5.535% |
+
+## Conv module padding in one op
+
+The depthwise conv's input was a transpose copy, a pad, a roll and a second pad. Now one
+`ggml_pad_ext` reads the transposed GLU output and pads both sides (CPU and Metal kernels read
+through strides). Encoder output bit-identical (F16, 20 clips, max |d| 0). A17, alternated three
+times: 6923 / 6942 / 6959 ms against 6947 / 7051 / 6995 ms, 0.3 to 1.5% faster.
+

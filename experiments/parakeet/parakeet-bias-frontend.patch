@@ -57,7 +57,7 @@ index e8c6effe..68ba8f6e 100644
      // Prediction network
      {PARAKEET_TENSOR_PRED_EMBED_WEIGHT,            GGML_OP_GET_ROWS},
 diff --git a/src/parakeet.cpp b/src/parakeet.cpp
-index 50dd657b..5a4ff8aa 100644
+index 50dd657b..6db0fda2 100644
 --- a/src/parakeet.cpp
 +++ b/src/parakeet.cpp
 @@ -333,6 +333,19 @@ struct parakeet_layer_encoder {
@@ -491,8 +491,21 @@ index 50dd657b..5a4ff8aa 100644
              ggml_format_name(cur, "enc_%d_conv_pw1", il);
  
              {
-@@ -1928,19 +2107,14 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
-             cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
+@@ -1919,28 +2098,21 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+                 ggml_format_name(cur, "enc_%d_conv_glu", il);
+             }
+ 
+-            cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
+-
+-            // use ggml_ssm_conv for f32 precision
++            // use ggml_ssm_conv for f32 precision: it wants [time + 2*pad, chan]. One pad op reads the
++            // transposed GLU output in place and writes zeros on both sides (it used to be a transpose
++            // copy, a pad, a roll and a second pad: four passes over the data).
+             const int dw_pad = (hparams.n_conv_kernel - 1) / 2;
+-            cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
+-            cur = ggml_roll(ctx0, cur, dw_pad, 0, 0, 0);
+-            cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
++            cur = ggml_pad_ext(ctx0, ggml_transpose(ctx0, cur), dw_pad, dw_pad, 0, 0, 0, 0, 0, 0);
              ggml_format_name(cur, "enc_%d_conv_dw_pad", il);
  
 -            cur = ggml_ssm_conv(ctx0, cur, layer.conv_dw_w);
@@ -514,7 +527,7 @@ index 50dd657b..5a4ff8aa 100644
              ggml_format_name(cur, "enc_%d_conv_pw2", il);
  
              cur = ggml_add(ctx0, residual, cur);
-@@ -1954,9 +2128,9 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1954,9 +2126,9 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.norm_ff2_w), layer.norm_ff2_b);
              ggml_format_name(cur, "enc_%d_ffn_norm_2", il);
  
@@ -526,7 +539,7 @@ index 50dd657b..5a4ff8aa 100644
              cur = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, 0.5));
              ggml_format_name(cur, "enc_%d_ffn_res", il);
          }
-@@ -1971,6 +2145,13 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1971,6 +2143,13 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
      struct ggml_tensor * enc_out_view = ggml_view_2d(ctx0, pstate.enc_out, n_state, pstate.n_frames, pstate.enc_out->nb[1], 0);
      ggml_build_forward_expand(gf, ggml_cpy(ctx0, cur, enc_out_view));
  
@@ -540,7 +553,7 @@ index 50dd657b..5a4ff8aa 100644
      ggml_free(ctx0);
  
      return gf;
-@@ -2098,6 +2279,11 @@ static bool parakeet_encode_internal(
+@@ -2098,6 +2277,11 @@ static bool parakeet_encode_internal(
          return false;
      }
  
@@ -552,7 +565,7 @@ index 50dd657b..5a4ff8aa 100644
      pstate.t_encode_us += ggml_time_us() - t_start_us;
      pstate.n_encode++;
  
-@@ -2123,8 +2309,10 @@ static bool parakeet_ensure_encode_sched(
+@@ -2123,8 +2307,10 @@ static bool parakeet_ensure_encode_sched(
          ggml_backend_buffer_free(pstate.enc_out_buffer);
          pstate.enc_out_buffer = nullptr;
          pstate.enc_out = nullptr;
@@ -564,7 +577,7 @@ index 50dd657b..5a4ff8aa 100644
              pstate.sched_encode_n_audio_ctx = 0;
              pstate.n_audio_ctx = prev_n_audio_ctx;
              return false;
-@@ -2288,14 +2476,10 @@ static struct ggml_cgraph * parakeet_build_graph_joint(
+@@ -2288,14 +2474,10 @@ static struct ggml_cgraph * parakeet_build_graph_joint(
      struct ggml_tensor * pred = pstate.pred_out;
      ggml_format_name(pred, "pred");
  
@@ -582,7 +595,7 @@ index 50dd657b..5a4ff8aa 100644
      ggml_set_name(enc, "enc");
  
      struct ggml_tensor * joint = ggml_add(ctx0, enc, pred);
-@@ -2513,6 +2697,11 @@ static bool parakeet_decode(
+@@ -2513,6 +2695,11 @@ static bool parakeet_decode(
      const int  blank_id                 = pctx.vocab.token_blank;
      const int  n_vocab_logits           = blank_id + 1;
      const int  max_tokens_per_timestep = hparams.n_max_tokens;
@@ -594,7 +607,7 @@ index 50dd657b..5a4ff8aa 100644
  
      // time index into the encoder frame (current time frame)
      int t = 0;
-@@ -2532,7 +2721,7 @@ static bool parakeet_decode(
+@@ -2532,7 +2719,7 @@ static bool parakeet_decode(
      // run the prediction network for the initial blank token. This will
      // initialize the LSTM state and produce an initial hidden state that can
      // be used in the joint network below.
@@ -603,7 +616,7 @@ index 50dd657b..5a4ff8aa 100644
              params ? params->abort_callback           : nullptr,
              params ? params->abort_callback_user_data : nullptr)) {
          return false;
-@@ -2550,7 +2739,7 @@ static bool parakeet_decode(
+@@ -2550,7 +2737,7 @@ static bool parakeet_decode(
          // The joint network outputs logits for all the tokens in the vocabulary
          // plus the blank token, and also n_duration logits for the duration
          // tokens which contain information about how many frames to skip/advance forward.
@@ -612,7 +625,7 @@ index 50dd657b..5a4ff8aa 100644
                  params ? params->abort_callback           : nullptr,
                  params ? params->abort_callback_user_data : nullptr)) {
              return false;
-@@ -2615,7 +2804,7 @@ static bool parakeet_decode(
+@@ -2615,7 +2802,7 @@ static bool parakeet_decode(
  
          // advance predictor for the non-blank token.
          batch.token[0] = last_token;
@@ -621,7 +634,7 @@ index 50dd657b..5a4ff8aa 100644
                  params ? params->abort_callback           : nullptr,
                  params ? params->abort_callback_user_data : nullptr)) {
              return false;
-@@ -2967,7 +3156,14 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
+@@ -2967,7 +3154,14 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
          const int subsampl_factor  = ctx->model.hparams.subsampling_factor;
          const int n_frames_max     = (batch_size + subsampl_factor - 1) / subsampl_factor;
  
@@ -637,7 +650,7 @@ index 50dd657b..5a4ff8aa 100644
              PARAKEET_LOG_ERROR("%s: parakeet_enc_state_init() failed\n", __func__);
              parakeet_free_state(state);
              return nullptr;
-@@ -2992,7 +3188,8 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
+@@ -2992,7 +3186,8 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
      }
      state->sched_encode_n_audio_ctx = state->n_audio_ctx > 0 ? state->n_audio_ctx : ctx->model.hparams.n_audio_ctx;
  
@@ -647,7 +660,7 @@ index 50dd657b..5a4ff8aa 100644
          PARAKEET_LOG_ERROR("%s: parakeet_lstm_states_init () failed\n", __func__);
          parakeet_free_state(state);
          return nullptr;
-@@ -3005,7 +3202,7 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
+@@ -3005,7 +3200,7 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
                  mem_lstm_ctx / 1024.0 / 1024.0, mem_lstm_buf / 1024.0 / 1024.0);
      }
  
@@ -656,7 +669,7 @@ index 50dd657b..5a4ff8aa 100644
          PARAKEET_LOG_ERROR("%s: parakeet_pred_state_init() failed\n", __func__);
          parakeet_free_state(state);
          return nullptr;
-@@ -3021,7 +3218,15 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
+@@ -3021,7 +3216,15 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
      PARAKEET_LOG_INFO("%s: compute buffer (encode) = %7.2f MB\n", __func__, parakeet_sched_size(state->sched_encode) / 1e6);
  
      {
@@ -673,7 +686,7 @@ index 50dd657b..5a4ff8aa 100644
                  [&]() {
                      const auto & hparams = ctx->model.hparams;
                      const int n_tokens = hparams.n_audio_ctx; // Use audio ctx for Parakeet
-@@ -3220,6 +3425,9 @@ void parakeet_free_state(struct parakeet_state * state) {
+@@ -3220,6 +3423,9 @@ void parakeet_free_state(struct parakeet_state * state) {
          ggml_backend_buffer_free(state->lstm_state.buffer);
          ggml_backend_buffer_free(state->pred_out_buffer);
          ggml_backend_buffer_free(state->enc_out_buffer);
