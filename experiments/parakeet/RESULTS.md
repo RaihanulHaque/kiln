@@ -201,6 +201,38 @@ LibriSpeech through `kiln-cli` (Metal), Q8_0:
 `kiln-tests models`: 603 passed (the Parakeet 0.6B, which has no biases, and the TTS round trip
 through Parakeet included).
 
-Not measured: the 1-thread decoder on OpenMP builds (Linux, Android), where threads persist between
-graphs and the balance may differ.
+## On a phone: Galaxy A17 5G (Exynos 1330, Android 16, OpenMP), 2026-11-27
+
+`decprof` built with NDK r28 against kiln's Android ggml (OpenMP, `armv8.2-a+dotprod+fp16`), run on
+kiln's cores for this phone (the two Cortex-A78, `taskset c0`), `-t 2`, best of 2 per clip:
+
+```bash
+G=build/android-arm64/third_party/llama.cpp/ggml/src
+$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android29-clang++ -O2 -std=c++17 \
+  -march=armv8.2-a+dotprod+fp16 -fopenmp -static-openmp -DPARAKEET_VERSION='"prof"' \
+  -Ithird_party/whisper.cpp/include -Ithird_party/whisper.cpp/src -Ithird_party/llama.cpp/ggml/include \
+  experiments/parakeet/prof/decprof.cpp -o build/asr/prof/decprof-android \
+  $G/libggml.a $G/libggml-cpu.a $G/libggml-base.a -static-libstdc++
+```
+
+Decoder threads, the new code, alternated 3 times (phone at 29.6-29.8 C):
+
+| decoder threads | round 1 | round 2 | round 3 |
+|---|---|---|---|
+| 1 | 413 ms | 421 ms | 419 ms |
+| 2 | 393 ms | 528 ms | 427 ms |
+
+Even: OpenMP's threads persist between graphs, so the cost of a second thread is small here. 1 stays
+the default (steadier, and it leaves the other fast core to the app).
+
+Before (patch at d4a56fa, decoder on 2 threads) against after, alternated 3 times:
+
+| | before | after |
+|---|---|---|
+| decoder, 20 clips | 451-470 ms | **395-414 ms** |
+| whole transcription | 7850-7958 ms | 7788-7907 ms (21x real time both) |
+| transcripts | | identical |
+
+On the phone the encoder is about 88% of the time (6.9 s of 7.9 s), so the decoder change is
+small there. The 1-thread decoder on the Ryzen (OpenMP, 6 to 8 threads) is not measured.
 

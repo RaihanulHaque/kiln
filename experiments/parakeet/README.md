@@ -25,14 +25,15 @@ again in `build/asr/` (git-ignored). `RESULTS.md` has every measurement so far.
    tiny graphs (8 threads were 2.8x slower), the joint's encoder projection done for all frames in
    the encoder graph, and with a GPU the decoder on the CPU (its weights and state in CPU memory).
    LibriSpeech through kiln-cli (Metal): 289x / 272x real time, was 196x / 190x; WER 2.60% /
-   5.45%. `kiln-tests models` 603 passed. `RESULTS.md`, phase 3c.
+   5.45%. `kiln-tests models` 603 passed. On a Galaxy A17 (OpenMP, 2 fast cores) the decoder is
+   about 12% faster and 1 or 2 decoder threads are even. `RESULTS.md`, phase 3c.
 
 ## Next
 
-- **Measure the decoder thread count on OpenMP builds** (the Ryzen, a phone): the 1-thread default
-  was measured on the M4 Pro only, where kiln has no OpenMP. `PARAKEET_DEC_THREADS=n` overrides it;
-  `prof/decprof` shows the decoder time (build it for Android with the NDK to run it on a phone).
-- On the M4 Pro (Metal) the encoder is now two thirds of the time again (45.6 s of 67 s for test-clean).
+- The encoder is the time now: two thirds on the M4 Pro (Metal), about 88% on the Galaxy A17
+  (6.9 of 7.9 s for the 20 clips, 21x real time on its two fast cores). Phone speed comes from it.
+- The 1-thread decoder on the Ryzen (OpenMP, 6 to 8 threads) is not measured;
+  `PARAKEET_DEC_THREADS=n` and `prof/decprof` do it.
 - Attention for long clips (32% at 35 s), the GLU sigmoid, the scheduler rebuild per clip length.
 - CTC head (phase 2): the 110M's `ctc_decoder.*` tensors are skipped today; a CTC path would also
   run the Bangla FastConformer-CTC models.
@@ -78,6 +79,10 @@ commit e8b2ee1 and run `PARAKEET_OLD_FRONTEND=1 prof/encprof ... --dump ref/base
 
 On macOS use `DYLD_LIBRARY_PATH` in place of `LD_LIBRARY_PATH` for `parakeet-quantize`, and the
 Python in the `ML` env needs `jiwer` (`pip install jiwer`).
+
+Android (`prof/decprof` on a phone): build with the NDK against kiln's Android ggml, as in
+`RESULTS.md` phase 3c, push the binary, the model and `ref/clips` to `/data/local/tmp`, and run it
+with `taskset` on the cores kiln uses.
 
 ## Tools
 
