@@ -21,11 +21,18 @@ again in `build/asr/` (git-ignored). `RESULTS.md` has every measurement so far.
    before): 4 graph ops fewer per layer. F16 encoder output moves by 3e-5 rel rms; LibriSpeech WER
    unchanged (M4 Pro, Metal: 2.61% / 5.45%); no measurable speed change on the M4 Pro CPU. `RESULTS.md`, phase 3b.
 7. **macOS works** for every step below (2026-11-27, M4 Pro): `prof/build.sh` links the Mac way.
+8. **TDT decoder 3 to 4.6x faster** (2026-11-27, M4 Pro), transcripts unchanged: one thread for its
+   tiny graphs (8 threads were 2.8x slower), the joint's encoder projection done for all frames in
+   the encoder graph, and with a GPU the decoder on the CPU (its weights and state in CPU memory).
+   LibriSpeech through kiln-cli (Metal): 289x / 272x real time, was 196x / 190x; WER 2.60% /
+   5.45%. `kiln-tests models` 603 passed. `RESULTS.md`, phase 3c.
 
 ## Next
 
-- On the M4 Pro the TDT decoder (LSTM and joint, one small graph per step, on the CPU) is now more
-  time than the encoder: 54 s against 45 s for test-clean. On the Ryzen the encoder was 88%.
+- **Measure the decoder thread count on OpenMP builds** (the Ryzen, a phone): the 1-thread default
+  was measured on the M4 Pro only, where kiln has no OpenMP. `PARAKEET_DEC_THREADS=n` overrides it;
+  `prof/decprof` shows the decoder time (build it for Android with the NDK to run it on a phone).
+- On the M4 Pro (Metal) the encoder is now two thirds of the time again (45.6 s of 67 s for test-clean).
 - Attention for long clips (32% at 35 s), the GLU sigmoid, the scheduler rebuild per clip length.
 - CTC head (phase 2): the 110M's `ctc_decoder.*` tensors are skipped today; a CTC path would also
   run the Bangla FastConformer-CTC models.
@@ -80,8 +87,9 @@ Python in the `ML` env needs `jiwer` (`pip install jiwer`).
 | `convert_tdt.py` | whisper.cpp's converter, skipping the CTC head |
 | `unpack.py` | LibriSpeech parquet to flac files and a trans.txt |
 | `eval.py` | WER and speed through `kiln-cli` (`-t`, `--limit`) |
+| `prof/decprof.cpp` | whole transcription per clip on the CPU or `--gpu`: encoder and decoder time, joint and predict steps; `--text` writes the transcripts |
 | `prof/encprof.cpp` | encoder outputs (`--dump`), timing (`--reps`), per-node profile (`--prof`); `PROF_DUMP_NODE=name PROF_DUMP_DIR=dir` writes one node and the mel |
-| `prof/build.sh` | builds encprof into `build/asr/prof/` |
+| `prof/build.sh` | builds encprof (or `prof/build.sh decprof`) into `build/asr/prof/` |
 | `prof/cmp.py` | compares two `--dump` folders |
 | `prof/fe_ref.py` | the front end in PyTorch float64 from `nemo110/`, against dumped nodes (run in `build/asr`) |
 | `prof/cats.py` | groups a `--prof` listing into categories |

@@ -5,16 +5,17 @@
 # pulls in the Metal and BLAS backends, so those libraries and frameworks are linked too. The
 # profiler itself runs the CPU backend.
 set -e
+SRC=${1:-encprof}   # encprof or decprof
 K=$(cd "$(dirname "$0")/../../.." && pwd)
 G=$K/build/host/third_party/llama.cpp/ggml/src
 INC="-I$K/third_party/whisper.cpp/include -I$K/third_party/whisper.cpp/src -I$K/third_party/llama.cpp/ggml/include"
 if [ "$(uname)" = Darwin ]; then
   c++ -O2 -std=c++17 -mcpu=native -DPARAKEET_VERSION='"prof"' $INC \
-    "$K/experiments/parakeet/prof/encprof.cpp" -o "$K/build/asr/prof/encprof" \
+    "$K/experiments/parakeet/prof/$SRC.cpp" -o "$K/build/asr/prof/$SRC" \
     "$G/libggml.a" "$G/libggml-cpu.a" "$G/ggml-metal/libggml-metal.a" "$G/ggml-blas/libggml-blas.a" "$G/libggml-base.a" \
     -framework Accelerate -framework Metal -framework MetalKit -framework Foundation
 else
   g++ -O2 -std=c++17 -march=native -fopenmp -DPARAKEET_VERSION='"prof"' $INC \
-    "$K/experiments/parakeet/prof/encprof.cpp" -o "$K/build/asr/prof/encprof" \
+    "$K/experiments/parakeet/prof/$SRC.cpp" -o "$K/build/asr/prof/$SRC" \
     "$G/libggml.a" "$G/libggml-cpu.a" "$G/libggml-base.a" -lpthread
 fi

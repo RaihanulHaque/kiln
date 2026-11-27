@@ -145,3 +145,62 @@ Through `kiln-cli` on the M4 Pro the whole sets ran at 196x (test-clean) and 190
 time, with the TDT decoder taking more time than the encoder: test-clean encoder 45.4 s, decoder
 53.7 s; test-other 47.2 s and 54.1 s. On the Ryzen the encoder was 87-88%.
 
+# Phase 3c: the TDT decoder (2026-11-27, M4 Pro)
+
+Tool: `prof/decprof.cpp` (whole transcription per clip, best of 3, on the CPU or `--gpu`), the same
+20 reference clips (163.3 s), Q8_0, 8 threads for the encoder.
+
+## Where the decoder's time went
+
+| | CPU | GPU (Metal) |
+|---|---|---|
+| encoder | 600 ms | 346 ms |
+| decoder | 238 ms | 338 ms |
+| joint steps (1324) | 0.100 ms each | 0.141 ms each |
+| predict steps (826) | 0.128 ms each | 0.184 ms each |
+| of predict: graph build / alloc / compute | 2.3 / 2.9 / 100 ms | 2.1 / 9.6 / 140 ms |
+
+Building and allocating the graphs is cheap; running them is not. Each step is one matrix-vector
+product and a few vector ops (about 1 to 3 MFLOP), so the fixed cost per graph dominates:
+
+| decoder threads (CPU) | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| decoder, 20 clips | **86 ms** | 112 ms | 149 ms | 236 ms |
+
+kiln's Mac build has no OpenMP, so ggml hands each small graph to its threads afresh. On the GPU
+each step also pays a round trip. Metal's buffers here are not host memory (`ggml_backend_buffer_is_host`
+is false), so the CPU cannot read the GPU's weights in place.
+
+## Changes (in `parakeet-bias-frontend.patch`)
+
+1. The decoder uses 1 thread (`PARAKEET_DEC_THREADS=n` overrides it).
+2. The joint's encoder projection (`enc_w`, `enc_b`) is done for every frame at the end of the encoder
+   graph (`enc_proj`), instead of once per joint step.
+3. With a GPU, the decoder's weights (embedding, LSTM, joint `pred_w`/`pred_b`/`net_w`/`net_b`) are
+   placed in CPU buffers, its state (LSTM, `pred_out`) in CPU memory, the projection is copied to a CPU
+   tensor once per clip, and the decoder's scheduler gets the CPU backend alone. CPU-only builds place
+   everything as before.
+
+## Results
+
+| 20 clips | before | after |
+|---|---|---|
+| CPU: decoder | 238 ms | **79 ms** (joint 0.021 ms, predict 0.062 ms a step) |
+| CPU: whole transcription | 862 ms (189x) | **714 ms (229x)** |
+| GPU: decoder | 338 ms | **74 ms** |
+| GPU: whole transcription | 718 ms (228x) | **458 ms (357x)** |
+| transcripts, CPU and GPU | | identical to before |
+
+LibriSpeech through `kiln-cli` (Metal), Q8_0:
+
+| set | WER before | WER after | speed before | speed after | decoder before | decoder after |
+|---|---|---|---|---|---|---|
+| test-clean | 2.608% | **2.602%** | 196x | **289x** | 53.7 s | **21.7 s** |
+| test-other | 5.454% | **5.451%** | 190x | **272x** | 54.1 s | **22.0 s** |
+
+`kiln-tests models`: 603 passed (the Parakeet 0.6B, which has no biases, and the TTS round trip
+through Parakeet included).
+
+Not measured: the 1-thread decoder on OpenMP builds (Linux, Android), where threads persist between
+graphs and the balance may differ.
+

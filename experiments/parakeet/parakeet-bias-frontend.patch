@@ -57,7 +57,7 @@ index e8c6effe..68ba8f6e 100644
      // Prediction network
      {PARAKEET_TENSOR_PRED_EMBED_WEIGHT,            GGML_OP_GET_ROWS},
 diff --git a/src/parakeet.cpp b/src/parakeet.cpp
-index 50dd657b..bb9684ef 100644
+index 50dd657b..34a0be60 100644
 --- a/src/parakeet.cpp
 +++ b/src/parakeet.cpp
 @@ -333,6 +333,19 @@ struct parakeet_layer_encoder {
@@ -80,7 +80,75 @@ index 50dd657b..bb9684ef 100644
  };
  
  struct parakeet_lsmt_layer {
-@@ -1206,7 +1219,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
+@@ -432,6 +445,14 @@ struct parakeet_state {
+ 
+     // outputs from encoder stages
+     struct ggml_tensor * enc_out     = nullptr;
++    struct ggml_tensor * enc_proj    = nullptr;  // joint encoder projection of every frame, made by the encoder graph
++
++    // With a GPU, the decoder runs on the CPU (see parakeet_init_state): its state lives in CPU
++    // memory, and enc_proj is copied into enc_proj_cpu after each encode.
++    bool dec_on_cpu = false;
++    struct ggml_tensor * enc_proj_cpu = nullptr;
++    std::vector<uint8_t> enc_proj_cpu_buf;
++    ggml_backend_buffer_t enc_proj_cpu_buffer = nullptr;
+     struct ggml_tensor * pred_out    = nullptr;
+ 
+     std::vector<uint8_t> enc_out_buf;
+@@ -790,8 +811,9 @@ static bool parakeet_enc_state_init(
+                struct parakeet_state & pstate,
+                       ggml_backend_t   backend,
+                                  int   n_audio_state,
++                                 int   n_joint_hidden,
+                                  int   n_frames_max) {
+-    pstate.enc_out_buf.resize(ggml_tensor_overhead());
++    pstate.enc_out_buf.resize(2 * ggml_tensor_overhead());
+ 
+     struct ggml_init_params params = {
+         /*.mem_size   =*/ pstate.enc_out_buf.size(),
+@@ -805,7 +827,8 @@ static bool parakeet_enc_state_init(
+         return false;
+     }
+ 
+-    pstate.enc_out = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_audio_state, n_frames_max);
++    pstate.enc_out  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_audio_state, n_frames_max);
++    pstate.enc_proj = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_joint_hidden, n_frames_max);
+     pstate.enc_out_buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+     if (!pstate.enc_out_buffer) {
+         PARAKEET_LOG_ERROR("%s: failed to allocate memory for enc_out tensor\n", __func__);
+@@ -818,6 +841,31 @@ static bool parakeet_enc_state_init(
+     return true;
+ }
+ 
++static bool parakeet_enc_proj_cpu_init(
++               struct parakeet_state & pstate,
++                      ggml_backend_t   cpu_backend,
++                                 int   n_joint_hidden,
++                                 int   n_frames_max) {
++    if (pstate.enc_proj_cpu_buffer) {
++        ggml_backend_buffer_free(pstate.enc_proj_cpu_buffer);
++        pstate.enc_proj_cpu_buffer = nullptr;
++    }
++    pstate.enc_proj_cpu_buf.resize(ggml_tensor_overhead());
++    struct ggml_init_params params = {
++        /*.mem_size   =*/ pstate.enc_proj_cpu_buf.size(),
++        /*.mem_buffer =*/ pstate.enc_proj_cpu_buf.data(),
++        /*.no_alloc   =*/ true,
++    };
++    struct ggml_context * ctx = ggml_init(params);
++    if (!ctx) {
++        return false;
++    }
++    pstate.enc_proj_cpu = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_joint_hidden, n_frames_max);
++    pstate.enc_proj_cpu_buffer = ggml_backend_alloc_ctx_tensors(ctx, cpu_backend);
++    ggml_free(ctx);
++    return pstate.enc_proj_cpu_buffer != nullptr;
++}
++
+ static ggml_backend_t parakeet_backend_init_gpu(const parakeet_context_params & params) {
+     ggml_log_set(g_state.log_callback, g_state.log_callback_user_data);
+ 
+@@ -1206,7 +1254,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
      const int n_audio_layer = hparams.n_audio_layer;
  
      // Calculate tensor count: pre_encode (12) + encoder layers (29 per layer) + prediction (9) + joint (6)
@@ -89,7 +157,25 @@ index 50dd657b..bb9684ef 100644
  
      std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
      auto get_ctx = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
-@@ -1272,6 +1285,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
+@@ -1235,9 +1283,16 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
+     // Create a list of available bufts, in priority order
+     buft_list_t buft_list = make_buft_list(wctx.params);
+ 
++    // The decoder (prediction and joint networks, apart from the encoder projection) always runs
++    // on the CPU, also with a GPU (see parakeet_init_state), so its weights go in CPU buffers.
++    parakeet_context_params params_cpu = wctx.params;
++    params_cpu.use_gpu = false;
++    buft_list_t buft_list_cpu = make_buft_list(params_cpu);
++    bool on_cpu = false;   // create_tensor below uses buft_list_cpu while this is set
++
+     auto create_tensor = [&](parakeet_tensor type, ggml_tensor * meta, int layer = -1) -> ggml_tensor * {
+         ggml_op op = PARAKEET_TENSOR_INFO.at(type);
+-        ggml_backend_buffer_type_t buft = select_weight_buft(hparams, meta, op, buft_list);
++        ggml_backend_buffer_type_t buft = select_weight_buft(hparams, meta, op, on_cpu ? buft_list_cpu : buft_list);
+         if (!buft) {
+             throw std::runtime_error(format("failed to find a compatible buffer type for parakeet tensor %s",
+                         PARAKEET_TENSOR_NAMES.at(type)));
+@@ -1272,6 +1327,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
  
      model.layers.resize(n_audio_layer);
  
@@ -97,7 +183,7 @@ index 50dd657b..bb9684ef 100644
      // Encoder pre_encode
      const int n_subsampling_channels = hparams.n_subsampling_channels;
      const int n_pre_enc_features     = (hparams.n_mels / hparams.subsampling_factor) * n_subsampling_channels;
-@@ -1358,6 +1372,18 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
+@@ -1358,6 +1414,18 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
          // Output norm
          layer.norm_out_w = create_tensor(PARAKEET_TENSOR_ENC_NORM_OUT_WEIGHT, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_audio_state), i);
          layer.norm_out_b = create_tensor(PARAKEET_TENSOR_ENC_NORM_OUT_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_audio_state), i);
@@ -116,7 +202,33 @@ index 50dd657b..bb9684ef 100644
      }
  
      // Prediction network (decoder)
-@@ -1420,6 +1446,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
+@@ -1372,6 +1440,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
+     const ggml_type pred_wtype = (blck > 1 && dec_hidden % blck != 0) ? GGML_TYPE_F32 : wtype;
+     const ggml_type join_wtype = pred_wtype;
+ 
++    on_cpu = true;
+     model.prediction.embed_w = create_tensor(PARAKEET_TENSOR_PRED_EMBED_WEIGHT, ggml_new_tensor_2d(ctx, pred_wtype, dec_hidden, n_pred_embed));
+     model.prediction.lstm_layer.resize(hparams.n_pred_layers);
+     for (int i = 0; i < hparams.n_pred_layers; ++i) {
+@@ -1391,14 +1460,17 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
+     ggml_set_name(model.joint.pred_w, "pred_w");
+     model.joint.pred_b = create_tensor(PARAKEET_TENSOR_JOINT_PRED_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dec_hidden));
+     ggml_set_name(model.joint.pred_b, "pred_b");
++    on_cpu = false;   // the encoder projection runs in the encoder graph
+     model.joint.enc_w  = create_tensor(PARAKEET_TENSOR_JOINT_ENC_WEIGHT, ggml_new_tensor_2d(ctx, wtype, n_audio_state, dec_hidden));
+     ggml_set_name(model.joint.enc_w, "enc_w");
+     model.joint.enc_b  = create_tensor(PARAKEET_TENSOR_JOINT_ENC_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dec_hidden));
+     ggml_set_name(model.joint.enc_b, "enc_b");
++    on_cpu = true;
+     model.joint.net_w  = create_tensor(PARAKEET_TENSOR_JOINT_NET_WEIGHT, ggml_new_tensor_2d(ctx, join_wtype, dec_hidden, n_joint_out));
+     ggml_set_name(model.joint.net_w, "net_w");
+     model.joint.net_b  = create_tensor(PARAKEET_TENSOR_JOINT_NET_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_joint_out));
+     ggml_set_name(model.joint.net_b, "net_b");
++    on_cpu = false;
+ 
+     ggml_free(ctx);
+ 
+@@ -1420,6 +1492,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
          size_t total_size = 0;
  
          auto & tensors_map = wctx.model.tensors;
@@ -124,7 +236,7 @@ index 50dd657b..bb9684ef 100644
          int & n_loaded = wctx.model.n_loaded;
  
          n_loaded = 0;
-@@ -1504,16 +1531,66 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
+@@ -1504,16 +1577,66 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
  
              total_size += ggml_nbytes(tensor);
              n_loaded++;
@@ -192,7 +304,7 @@ index 50dd657b..bb9684ef 100644
      }
  
      auto & buffers = wctx.model.buffers;
-@@ -1527,6 +1604,67 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
+@@ -1527,6 +1650,67 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
  }
  
  // conv subsampling + conformer encoder
@@ -260,7 +372,7 @@ index 50dd657b..bb9684ef 100644
  static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx, parakeet_state & pstate) {
      const auto & model    = pctx.model;
      const auto & hparams  = model.hparams;
-@@ -1552,45 +1690,39 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1552,45 +1736,39 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
      ggml_set_name(mel, "mel");
      ggml_set_input(mel);
  
@@ -335,7 +447,7 @@ index 50dd657b..bb9684ef 100644
  
      const int n_freq   = cur->ne[0]; // 16
      const int n_chan   = cur->ne[1]; // 256
-@@ -1659,11 +1791,11 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1659,11 +1837,11 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              ggml_format_name(cur, "enc_%d_ffn_norm_1", il);
  
              // ffn_1
@@ -349,7 +461,7 @@ index 50dd657b..bb9684ef 100644
              ggml_format_name(cur, "enc_%d_ffn_1", il);
  
              cur = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, fc_factor));
-@@ -1683,9 +1815,9 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1683,9 +1861,9 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              const int d_head = n_state / n_head;
  
              // [feat, time_frames, 1, 1]
@@ -362,7 +474,7 @@ index 50dd657b..bb9684ef 100644
  
              Q_cur = ggml_reshape_3d(ctx0, Q_cur, d_head, n_head, n_time);
              K_cur = ggml_reshape_3d(ctx0, K_cur, d_head, n_head, n_time);
-@@ -1891,6 +2023,7 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1891,6 +2069,7 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
                  cur = ggml_cont_2d(ctx0, cur, n_state, n_time);
                  cur = ggml_mul_mat(ctx0, layer.attn_out_w, cur);
              }
@@ -370,7 +482,7 @@ index 50dd657b..bb9684ef 100644
              ggml_format_name(cur, "enc_%d_attn_out", il);
  
              cur = ggml_add(ctx0, residual, cur);
-@@ -1907,7 +2040,7 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1907,7 +2086,7 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              ggml_format_name(cur, "enc_%d_norm_conv", il);
  
              // pointwise 1d convolution: [1024, 138] -> [2048, 138]
@@ -379,7 +491,7 @@ index 50dd657b..bb9684ef 100644
              ggml_format_name(cur, "enc_%d_conv_pw1", il);
  
              {
-@@ -1928,19 +2061,14 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1928,19 +2107,14 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
              ggml_format_name(cur, "enc_%d_conv_dw_pad", il);
  
@@ -402,7 +514,7 @@ index 50dd657b..bb9684ef 100644
              ggml_format_name(cur, "enc_%d_conv_pw2", il);
  
              cur = ggml_add(ctx0, residual, cur);
-@@ -1954,9 +2082,9 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1954,9 +2128,9 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.norm_ff2_w), layer.norm_ff2_b);
              ggml_format_name(cur, "enc_%d_ffn_norm_2", il);
  
@@ -414,3 +526,159 @@ index 50dd657b..bb9684ef 100644
              cur = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, 0.5));
              ggml_format_name(cur, "enc_%d_ffn_res", il);
          }
+@@ -1971,6 +2145,13 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+     struct ggml_tensor * enc_out_view = ggml_view_2d(ctx0, pstate.enc_out, n_state, pstate.n_frames, pstate.enc_out->nb[1], 0);
+     ggml_build_forward_expand(gf, ggml_cpy(ctx0, cur, enc_out_view));
+ 
++    // The joint network's encoder projection depends on the frame only, so it is done here for
++    // all frames in one matmul instead of once per decoder step.
++    struct ggml_tensor * proj = ggml_add(ctx0, ggml_mul_mat(ctx0, model.joint.enc_w, cur), model.joint.enc_b);
++    ggml_set_name(proj, "enc_proj");
++    struct ggml_tensor * enc_proj_view = ggml_view_2d(ctx0, pstate.enc_proj, proj->ne[0], pstate.n_frames, pstate.enc_proj->nb[1], 0);
++    ggml_build_forward_expand(gf, ggml_cpy(ctx0, proj, enc_proj_view));
++
+     ggml_free(ctx0);
+ 
+     return gf;
+@@ -2098,6 +2279,11 @@ static bool parakeet_encode_internal(
+         return false;
+     }
+ 
++    if (pstate.dec_on_cpu) {
++        // the decoder reads the projection from CPU memory: one copy per clip
++        ggml_backend_tensor_get(pstate.enc_proj, pstate.enc_proj_cpu->data, 0, (size_t) pstate.n_frames * pstate.enc_proj->nb[1]);
++    }
++
+     pstate.t_encode_us += ggml_time_us() - t_start_us;
+     pstate.n_encode++;
+ 
+@@ -2123,8 +2309,10 @@ static bool parakeet_ensure_encode_sched(
+         ggml_backend_buffer_free(pstate.enc_out_buffer);
+         pstate.enc_out_buffer = nullptr;
+         pstate.enc_out = nullptr;
++        pstate.enc_proj = nullptr;
+ 
+-        if (!parakeet_enc_state_init(pstate, pstate.backends[0], pctx.model.hparams.n_audio_state, n_frames_max)) {
++        if (!parakeet_enc_state_init(pstate, pstate.backends[0], pctx.model.hparams.n_audio_state, pctx.model.hparams.n_pred_dim, n_frames_max) ||
++            (pstate.dec_on_cpu && !parakeet_enc_proj_cpu_init(pstate, pstate.backends.back(), pctx.model.hparams.n_pred_dim, n_frames_max))) {
+             pstate.sched_encode_n_audio_ctx = 0;
+             pstate.n_audio_ctx = prev_n_audio_ctx;
+             return false;
+@@ -2288,14 +2476,10 @@ static struct ggml_cgraph * parakeet_build_graph_joint(
+     struct ggml_tensor * pred = pstate.pred_out;
+     ggml_format_name(pred, "pred");
+ 
++    // The encoder output of frame t, already projected to the joint hidden size (encoder graph).
+     const int t_idx = batch.i_time[0];
+-    struct ggml_tensor * enc_out = ggml_view_1d(ctx0, pstate.enc_out, hparams.n_audio_state,
+-            (size_t) t_idx * pstate.enc_out->nb[1]);
+-    ggml_format_name(enc_out, "enc_out_view");
+-
+-    // Project the encoder output to the joint network hidden dimension.
+-    struct ggml_tensor * enc  = ggml_mul_mat(ctx0, model.joint.enc_w, enc_out);
+-    enc = ggml_add(ctx0, enc, model.joint.enc_b);
++    struct ggml_tensor * proj = pstate.dec_on_cpu ? pstate.enc_proj_cpu : pstate.enc_proj;
++    struct ggml_tensor * enc = ggml_view_1d(ctx0, proj, proj->ne[0], (size_t) t_idx * proj->nb[1]);
+     ggml_set_name(enc, "enc");
+ 
+     struct ggml_tensor * joint = ggml_add(ctx0, enc, pred);
+@@ -2513,6 +2697,10 @@ static bool parakeet_decode(
+     const int  blank_id                 = pctx.vocab.token_blank;
+     const int  n_vocab_logits           = blank_id + 1;
+     const int  max_tokens_per_timestep = hparams.n_max_tokens;
++    // The decoder's graphs are tiny (one matrix-vector product and a few vector ops per step), so
++    // more threads cost more to coordinate than they save: on an M4 Pro (no OpenMP) 1 thread was
++    // 2.8x faster than 8. PARAKEET_DEC_THREADS overrides it, for measuring other machines.
++    const int  n_threads_dec = getenv("PARAKEET_DEC_THREADS") ? std::max(1, atoi(getenv("PARAKEET_DEC_THREADS"))) : 1;
+ 
+     // time index into the encoder frame (current time frame)
+     int t = 0;
+@@ -2532,7 +2720,7 @@ static bool parakeet_decode(
+     // run the prediction network for the initial blank token. This will
+     // initialize the LSTM state and produce an initial hidden state that can
+     // be used in the joint network below.
+-    if (!parakeet_predict(pctx, pstate, batch, n_threads,
++    if (!parakeet_predict(pctx, pstate, batch, n_threads_dec,
+             params ? params->abort_callback           : nullptr,
+             params ? params->abort_callback_user_data : nullptr)) {
+         return false;
+@@ -2550,7 +2738,7 @@ static bool parakeet_decode(
+         // The joint network outputs logits for all the tokens in the vocabulary
+         // plus the blank token, and also n_duration logits for the duration
+         // tokens which contain information about how many frames to skip/advance forward.
+-        if (!parakeet_joint(pctx, pstate, batch, n_threads,
++        if (!parakeet_joint(pctx, pstate, batch, n_threads_dec,
+                 params ? params->abort_callback           : nullptr,
+                 params ? params->abort_callback_user_data : nullptr)) {
+             return false;
+@@ -2615,7 +2803,7 @@ static bool parakeet_decode(
+ 
+         // advance predictor for the non-blank token.
+         batch.token[0] = last_token;
+-        if (!parakeet_predict(pctx, pstate, batch, n_threads,
++        if (!parakeet_predict(pctx, pstate, batch, n_threads_dec,
+                 params ? params->abort_callback           : nullptr,
+                 params ? params->abort_callback_user_data : nullptr)) {
+             return false;
+@@ -2967,7 +3155,14 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
+         const int subsampl_factor  = ctx->model.hparams.subsampling_factor;
+         const int n_frames_max     = (batch_size + subsampl_factor - 1) / subsampl_factor;
+ 
+-        if (!parakeet_enc_state_init(*state, state->backends[0], n_audio_state, n_frames_max)) {
++        {
++            ggml_backend_dev_t dev0 = ggml_backend_get_device(state->backends[0]);
++            const auto t0 = dev0 ? ggml_backend_dev_type(dev0) : GGML_BACKEND_DEVICE_TYPE_CPU;
++            state->dec_on_cpu = t0 == GGML_BACKEND_DEVICE_TYPE_GPU || t0 == GGML_BACKEND_DEVICE_TYPE_IGPU;
++        }
++
++        if (!parakeet_enc_state_init(*state, state->backends[0], n_audio_state, ctx->model.hparams.n_pred_dim, n_frames_max) ||
++            (state->dec_on_cpu && !parakeet_enc_proj_cpu_init(*state, state->backends.back(), ctx->model.hparams.n_pred_dim, n_frames_max))) {
+             PARAKEET_LOG_ERROR("%s: parakeet_enc_state_init() failed\n", __func__);
+             parakeet_free_state(state);
+             return nullptr;
+@@ -2992,7 +3187,8 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
+     }
+     state->sched_encode_n_audio_ctx = state->n_audio_ctx > 0 ? state->n_audio_ctx : ctx->model.hparams.n_audio_ctx;
+ 
+-    if (!parakeet_lstm_state_init(*state, state->backends[0], ctx->model.hparams.n_pred_layers, ctx->model.hparams.n_pred_dim)) {
++    ggml_backend_t dec_backend = state->dec_on_cpu ? state->backends.back() : state->backends[0];
++    if (!parakeet_lstm_state_init(*state, dec_backend, ctx->model.hparams.n_pred_layers, ctx->model.hparams.n_pred_dim)) {
+         PARAKEET_LOG_ERROR("%s: parakeet_lstm_states_init () failed\n", __func__);
+         parakeet_free_state(state);
+         return nullptr;
+@@ -3005,7 +3201,7 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
+                 mem_lstm_ctx / 1024.0 / 1024.0, mem_lstm_buf / 1024.0 / 1024.0);
+     }
+ 
+-    if (!parakeet_pred_state_init(*state, state->backends[0], ctx->model.hparams.n_pred_dim)) {
++    if (!parakeet_pred_state_init(*state, dec_backend, ctx->model.hparams.n_pred_dim)) {
+         PARAKEET_LOG_ERROR("%s: parakeet_pred_state_init() failed\n", __func__);
+         parakeet_free_state(state);
+         return nullptr;
+@@ -3021,7 +3217,15 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
+     PARAKEET_LOG_INFO("%s: compute buffer (encode) = %7.2f MB\n", __func__, parakeet_sched_size(state->sched_encode) / 1e6);
+ 
+     {
+-        bool ok = parakeet_sched_graph_init(state->sched_decode, state->backends,
++        // The decoder runs one tiny graph per step: on a GPU each pays a round trip that costs more
++        // than the work (M4 Pro, Metal: 0.14 ms a step against 0.03 ms on one CPU thread). With a
++        // GPU, the decoder's weights and state are in CPU memory (parakeet_model_load, above) and
++        // its scheduler gets the CPU backend alone.
++        std::vector<ggml_backend_t> dec_backends = state->backends;
++        if (state->dec_on_cpu) {
++            dec_backends = { state->backends.back() };   // the CPU backend is always last
++        }
++        bool ok = parakeet_sched_graph_init(state->sched_decode, dec_backends,
+                 [&]() {
+                     const auto & hparams = ctx->model.hparams;
+                     const int n_tokens = hparams.n_audio_ctx; // Use audio ctx for Parakeet
+@@ -3220,6 +3424,9 @@ void parakeet_free_state(struct parakeet_state * state) {
+         ggml_backend_buffer_free(state->lstm_state.buffer);
+         ggml_backend_buffer_free(state->pred_out_buffer);
+         ggml_backend_buffer_free(state->enc_out_buffer);
++        if (state->enc_proj_cpu_buffer) {
++            ggml_backend_buffer_free(state->enc_proj_cpu_buffer);
++        }
+ 
+         parakeet_batch_free(state->batch);
+ 
