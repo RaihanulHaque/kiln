@@ -140,6 +140,13 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
         tokens = load_tokenizer(temp_dir, config)
         print(f"Loaded {len(tokens)} tokens")
 
+        # kiln: a CTC-only model (EncDecCTCModelBPE, ConvASRDecoder) has no prediction or joint
+        # network. Its file writes 0 for the four decoder values and holds the CTC head under the
+        # hybrid models' name (ctc_decoder.*), so one loader reads both.
+        ctc_only = 'prednet' not in config['decoder']
+        if ctc_only:
+            print("CTC-only model")
+
         # Prepare hyperparameters for the Parakeet ggml format.
         hparams = {
             'n_audio_ctx': 5000,
@@ -152,12 +159,18 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
             'n_subsampling_channels': config['encoder']['subsampling_conv_channels'],
             'n_conv_kernel': config['encoder']['conv_kernel_size'],
 
-            'n_pred_dim': config['decoder']['prednet']['pred_hidden'],
-            'n_pred_layers': config['decoder']['prednet']['pred_rnn_layers'],
-            'n_vocab': config['decoder']['vocab_size'],
-            'n_tdt_durations': config['model_defaults']['num_tdt_durations'],
-            'n_max_tokens': config['decoding']['greedy']['max_symbols'],
+            'n_pred_dim': 0 if ctc_only else config['decoder']['prednet']['pred_hidden'],
+            'n_pred_layers': 0 if ctc_only else config['decoder']['prednet']['pred_rnn_layers'],
+            'n_vocab': config['decoder']['num_classes'] if ctc_only else config['decoder']['vocab_size'],
+            'n_tdt_durations': 0 if ctc_only else config['model_defaults']['num_tdt_durations'],
+            'n_max_tokens': 0 if ctc_only else config['decoding']['greedy']['max_symbols'],
         }
+
+        # kiln: with xscaling, NeMo multiplies the subsampling output by sqrt(d_model) before the
+        # first layer. That output is a linear layer, so the factor goes into its weight and bias.
+        xscale = float(np.sqrt(config['encoder']['d_model'])) if config['encoder'].get('xscaling') else 1.0
+        if xscale != 1.0:
+            print(f"xscaling: folding {xscale:.4f} into encoder.pre_encode.out")
 
         print("\nGGML hyperparameters:")
         for key, value in hparams.items():
@@ -256,7 +269,7 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
                 fout.write(struct.pack("f", window[i]))
 
             # Write TDT durations
-            tdt_durations = config['model_defaults']['tdt_durations']
+            tdt_durations = [] if ctc_only else config['model_defaults']['tdt_durations']
             if len(tdt_durations) != hparams['n_tdt_durations']:
                 raise ValueError(f"TDT durations count mismatch: {len(tdt_durations)} vs {hparams['n_tdt_durations']}")
 
@@ -284,10 +297,9 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
                     continue
                 if name == window_key:
                     continue
-                # kiln: the hybrid models also hold a CTC head; whisper.cpp's loader rejects it
-                if name.startswith('ctc_decoder.'):
-                    print(f"  skipping {name}")
-                    continue
+                # kiln: a CTC-only model's head is 'decoder.*'; written under the hybrid name
+                if ctc_only and name.startswith('decoder.decoder_layers.'):
+                    name = 'ctc_' + name
 
                 # bias_ih is folded into bias_hh below; skip writing it separately
                 if f'{lstm_prefix}.bias_ih_l' in name:
@@ -298,6 +310,9 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
                     data = tensor.numpy()
                 else:
                     data = tensor.squeeze().numpy()
+
+                if xscale != 1.0 and name in ('encoder.pre_encode.out.weight', 'encoder.pre_encode.out.bias'):
+                    data = data * xscale
 
                 # For prediction LSTM weights/biases:
                 # Fold bias_ih into bias_hh (bias_ih already skipped above).

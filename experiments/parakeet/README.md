@@ -29,6 +29,11 @@ again in `build/asr/` (git-ignored). `RESULTS.md` has every measurement so far.
    about 12% faster and 1 or 2 decoder threads are even. `RESULTS.md`, phase 3c.
 9. **Conv module padding in one op** (`ggml_pad_ext` reading the transposed GLU output) instead of
    a transpose copy, pad, roll and pad: encoder output bit-identical, A17 encoder 0.3-1.5% faster.
+10. **CTC decoding, and Bangla** (2026-11-27, M4 Pro): whisper.cpp loads the CTC head and decodes
+    greedily with it; CTC-only NeMo models convert and run. The 110M's CTC head: LibriSpeech 3.09% /
+    6.12% (TDT 2.60% / 5.45%), 310x real time. Bangla FastConformer CTC 116M (Apache-2.0):
+    FLEURS Bengali 19.3% WER, 6.2% CER, about 400x real time on Metal; most errors are spelling
+    variants and numbers. `RESULTS.md`, phase 4.
 
 ## Next
 
@@ -41,8 +46,12 @@ again in `build/asr/` (git-ignored). `RESULTS.md` has every measurement so far.
 - The 1-thread decoder on the Ryzen (OpenMP, 6 to 8 threads) is not measured;
   `PARAKEET_DEC_THREADS=n` and `prof/decprof` do it.
 - Attention for long clips (32% at 35 s), the GLU sigmoid, the scheduler rebuild per clip length.
-- CTC head (phase 2): the 110M's `ctc_decoder.*` tensors are skipped today; a CTC path would also
-  run the Bangla FastConformer-CTC models.
+- Bangla on a phone (Galaxy A17): speed, and the encoder of an 18-layer model.
+- Bangla against NeMo itself, on a Python where `nemo_toolkit[asr]` installs (3.12), to confirm
+  the 19.3% is the model's and not the port's.
+- Mixed English and Bangla speech: neither model handles a sentence that switches language.
+- kiln: a CTC-only file loads through kiln-cli already; `kiln_transcribe` has no switch for a
+  hybrid model's CTC head (only `PARAKEET_CTC=1`).
 - Decide where the whisper.cpp change lives (upstream PR, a fork, or a patch kiln applies).
 
 ## Set up again (Linux or macOS; the conda env `ML` has torch, numpy, pyyaml, jiwer, soundfile, pyarrow)
@@ -94,10 +103,10 @@ with `taskset` on the cores kiln uses.
 
 | file | what it does |
 |---|---|
-| `parakeet-bias-frontend.patch` | the whisper.cpp change: optional biases, the new front end |
-| `convert_tdt.py` | whisper.cpp's converter, skipping the CTC head |
+| `parakeet-bias-frontend.patch` | the whisper.cpp change: optional biases, the new front end, faster decoder, CTC |
+| `convert_tdt.py` | whisper.cpp's converter; keeps the CTC head, converts CTC-only models, folds `xscaling` |
 | `unpack.py` | LibriSpeech parquet to flac files and a trans.txt |
-| `eval.py` | WER and speed through `kiln-cli` (`-t`, `--limit`) |
+| `eval.py` | WER and speed through `kiln-cli` (`-t`, `--limit`); FLEURS folders too, with CER |
 | `prof/decprof.cpp` | whole transcription per clip on the CPU or `--gpu`: encoder and decoder time, joint and predict steps; `--text` writes the transcripts |
 | `prof/encprof.cpp` | encoder outputs (`--dump`), timing (`--reps`), per-node profile (`--prof`); `PROF_DUMP_NODE=name PROF_DUMP_DIR=dir` writes one node and the mel |
 | `prof/build.sh` | builds encprof (or `prof/build.sh decprof`) into `build/asr/prof/` |

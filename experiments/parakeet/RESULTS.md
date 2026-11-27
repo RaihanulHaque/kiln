@@ -10,8 +10,8 @@ with whisper.cpp's CPU backend and kiln's default threads, 2026-11-26.
 | nvidia/parakeet-tdt-0.6b-v3 (25 languages) | `models/ggml-parakeet-tdt-0.6b-v3-q8_0.bin` (ggml-org) | 669 MB | 0.6B |
 | nvidia/parakeet-tdt_ctc-110m (English, CC-BY-4.0) | `conv/ggml-parakeet-tdt_ctc-110m-q8_0.bin` (converted here) | 123 MB | 110M |
 
-The 110M file: `convert_tdt.py` (whisper.cpp's converter, skipping the `ctc_decoder.*` tensors),
-then `parakeet-quantize ... q8_0`. Only its TDT head is used here; the CTC head is phase 2.
+The 110M file: `convert_tdt.py` (whisper.cpp's converter, which then skipped the `ctc_decoder.*` tensors),
+then `parakeet-quantize ... q8_0`. Only its TDT head is used here; the CTC head is phase 4.
 
 ## The change it needed (`parakeet-bias.patch`, whisper.cpp)
 
@@ -283,3 +283,71 @@ The depthwise conv's input was a transpose copy, a pad, a roll and a second pad.
 through strides). Encoder output bit-identical (F16, 20 clips, max |d| 0). A17, alternated three
 times: 6923 / 6942 / 6959 ms against 6947 / 7051 / 6995 ms, 0.3 to 1.5% faster.
 
+
+# Phase 4: the CTC head, and Bangla (M4 Pro, 2026-11-27)
+
+## What changed
+
+- **whisper.cpp** (`parakeet-bias-frontend.patch`): the CTC head (`ctc_decoder.decoder_layers.0.*`,
+  a matrix `[n_audio_state, n_vocab + 1]`, blank last, and its bias) is loaded when the file has
+  it. The encoder graph then multiplies every frame by it, and greedy CTC picks the best class per
+  frame, merges repeats and drops blanks. A file with `n_tdt_durations = 0` is CTC-only: no
+  prediction or joint network is made or loaded, no decoder graph is built. A hybrid model decodes
+  with CTC when `parakeet_context_params.use_ctc` is set or `PARAKEET_CTC=1`. Old files without
+  the head load as before.
+- **`convert_tdt.py`**: keeps the hybrid models' CTC head; converts CTC-only NeMo models
+  (`EncDecCTCModelBPE`: the four decoder values written as 0, the head renamed from `decoder.*` to
+  `ctc_decoder.*`); folds `xscaling` (NeMo multiplies the subsampling output by sqrt(d_model)
+  before the first layer) into `encoder.pre_encode.out`'s weight and bias, which is exact.
+- **`eval.py`**: reads FLEURS folders too (a `test.tsv` and a `test/` folder of wavs) and reports
+  the character error rate. FLEURS text is normalised for any language: Unicode NFC, lower case,
+  punctuation and symbols (the danda `।` too) to spaces, zero-width joiners dropped.
+
+## 110M: CTC head against TDT head (LibriSpeech, all clips, Q8_0, kiln-cli on Metal)
+
+| head | test-clean | test-other | speed (clean / other) |
+|---|---|---|---|
+| TDT (phase 3c) | 2.602% | 5.451% | 289x / 272x |
+| CTC | 3.085% | 6.115% | 310x / 310x |
+
+The hybrid's CTC head was trained as a side loss (`ctc_loss_weight: 0.3`), so a gap is expected.
+On the CPU (20 reference clips, F16, 4 threads) the decoder is 2 ms with CTC against about 270 ms
+with TDT; the encoder (1.1 s) is the same. With CTC off, the new file (which holds the head) gives
+the TDT transcripts byte for byte the same as the old file. `kiln-tests models`: 603 passed.
+
+## Bangla: kazalbrur/Bangla-asr-fastconformer-116m-dialects (Apache-2.0)
+
+FastConformer CTC, 18 layers, d_model 512, 1024 BPE tokens, 80 mels, `xscaling: true`; trained on
+Bangladeshi Bangla and regional dialects. Front end and encoder settings are those of the 110M
+apart from the layer count and `xscaling` (configs compared key by key). 222 MB F16, 125 MB Q8_0.
+
+FLEURS Bengali test (`bn_in`, 920 clips, 3.4 h), kiln-cli on Metal:
+
+| weights | WER | CER | speed |
+|---|---|---|---|
+| F16 | 19.29% | 6.15% | 413x |
+| Q8_0 | 19.29% | 6.16% | 404x |
+
+Where the errors are (Q8_0): 2630 substitutions, 508 deletions, 289 insertions in 17766 words.
+Most frequent substitutions are spelling variants that are both standard, Indian (FLEURS) against
+Bangladeshi spelling: হলো/হল 22, কোনও/কোনো 20, কোন/কোনো 18, এখনও/এখনো 14, হিসাবে/হিসেবে 13,
+ভাল/ভালো 13, তার/তাঁর 13. 187 clips have digits in the reference, which the model writes as
+words (it has no numeral normalisation); without those clips WER is 17.6%. A typical clip (21.6 s)
+differs from the reference only in জোগান/যোগান.
+
+Not verified: against NeMo itself. `nemo_toolkit[asr]` does not install on the ML env's Python
+3.14 (onnx fails to build). The model card's own numbers are on other sets (IndicVoices 14.2% WER,
+BanSpeech 20.7%), not FLEURS. Not run on a phone yet.
+
+```bash
+# from build/asr
+curl -L -o dl/bangla-116m.nemo https://huggingface.co/kazalbrur/Bangla-asr-fastconformer-116m-dialects/resolve/main/bangla-stt-fastconformer-116m-dialects.nemo
+conda run -n ML python ../../experiments/parakeet/convert_tdt.py --model dl/bangla-116m.nemo --out-dir conv --out-name ggml-bangla-fastconformer-ctc-116m-f16.bin
+DYLD_LIBRARY_PATH=wcpp/bin wcpp/bin/parakeet-quantize conv/ggml-bangla-fastconformer-ctc-116m-f16.bin conv/ggml-bangla-fastconformer-ctc-116m-q8_0.bin q8_0
+mkdir -p fleurs-bn && cd fleurs-bn
+curl -L -o test.tsv https://huggingface.co/datasets/google/fleurs/resolve/main/data/bn_in/test.tsv
+curl -L https://huggingface.co/datasets/google/fleurs/resolve/main/data/bn_in/audio/test.tar.gz | tar -xz
+cd .. && conda run -n ML python -I ../../experiments/parakeet/eval.py conv/ggml-bangla-fastconformer-ctc-116m-q8_0.bin fleurs-bn res/fleurs-bn-116m-q8
+# the 110M with its CTC head
+PARAKEET_CTC=1 conda run -n ML python -I ../../experiments/parakeet/eval.py conv/ggml-parakeet-tdt_ctc-110m-ctc-q8_0.bin data/test-clean res/clean-110m-ctc
+```
