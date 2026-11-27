@@ -119,3 +119,29 @@ for any small change (Q8_0 against F16 with the same graph: 4.7%), so Q8_0 is ju
 | after | **1350-1389 ms** | **83.3 ms** | **2.617%** (same errors) | **89.5x**, encoder 186 s |
 
 The front end went from about 23 to about 5.5 ms on the 10.6 s clip.
+
+# Phase 3b: old front end removed, batch norm folded (2026-11-27, M4 Pro)
+
+Machine: MacBook Pro M4 Pro (8 performance cores), macOS, kiln host build (whisper.cpp with Metal
+for `kiln-cli`; `encprof` runs the CPU backend), 8 threads.
+
+- The `PARAKEET_OLD_FRONTEND` switch and its graph are gone; the new front end is the only one.
+- The conv module's batch norm is folded into the depthwise conv when the model loads:
+  s = gamma / sqrt(var + 1e-5), w' = w * s, b' = (b_dw - mean) * s + beta (b_dw = 0 for the 0.6B).
+  The graph keeps `ssm_conv` + one add (`enc_%d_conv_bn`) in place of sub, sqrt, div, mul, add and
+  the depthwise bias add. NeMo's eps = 1e-5 is now applied (it was missing).
+
+| check | result |
+|---|---|
+| F16 encoder output, 20 reference clips, after against before | worst rel rms 3.0e-5, max abs 1.4e-3 |
+| Q8_0 encoder output, after against before | rel rms 1-4% (any change does this with Q8_0; judged by WER) |
+| encoder time, Q8_0, 20 clips, before and after alternated 3 times | 593-618 ms against 595-605 ms: no change |
+| LibriSpeech test-clean WER, Q8_0, kiln-cli | **2.608%** (Ryzen, before: 2.617%) |
+| LibriSpeech test-other WER, Q8_0, kiln-cli | **5.454%** (Ryzen, before: 5.45%) |
+
+The before numbers for WER are the Ryzen's (phase 1 and 3a); a Mac before run was not made.
+
+Through `kiln-cli` on the M4 Pro the whole sets ran at 196x (test-clean) and 190x (test-other) real
+time, with the TDT decoder taking more time than the encoder: test-clean encoder 45.4 s, decoder
+53.7 s; test-other 47.2 s and 54.1 s. On the Ryzen the encoder was 87-88%.
+

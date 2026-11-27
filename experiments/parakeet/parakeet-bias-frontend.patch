@@ -57,7 +57,7 @@ index e8c6effe..68ba8f6e 100644
      // Prediction network
      {PARAKEET_TENSOR_PRED_EMBED_WEIGHT,            GGML_OP_GET_ROWS},
 diff --git a/src/parakeet.cpp b/src/parakeet.cpp
-index 50dd657b..75de694d 100644
+index 50dd657b..bb9684ef 100644
 --- a/src/parakeet.cpp
 +++ b/src/parakeet.cpp
 @@ -333,6 +333,19 @@ struct parakeet_layer_encoder {
@@ -124,7 +124,7 @@ index 50dd657b..75de694d 100644
          int & n_loaded = wctx.model.n_loaded;
  
          n_loaded = 0;
-@@ -1504,13 +1531,28 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
+@@ -1504,16 +1531,66 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
  
              total_size += ggml_nbytes(tensor);
              n_loaded++;
@@ -154,7 +154,45 @@ index 50dd657b..75de694d 100644
              PARAKEET_LOG_ERROR("%s: ERROR not all tensors loaded from model file - expected %zu, got %d\n", __func__, tensors_map.size(), n_loaded);
              return false;
          }
-@@ -1527,6 +1569,67 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
++
++        // Fold the conv module's batch norm into the depthwise conv: with s = gamma / sqrt(var + eps),
++        //   w' = w * s (per channel)   b' = (b - mean) * s + beta   (b = 0 when the file has no bias)
++        // so the graph runs ssm_conv + one add instead of sub, sqrt, div, mul and add. NeMo's
++        // BatchNorm1d uses eps = 1e-5. The folded bias is kept in conv_bn_b; conv_dw_b is not used.
++        if (n_loaded != 0) {
++            const float bn_eps = 1e-5f;
++            const int   K      = hparams.n_conv_kernel;
++            std::vector<float> w, bdw, g, beta, mean, var;
++            for (auto & layer : wctx.model.layers) {
++                const int64_t C = layer.conv_bn_w->ne[0];
++                if (layer.conv_dw_w->type != GGML_TYPE_F32 || layer.conv_bn_w->type != GGML_TYPE_F32) {
++                    PARAKEET_LOG_ERROR("%s: depthwise conv / batch norm must be F32 to fold\n", __func__);
++                    return false;
++                }
++                w.resize(C * K); g.resize(C); beta.resize(C); mean.resize(C); var.resize(C); bdw.assign(C, 0.0f);
++                ggml_backend_tensor_get(layer.conv_dw_w,    w.data(),    0, ggml_nbytes(layer.conv_dw_w));
++                ggml_backend_tensor_get(layer.conv_bn_w,    g.data(),    0, ggml_nbytes(layer.conv_bn_w));
++                ggml_backend_tensor_get(layer.conv_bn_b,    beta.data(), 0, ggml_nbytes(layer.conv_bn_b));
++                ggml_backend_tensor_get(layer.conv_bn_mean, mean.data(), 0, ggml_nbytes(layer.conv_bn_mean));
++                ggml_backend_tensor_get(layer.conv_bn_var,  var.data(),  0, ggml_nbytes(layer.conv_bn_var));
++                if (layer.conv_dw_b) {
++                    ggml_backend_tensor_get(layer.conv_dw_b, bdw.data(), 0, ggml_nbytes(layer.conv_dw_b));
++                }
++                for (int64_t c = 0; c < C; ++c) {
++                    const double sc = (double) g[c] / std::sqrt((double) var[c] + bn_eps);
++                    for (int k = 0; k < K; ++k) {
++                        w[c * K + k] = (float) (w[c * K + k] * sc);
++                    }
++                    beta[c] = (float) (((double) bdw[c] - mean[c]) * sc + beta[c]);
++                }
++                ggml_backend_tensor_set(layer.conv_dw_w, w.data(),    0, ggml_nbytes(layer.conv_dw_w));
++                ggml_backend_tensor_set(layer.conv_bn_b, beta.data(), 0, ggml_nbytes(layer.conv_bn_b));
++            }
++        }
+     }
+ 
+     auto & buffers = wctx.model.buffers;
+@@ -1527,6 +1604,67 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
  }
  
  // conv subsampling + conformer encoder
@@ -222,7 +260,7 @@ index 50dd657b..75de694d 100644
  static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx, parakeet_state & pstate) {
      const auto & model    = pctx.model;
      const auto & hparams  = model.hparams;
-@@ -1552,45 +1655,81 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1552,45 +1690,39 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
      ggml_set_name(mel, "mel");
      ggml_set_input(mel);
  
@@ -230,10 +268,18 @@ index 50dd657b..75de694d 100644
 -    struct ggml_tensor * cur = ggml_conv_2d(ctx0, model.enc_pre_conv_0_w, mel, 2, 2, 1, 1, 1, 1);
 -    cur = ggml_add(ctx0, cur, model.enc_pre_conv_0_b);
 -    ggml_set_name(cur, "pre_conv_0");
--
++    struct ggml_tensor * cur = nullptr;
++    // channels-first front end: [chan, freq, time] in memory from the first conv on
+ 
 -    cur = ggml_relu(ctx0, cur);
--    ggml_set_name(cur, "pre_conv_0_relu");
--
++    // conv 0 (1 -> chan, 3x3, stride 2) with bias and relu, as a custom op
++    const int64_t n_ch  = model.enc_pre_conv_0_w->ne[3];
++    const int64_t w_out = (mel->ne[0] + 2 - 3) / 2 + 1;
++    const int64_t h_out = (mel->ne[1] + 2 - 3) / 2 + 1;
++    ggml_tensor * conv0_args[] = { mel, model.enc_pre_conv_0_w, model.enc_pre_conv_0_b };
++    cur = ggml_custom_4d(ctx0, GGML_TYPE_F32, n_ch, w_out, h_out, 1, conv0_args, 3, parakeet_conv0_op, GGML_N_TASKS_MAX, nullptr);
+     ggml_set_name(cur, "pre_conv_0_relu");
+ 
 -    // [freq, time, channels, batch]
 -    cur = ggml_conv_2d_dw_direct(ctx0, model.enc_pre_conv_2_w, cur, 2, 2, 1, 1, 1, 1);
 -    cur = ggml_add(ctx0, cur, model.enc_pre_conv_2_b);
@@ -260,89 +306,36 @@ index 50dd657b..75de694d 100644
 -
 -    cur = ggml_relu(ctx0, cur);
 -    ggml_set_name(cur, "pre_conv_6_relu");
-+    struct ggml_tensor * cur = nullptr;
-+    if (getenv("PARAKEET_OLD_FRONTEND")) {
-+        // [freq, time, channels, batch]
-+        cur = ggml_conv_2d(ctx0, model.enc_pre_conv_0_w, mel, 2, 2, 1, 1, 1, 1);
-+        cur = ggml_add(ctx0, cur, model.enc_pre_conv_0_b);
-+        ggml_set_name(cur, "pre_conv_0");
-+
-+        cur = ggml_relu(ctx0, cur);
-+        ggml_set_name(cur, "pre_conv_0_relu");
-+
-+        // [freq, time, channels, batch]
-+        cur = ggml_conv_2d_dw_direct(ctx0, model.enc_pre_conv_2_w, cur, 2, 2, 1, 1, 1, 1);
-+        cur = ggml_add(ctx0, cur, model.enc_pre_conv_2_b);
-+        ggml_set_name(cur, "pre_conv_2");
-+
-+        // [freq, time, channels, batch]
-+        cur = ggml_conv_2d(ctx0, model.enc_pre_conv_3_w, cur, 1, 1, 0, 0, 1, 1);
-+        cur = ggml_add(ctx0, cur, model.enc_pre_conv_3_b);
-+        ggml_set_name(cur, "pre_conv_3");
-+
-+        cur = ggml_relu(ctx0, cur);
-+        ggml_set_name(cur, "pre_conv_3_relu");
-+
-+        // [freq, time, channels, batch]
-+        cur = ggml_conv_2d_dw_direct(ctx0, model.enc_pre_conv_5_w, cur, 2, 2, 1, 1, 1, 1);
-+        ggml_set_name(cur, "pre_conv_5_direct");
-+        cur = ggml_add(ctx0, cur, model.enc_pre_conv_5_b);
-+        ggml_set_name(cur, "pre_conv_5");
-+
-+        // [freq, time, channels, batch]
-+        cur = ggml_conv_2d(ctx0, model.enc_pre_conv_6_w, cur, 1, 1, 0, 0, 1, 1);
-+        cur = ggml_add(ctx0, cur, model.enc_pre_conv_6_b);
-+        ggml_set_name(cur, "pre_conv_6");
-+
-+        cur = ggml_relu(ctx0, cur);
-+        ggml_set_name(cur, "pre_conv_6_relu");
-+
-+        // [freq, time, chan]
-+        cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
-+        // [freq, chan, time]
-+        cur = ggml_cont(ctx0, cur);
-+    } else {
-+        // channels-first front end: [chan, freq, time] in memory from the first conv on
-+
-+        // conv 0 (1 -> chan, 3x3, stride 2) with bias and relu, as a custom op
-+        const int64_t n_ch  = model.enc_pre_conv_0_w->ne[3];
-+        const int64_t w_out = (mel->ne[0] + 2 - 3) / 2 + 1;
-+        const int64_t h_out = (mel->ne[1] + 2 - 3) / 2 + 1;
-+        ggml_tensor * conv0_args[] = { mel, model.enc_pre_conv_0_w, model.enc_pre_conv_0_b };
-+        cur = ggml_custom_4d(ctx0, GGML_TYPE_F32, n_ch, w_out, h_out, 1, conv0_args, 3, parakeet_conv0_op, GGML_N_TASKS_MAX, nullptr);
-+        ggml_set_name(cur, "pre_conv_0_relu");
-+
-+        // depthwise 3x3 stride 2 on a channels-first view, then pointwise 1x1 as a matmul
-+        auto dw_pw = [&](ggml_tensor * x, ggml_tensor * dw_w, ggml_tensor * dw_b, ggml_tensor * pw_w, ggml_tensor * pw_b, int idx) {
-+            ggml_tensor * k = ggml_cont(ctx0, ggml_permute(ctx0, dw_w, 2, 3, 1, 0));
-+            k = ggml_permute(ctx0, k, 3, 2, 0, 1);
-+            ggml_tensor * y = ggml_conv_2d_dw_direct(ctx0, k, ggml_permute(ctx0, x, 2, 0, 1, 3), 2, 2, 1, 1, 1, 1);
-+            y = ggml_permute(ctx0, y, 1, 2, 0, 3);
-+            const int64_t w = y->ne[1];
-+            const int64_t h = y->ne[2];
-+            y = ggml_add(ctx0, ggml_reshape_2d(ctx0, y, n_ch, w * h), ggml_reshape_1d(ctx0, dw_b, n_ch));
-+            ggml_format_name(y, "pre_conv_%d", idx);
-+            y = ggml_mul_mat(ctx0, ggml_reshape_2d(ctx0, pw_w, n_ch, pw_w->ne[3]), y);
-+            y = ggml_add(ctx0, y, ggml_reshape_1d(ctx0, pw_b, pw_w->ne[3]));
-+            y = ggml_relu(ctx0, y);
-+            y = ggml_reshape_3d(ctx0, y, n_ch, w, h);
-+            ggml_format_name(y, "pre_conv_%d_relu", idx + 1);
-+            return y;
-+        };
-+        cur = dw_pw(cur, model.enc_pre_conv_2_w, model.enc_pre_conv_2_b, model.enc_pre_conv_3_w, model.enc_pre_conv_3_b, 2);
-+        cur = dw_pw(cur, model.enc_pre_conv_5_w, model.enc_pre_conv_5_b, model.enc_pre_conv_6_w, model.enc_pre_conv_6_b, 5);
++    // depthwise 3x3 stride 2 on a channels-first view, then pointwise 1x1 as a matmul
++    auto dw_pw = [&](ggml_tensor * x, ggml_tensor * dw_w, ggml_tensor * dw_b, ggml_tensor * pw_w, ggml_tensor * pw_b, int idx) {
++        ggml_tensor * k = ggml_cont(ctx0, ggml_permute(ctx0, dw_w, 2, 3, 1, 0));
++        k = ggml_permute(ctx0, k, 3, 2, 0, 1);
++        ggml_tensor * y = ggml_conv_2d_dw_direct(ctx0, k, ggml_permute(ctx0, x, 2, 0, 1, 3), 2, 2, 1, 1, 1, 1);
++        y = ggml_permute(ctx0, y, 1, 2, 0, 3);
++        const int64_t w = y->ne[1];
++        const int64_t h = y->ne[2];
++        y = ggml_add(ctx0, ggml_reshape_2d(ctx0, y, n_ch, w * h), ggml_reshape_1d(ctx0, dw_b, n_ch));
++        ggml_format_name(y, "pre_conv_%d", idx);
++        y = ggml_mul_mat(ctx0, ggml_reshape_2d(ctx0, pw_w, n_ch, pw_w->ne[3]), y);
++        y = ggml_add(ctx0, y, ggml_reshape_1d(ctx0, pw_b, pw_w->ne[3]));
++        y = ggml_relu(ctx0, y);
++        y = ggml_reshape_3d(ctx0, y, n_ch, w, h);
++        ggml_format_name(y, "pre_conv_%d_relu", idx + 1);
++        return y;
++    };
++    cur = dw_pw(cur, model.enc_pre_conv_2_w, model.enc_pre_conv_2_b, model.enc_pre_conv_3_w, model.enc_pre_conv_3_b, 2);
++    cur = dw_pw(cur, model.enc_pre_conv_5_w, model.enc_pre_conv_5_b, model.enc_pre_conv_6_w, model.enc_pre_conv_6_b, 5);
  
 -    // [freq, time, chan]
 -    cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
 -    // [freq, chan, time]
 -    cur = ggml_cont(ctx0, cur);
-+        // [chan, freq, time] -> [freq, chan, time]
-+        cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 1, 0, 2, 3));
-+    }
++    // [chan, freq, time] -> [freq, chan, time]
++    cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 1, 0, 2, 3));
  
      const int n_freq   = cur->ne[0]; // 16
      const int n_chan   = cur->ne[1]; // 256
-@@ -1659,11 +1798,11 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1659,11 +1791,11 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              ggml_format_name(cur, "enc_%d_ffn_norm_1", il);
  
              // ffn_1
@@ -356,7 +349,7 @@ index 50dd657b..75de694d 100644
              ggml_format_name(cur, "enc_%d_ffn_1", il);
  
              cur = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, fc_factor));
-@@ -1683,9 +1822,9 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1683,9 +1815,9 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              const int d_head = n_state / n_head;
  
              // [feat, time_frames, 1, 1]
@@ -369,7 +362,7 @@ index 50dd657b..75de694d 100644
  
              Q_cur = ggml_reshape_3d(ctx0, Q_cur, d_head, n_head, n_time);
              K_cur = ggml_reshape_3d(ctx0, K_cur, d_head, n_head, n_time);
-@@ -1891,6 +2030,7 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1891,6 +2023,7 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
                  cur = ggml_cont_2d(ctx0, cur, n_state, n_time);
                  cur = ggml_mul_mat(ctx0, layer.attn_out_w, cur);
              }
@@ -377,7 +370,7 @@ index 50dd657b..75de694d 100644
              ggml_format_name(cur, "enc_%d_attn_out", il);
  
              cur = ggml_add(ctx0, residual, cur);
-@@ -1907,7 +2047,7 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1907,7 +2040,7 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              ggml_format_name(cur, "enc_%d_norm_conv", il);
  
              // pointwise 1d convolution: [1024, 138] -> [2048, 138]
@@ -386,16 +379,21 @@ index 50dd657b..75de694d 100644
              ggml_format_name(cur, "enc_%d_conv_pw1", il);
  
              {
-@@ -1928,7 +2068,7 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1928,19 +2061,14 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
              ggml_format_name(cur, "enc_%d_conv_dw_pad", il);
  
 -            cur = ggml_ssm_conv(ctx0, cur, layer.conv_dw_w);
-+            cur = parakeet_add_bias(ctx0, ggml_ssm_conv(ctx0, cur, layer.conv_dw_w), layer.conv_dw_b);
-             ggml_format_name(cur, "enc_%d_conv_1d_dw", il);
+-            ggml_format_name(cur, "enc_%d_conv_1d_dw", il);
+-
+-            cur = ggml_sub(ctx0, cur, layer.conv_bn_mean);
+-            struct ggml_tensor * std = ggml_sqrt(ctx0, layer.conv_bn_var);
+-            cur = ggml_div(ctx0, cur, std);
+-            cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.conv_bn_w), layer.conv_bn_b);
++            // depthwise conv with the batch norm folded in at load time (see parakeet_model_load)
++            cur = ggml_add(ctx0, ggml_ssm_conv(ctx0, cur, layer.conv_dw_w), layer.conv_bn_b);
+             ggml_format_name(cur, "enc_%d_conv_bn", il);
  
-             cur = ggml_sub(ctx0, cur, layer.conv_bn_mean);
-@@ -1940,7 +2080,7 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              cur = ggml_silu(ctx0, cur);
              ggml_format_name(cur, "enc_%d_conv_silu", il);
  
@@ -404,7 +402,7 @@ index 50dd657b..75de694d 100644
              ggml_format_name(cur, "enc_%d_conv_pw2", il);
  
              cur = ggml_add(ctx0, residual, cur);
-@@ -1954,9 +2094,9 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
+@@ -1954,9 +2082,9 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
              cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.norm_ff2_w), layer.norm_ff2_b);
              ggml_format_name(cur, "enc_%d_ffn_norm_2", il);
  

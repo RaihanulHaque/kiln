@@ -15,18 +15,23 @@ again in `build/asr/` (git-ignored). `RESULTS.md` has every measurement so far.
    front end 3.3x closer to PyTorch float64, WER unchanged (2.617%).
 4. **Threads**: 6 instead of 8 on the 8500G, +20% for Parakeet. That one is a kiln change, in its own
    PR (`feat/smt-one-thread-per-core`, PR #52), not here.
+5. **Old front end removed** (2026-11-27): the `PARAKEET_OLD_FRONTEND` switch is gone from the patch.
+   The old graph is in the patch at commit e8b2ee1, for anyone who needs to compare again.
+6. **Batch norm folded** into the depthwise conv at load time, with NeMo's eps = 1e-5 (missing
+   before): 4 graph ops fewer per layer. F16 encoder output moves by 3e-5 rel rms; LibriSpeech WER
+   unchanged (M4 Pro, Metal: 2.61% / 5.45%); no measurable speed change on the M4 Pro CPU. `RESULTS.md`, phase 3b.
+7. **macOS works** for every step below (2026-11-27, M4 Pro): `prof/build.sh` links the Mac way.
 
 ## Next
 
-- Remove the `PARAKEET_OLD_FRONTEND` switch from the patch once nothing needs the old graph.
-- Fold the conv module's batch norm into the depthwise weights at load time (drops 4 ops per layer
-  and adds NeMo's eps = 1e-5, missing today).
+- On the M4 Pro the TDT decoder (LSTM and joint, one small graph per step, on the CPU) is now more
+  time than the encoder: 54 s against 45 s for test-clean. On the Ryzen the encoder was 88%.
 - Attention for long clips (32% at 35 s), the GLU sigmoid, the scheduler rebuild per clip length.
 - CTC head (phase 2): the 110M's `ctc_decoder.*` tensors are skipped today; a CTC path would also
   run the Bangla FastConformer-CTC models.
 - Decide where the whisper.cpp change lives (upstream PR, a fork, or a patch kiln applies).
 
-## Set up again (Linux; the conda env `ML` has torch, numpy, pyyaml, jiwer, soundfile, pyarrow)
+## Set up again (Linux or macOS; the conda env `ML` has torch, numpy, pyyaml, jiwer, soundfile, pyarrow)
 
 ```bash
 git switch wip/parakeet-110m
@@ -61,7 +66,11 @@ for d, f in [items[int(i * (len(items) - 1) / 19)] for i in range(20)]:
     a, sr = sf.read(str(f), dtype='float32'); a.tofile('ref/clips/%s.f32' % f.stem)"
 ```
 
-`ref/base` was made with the unpatched front end: `PARAKEET_OLD_FRONTEND=1 prof/encprof ... --dump ref/base`.
+`ref/base` was made with the old front end, which is no longer in the patch: apply the patch from
+commit e8b2ee1 and run `PARAKEET_OLD_FRONTEND=1 prof/encprof ... --dump ref/base`.
+
+On macOS use `DYLD_LIBRARY_PATH` in place of `LD_LIBRARY_PATH` for `parakeet-quantize`, and the
+Python in the `ML` env needs `jiwer` (`pip install jiwer`).
 
 ## Tools
 
